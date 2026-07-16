@@ -96,7 +96,7 @@ async def get_session(session_id: str) -> dict[str, Any]:
 @app.post("/v1/sessions/{session_id}/messages")
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
-    session.messages.append(request.model_dump())
+    store.append_message(session, request.model_dump())
     audit.record(
         "message.received",
         session_id=session.session_id,

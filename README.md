@@ -26,6 +26,7 @@
 - `aicode test` 自动执行低风险测试命令
 - append 写入场景的 inline diff 确认链路
 - 本地 JSONL 审计日志
+- SQLite session/message 持久化
 
 ## 本地运行
 
@@ -78,6 +79,28 @@ Runtime 会把 session、message、tool call、approval、patch、usage 等事�
 
 ```text
 $AICODE_HOME/audit.jsonl
+```
+
+## Session 持久化
+
+Runtime 会把 session 和 message 写入 SQLite：
+
+```text
+~/.aicode/sessions.sqlite
+```
+
+开发测试时如果设置了 `AICODE_HOME`，session 数据会写入：
+
+```text
+$AICODE_HOME/sessions.sqlite
+```
+
+可用命令：
+
+```bash
+go run ./cli sessions
+go run ./cli resume --last
+go run ./cli resume <session_id>
 ```
 
 ## 配置
