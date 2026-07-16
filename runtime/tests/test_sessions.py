@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.sessions.store import SessionEvents, SessionStore
+from app.sessions.store import SessionEvents, SessionStore, normalize_event_limit
 
 
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
@@ -144,3 +144,43 @@ async def test_session_store_persists_events(tmp_path: Path) -> None:
     events = restored.events.events_after(0)
     assert [event["type"] for event in events] == ["plan.created", "final"]
     assert [event["event_id"] for event in events] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_session_events_trim_retained_events() -> None:
+    events = SessionEvents(max_events=3)
+    for index in range(5):
+        await events.put({"type": f"event.{index}"})
+
+    retained = events.events_after(0)
+
+    assert [event["event_id"] for event in retained] == [3, 4, 5]
+    assert events.retained_count() == 3
+    assert events.last_event_id() == 5
+
+
+@pytest.mark.asyncio
+async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path, event_limit=2)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    for index in range(4):
+        await session.events.put({"type": f"event.{index}"})
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute("select count(*) from events where session_id = ?", (session.session_id,)).fetchone()[0]
+
+    reloaded = SessionStore(db_path, event_limit=2)
+    restored = reloaded.get(session.session_id)
+
+    assert count == 2
+    assert restored is not None
+    assert [event["event_id"] for event in restored.events.events_after(0)] == [3, 4]
+
+
+def test_normalize_event_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert normalize_event_limit(0) == 1
+
+    monkeypatch.setenv("AICODE_SESSION_EVENT_LIMIT", "bad")
+    assert normalize_event_limit() == 2_000

@@ -113,6 +113,8 @@ $AICODE_HOME/sessions.sqlite
 
 `resume --last` 使用最近活动的 session；继续旧会话后，它会成为新的 last session。
 
+Session 事件流默认每个 session 保留最近 2000 条事件，可通过 `AICODE_SESSION_EVENT_LIMIT` 调整。
+
 可用命令：
 
 ```bash
@@ -272,6 +274,7 @@ export AICODE_MODEL_PLANNER="gpt-5-high"
 export AICODE_MODEL_CODER="gpt-5"
 export AICODE_MODEL_REVIEWER="gpt-5"
 export AICODE_MODEL_SUMMARIZER="gpt-5-mini"
+export AICODE_SESSION_EVENT_LIMIT="2000"
 export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25,"output_per_1m":10}}'
 ```
 

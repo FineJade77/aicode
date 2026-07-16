@@ -12,6 +12,9 @@ from typing import Any
 from uuid import uuid4
 
 
+DEFAULT_SESSION_EVENT_LIMIT = 2_000
+
+
 @dataclass(slots=True)
 class PendingApproval:
     approval_id: str
@@ -35,13 +38,16 @@ class SessionEvents:
         self,
         events: list[dict[str, Any]] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        max_events: int | None = None,
     ) -> None:
         self._events = [dict(event) for event in events or []]
         self._condition = asyncio.Condition()
         self._on_event = on_event
-        self._read_cursor = 0
+        self._read_after = 0
         self._next_sequence = max((int(event.get("event_id") or 0) for event in self._events), default=0) + 1
         self._default_after: int | None = None
+        self._max_events = normalize_event_limit(max_events)
+        self._trim_retained_events()
 
     async def put(self, event: dict[str, Any]) -> None:
         event = dict(event)
@@ -59,18 +65,20 @@ class SessionEvents:
 
         async with self._condition:
             self._events.append(event)
+            self._trim_retained_events()
             self._condition.notify_all()
 
     async def get(self) -> dict[str, Any]:
         async with self._condition:
-            while self._read_cursor >= len(self._events):
+            while True:
+                event = self._first_event_after(self._read_after)
+                if event is not None:
+                    self._read_after = int(event.get("event_id") or self._read_after)
+                    return dict(event)
                 await self._condition.wait()
-            event = self._events[self._read_cursor]
-            self._read_cursor += 1
-            return dict(event)
 
     def empty(self) -> bool:
-        return self._read_cursor >= len(self._events)
+        return self._first_event_after(self._read_after) is None
 
     def events_after(self, after: int | None = None) -> list[dict[str, Any]]:
         after = after or 0
@@ -85,22 +93,31 @@ class SessionEvents:
     def default_after(self) -> int | None:
         return self._default_after
 
+    def retained_count(self) -> int:
+        return len(self._events)
+
     async def subscribe(self, after: int | None = None) -> AsyncIterator[dict[str, Any]]:
-        cursor = self._cursor_after(after)
+        cursor = after or 0
         while True:
             async with self._condition:
-                while cursor >= len(self._events):
+                while True:
+                    event = self._first_event_after(cursor)
+                    if event is not None:
+                        cursor = int(event.get("event_id") or cursor)
+                        break
                     await self._condition.wait()
-                event = self._events[cursor]
-                cursor += 1
             yield dict(event)
 
-    def _cursor_after(self, after: int | None) -> int:
-        after = after or 0
-        for index, event in enumerate(self._events):
+    def _first_event_after(self, after: int) -> dict[str, Any] | None:
+        for event in self._events:
             if int(event.get("event_id") or 0) > after:
-                return index
-        return len(self._events)
+                return event
+        return None
+
+    def _trim_retained_events(self) -> None:
+        if len(self._events) <= self._max_events:
+            return
+        del self._events[: len(self._events) - self._max_events]
 
 
 @dataclass(slots=True)
@@ -154,8 +171,9 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, event_limit: int | None = None) -> None:
         self.path = path or default_session_db_path()
+        self.event_limit = normalize_event_limit(event_limit)
         self._sessions: dict[str, Session] = {}
         self._last_session_id: str | None = None
         self._schema_ready = False
@@ -318,6 +336,7 @@ class SessionStore:
         session.events = SessionEvents(
             events=events,
             on_event=lambda event: self._append_event(session.session_id, event),
+            max_events=self.event_limit,
         )
 
     def _append_event(self, session_id: str, event: dict[str, Any]) -> None:
@@ -338,6 +357,22 @@ class SessionStore:
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
+            self._prune_events(conn, session_id)
+
+    def _prune_events(self, conn: sqlite3.Connection, session_id: str) -> None:
+        conn.execute(
+            """
+            delete from events
+            where session_id = ?
+              and sequence not in (
+                  select sequence from events
+                  where session_id = ?
+                  order by sequence desc
+                  limit ?
+              )
+            """,
+            (session_id, session_id, self.event_limit),
+        )
 
     def _load_messages(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
         rows = conn.execute(
@@ -354,8 +389,18 @@ class SessionStore:
 
     def _load_events(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
         rows = conn.execute(
-            "select sequence, payload from events where session_id = ? order by sequence asc",
-            (session_id,),
+            """
+            select sequence, payload
+            from (
+                select sequence, payload
+                from events
+                where session_id = ?
+                order by sequence desc
+                limit ?
+            )
+            order by sequence asc
+            """,
+            (session_id, self.event_limit),
         ).fetchall()
         events: list[dict[str, Any]] = []
         for row in rows:
@@ -392,6 +437,18 @@ def default_session_db_path() -> Path:
         return home_path
     except OSError:
         return Path(os.getenv("TMPDIR", "/tmp")) / "aicode" / "sessions.sqlite"
+
+
+def normalize_event_limit(value: int | None = None) -> int:
+    if value is None:
+        raw = os.getenv("AICODE_SESSION_EVENT_LIMIT")
+        if not raw:
+            return DEFAULT_SESSION_EVENT_LIMIT
+        try:
+            value = int(raw)
+        except ValueError:
+            return DEFAULT_SESSION_EVENT_LIMIT
+    return max(1, int(value))
 
 
 store = SessionStore()
