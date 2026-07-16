@@ -96,6 +96,7 @@ func printHelp() {
   aicode config init
   aicode config show
   aicode config list
+  aicode config docs
   aicode config get models.reviewer
   aicode config set ui.language en-US
   aicode config set models.reviewer gpt-5
@@ -146,7 +147,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|list|get|set|unset|review>")
+		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|review>")
 	}
 
 	switch args[0] {
@@ -169,6 +170,11 @@ func runConfigCommand(cfg config.Config, args []string) error {
 			return fmt.Errorf("用法: aicode config list")
 		}
 		return runConfigList(cfg)
+	case "docs":
+		if len(args) != 1 {
+			return fmt.Errorf("用法: aicode config docs")
+		}
+		return runConfigDocs()
 	case "get":
 		if len(args) != 2 {
 			return fmt.Errorf("用法: aicode config get <key>")
@@ -215,10 +221,20 @@ func runConfigList(cfg config.Config) error {
 	return writer.Flush()
 }
 
+func runConfigDocs() error {
+	fmt.Println("Config Keys")
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "KEY\tDEFAULT\tENV\tDESCRIPTION")
+	for _, doc := range config.KeyDocs() {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", doc.Key, doc.Default, doc.Env, doc.Description)
+	}
+	return writer.Flush()
+}
+
 func runConfigGet(cfg config.Config, key string) error {
 	value, ok := cfg.GetValue(key)
 	if !ok {
-		return fmt.Errorf("未知配置项: %s。运行 aicode config list 查看支持列表", key)
+		return fmt.Errorf("未知配置项: %s。运行 aicode config docs 查看支持列表", key)
 	}
 	fmt.Printf("%s = %s\n", key, value)
 	return nil

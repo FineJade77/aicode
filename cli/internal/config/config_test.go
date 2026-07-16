@@ -70,6 +70,12 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	t.Setenv("AICODE_HOME", home)
 	clearConfigEnv(t)
 
+	if _, err := SetValue("runtime.port", "9999"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("ui.style", "codex"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := SetValue("models.reviewer", "review-model"); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +100,12 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	if cfg.Models.Reviewer != "review-model" {
 		t.Fatalf("reviewer = %q", cfg.Models.Reviewer)
 	}
+	if cfg.Runtime.Port != 9999 {
+		t.Fatalf("port = %d", cfg.Runtime.Port)
+	}
+	if cfg.UI.Style != "codex" {
+		t.Fatalf("style = %q", cfg.UI.Style)
+	}
 	if cfg.OpenAICompatible.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("base_url = %q", cfg.OpenAICompatible.BaseURL)
 	}
@@ -110,6 +122,9 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "timeout_seconds = 7.5") {
+		t.Fatalf("config content = %s", content)
+	}
+	if !strings.Contains(string(content), "port = 9999") {
 		t.Fatalf("config content = %s", content)
 	}
 	if !strings.Contains(string(content), "[pricing.openai_compatible.gpt-5]") {
@@ -270,6 +285,27 @@ func TestEntriesAndGetValueIncludePricing(t *testing.T) {
 	assertEntryOrder(t, entries, "pricing.openai_compatible.gpt-5.input_per_1m", "pricing.stub.stub.input_per_1m")
 }
 
+func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
+	docs := KeyDocs()
+
+	reviewer, ok := findDoc(docs, "models.reviewer")
+	if !ok {
+		t.Fatal("missing models.reviewer")
+	}
+	if reviewer.Default != "gpt-5" {
+		t.Fatalf("reviewer default = %q", reviewer.Default)
+	}
+	if reviewer.Env != "AICODE_MODEL_REVIEWER" {
+		t.Fatalf("reviewer env = %q", reviewer.Env)
+	}
+	if _, ok := findDoc(docs, "pricing.<provider>.<model>.input_per_1m"); !ok {
+		t.Fatal("missing pricing input doc")
+	}
+	if _, ok := findDoc(docs, "runtime.port"); !ok {
+		t.Fatal("missing runtime.port")
+	}
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
@@ -287,6 +323,15 @@ func clearConfigEnv(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+}
+
+func findDoc(docs []KeyDoc, key string) (KeyDoc, bool) {
+	for _, doc := range docs {
+		if doc.Key == key {
+			return doc, true
+		}
+	}
+	return KeyDoc{}, false
 }
 
 func assertEntryOrder(t *testing.T, entries []Entry, before string, after string) {

@@ -53,6 +53,13 @@ type Entry struct {
 	Value string
 }
 
+type KeyDoc struct {
+	Key         string
+	Default     string
+	Env         string
+	Description string
+}
+
 func Default() Config {
 	return Config{
 		UI: UIConfig{
@@ -252,6 +259,96 @@ func (cfg Config) GetValue(key string) (string, bool) {
 	return "", false
 }
 
+func KeyDocs() []KeyDoc {
+	defaults := Default()
+	return []KeyDoc{
+		{
+			Key:         "ui.language",
+			Default:     defaults.UI.Language,
+			Env:         "AICODE_DEFAULT_LANGUAGE",
+			Description: "默认交互语言，支持 zh-CN 或 en-US。",
+		},
+		{
+			Key:         "ui.style",
+			Default:     defaults.UI.Style,
+			Env:         "",
+			Description: "CLI 输出风格，当前默认 codex。",
+		},
+		{
+			Key:         "runtime.url",
+			Default:     defaults.Runtime.URL,
+			Env:         "AICODE_RUNTIME_URL",
+			Description: "CLI 连接 Runtime daemon 的 URL。",
+		},
+		{
+			Key:         "runtime.port",
+			Default:     strconv.Itoa(defaults.Runtime.Port),
+			Env:         "",
+			Description: "CLI 自动启动 Runtime daemon 时使用的端口。",
+		},
+		{
+			Key:         "models.default",
+			Default:     defaults.Models.Default,
+			Env:         "AICODE_MODEL_DEFAULT",
+			Description: "未命中专用路由时使用的模型。",
+		},
+		{
+			Key:         "models.planner",
+			Default:     defaults.Models.Planner,
+			Env:         "AICODE_MODEL_PLANNER",
+			Description: "规划任务使用的模型。",
+		},
+		{
+			Key:         "models.coder",
+			Default:     defaults.Models.Coder,
+			Env:         "AICODE_MODEL_CODER",
+			Description: "代码生成和修改任务使用的模型。",
+		},
+		{
+			Key:         "models.reviewer",
+			Default:     defaults.Models.Reviewer,
+			Env:         "AICODE_MODEL_REVIEWER",
+			Description: "review 模式汇总结果使用的模型。",
+		},
+		{
+			Key:         "models.summarizer",
+			Default:     defaults.Models.Summarizer,
+			Env:         "AICODE_MODEL_SUMMARIZER",
+			Description: "普通 chat/diff/test 汇总使用的模型。",
+		},
+		{
+			Key:         "provider.openai_compatible.base_url",
+			Default:     defaults.OpenAICompatible.BaseURL,
+			Env:         "AICODE_OPENAI_BASE_URL",
+			Description: "OpenAI-compatible provider 的 API base URL。",
+		},
+		{
+			Key:         "provider.openai_compatible.api_key_env",
+			Default:     defaults.OpenAICompatible.APIKeyEnv,
+			Env:         "AICODE_OPENAI_API_KEY_ENV",
+			Description: "Runtime 从哪个环境变量读取 provider API key。",
+		},
+		{
+			Key:         "provider.openai_compatible.timeout_seconds",
+			Default:     formatFloat(defaults.OpenAICompatible.TimeoutSeconds),
+			Env:         "AICODE_OPENAI_TIMEOUT_SECONDS",
+			Description: "OpenAI-compatible 请求超时时间，单位秒。",
+		},
+		{
+			Key:         "pricing.<provider>.<model>.input_per_1m",
+			Default:     "unset",
+			Env:         "AICODE_MODEL_PRICES_JSON",
+			Description: "本地成本估算输入 token 单价，单位 USD / 1M tokens。",
+		},
+		{
+			Key:         "pricing.<provider>.<model>.output_per_1m",
+			Default:     "unset",
+			Env:         "AICODE_MODEL_PRICES_JSON",
+			Description: "本地成本估算输出 token 单价，单位 USD / 1M tokens。",
+		},
+	}
+}
+
 func Init() (string, error) {
 	path, err := Path()
 	if err != nil {
@@ -352,14 +449,17 @@ func configKeyTarget(key string) (string, string, error) {
 	}
 
 	supported := map[string][2]string{
-		"ui.language":                                {"ui", "language"},
-		"models.default":                             {"models", "default"},
-		"models.planner":                             {"models", "planner"},
-		"models.coder":                               {"models", "coder"},
-		"models.reviewer":                            {"models", "reviewer"},
-		"models.summarizer":                          {"models", "summarizer"},
-		"provider.openai_compatible.base_url":        {"provider.openai_compatible", "base_url"},
-		"provider.openai_compatible.api_key_env":     {"provider.openai_compatible", "api_key_env"},
+		"ui.language":                            {"ui", "language"},
+		"ui.style":                               {"ui", "style"},
+		"runtime.url":                            {"runtime", "url"},
+		"runtime.port":                           {"runtime", "port"},
+		"models.default":                         {"models", "default"},
+		"models.planner":                         {"models", "planner"},
+		"models.coder":                           {"models", "coder"},
+		"models.reviewer":                        {"models", "reviewer"},
+		"models.summarizer":                      {"models", "summarizer"},
+		"provider.openai_compatible.base_url":    {"provider.openai_compatible", "base_url"},
+		"provider.openai_compatible.api_key_env": {"provider.openai_compatible", "api_key_env"},
 		"provider.openai_compatible.timeout_seconds": {"provider.openai_compatible", "timeout_seconds"},
 	}
 	target, ok := supported[key]
@@ -375,7 +475,14 @@ func configKeyTarget(key string) (string, string, error) {
 }
 
 func formatConfigLine(section string, key string, value string) (string, error) {
-	if (section == "provider.openai_compatible" && key == "timeout_seconds") || strings.HasPrefix(section, "pricing.") {
+	if section == "runtime" && key == "port" {
+		if _, err := strconv.Atoi(value); err != nil {
+			return "", fmt.Errorf("%s.%s 必须是整数: %w", section, key, err)
+		}
+		return fmt.Sprintf("%s = %s", key, value), nil
+	}
+	if (section == "provider.openai_compatible" && key == "timeout_seconds") ||
+		strings.HasPrefix(section, "pricing.") {
 		if _, err := strconv.ParseFloat(value, 64); err != nil {
 			return "", fmt.Errorf("%s.%s 必须是数字: %w", section, key, err)
 		}

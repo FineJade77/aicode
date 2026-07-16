@@ -125,6 +125,7 @@ go run ./cli resume <session_id>
 ```bash
 go run ./cli config init
 go run ./cli config list
+go run ./cli config docs
 go run ./cli config get models.reviewer
 go run ./cli config set models.reviewer gpt-5
 go run ./cli config unset models.reviewer
@@ -226,6 +227,7 @@ go run ./cli models --json
 
 ```bash
 go run ./cli config list
+go run ./cli config docs
 go run ./cli config get provider.openai_compatible.base_url
 go run ./cli config get pricing.openai_compatible.gpt-5.input_per_1m
 ```
