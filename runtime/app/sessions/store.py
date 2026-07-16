@@ -35,6 +35,7 @@ class Session:
     workspace: str
     language: str
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     events: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     messages: list[dict[str, Any]] = field(default_factory=list)
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
@@ -45,6 +46,7 @@ class Session:
             "workspace": self.workspace,
             "language": self.language,
             "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
             "messages": self.messages,
             "approvals": [approval.to_dict() for approval in self.approvals.values()],
         }
@@ -91,6 +93,7 @@ class SessionStore:
             workspace=workspace,
             language=language,
         )
+        session.updated_at = session.created_at
         self._sessions[session.session_id] = session
         self._last_session_id = session.session_id
         self._insert_session(session)
@@ -103,7 +106,7 @@ class SessionStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "select session_id, workspace, language, created_at from sessions where session_id = ?",
+                "select session_id, workspace, language, created_at, updated_at from sessions where session_id = ?",
                 (session_id,),
             ).fetchone()
             if row is None:
@@ -117,7 +120,7 @@ class SessionStore:
         self._ensure_schema()
         with self._connect() as conn:
             rows = conn.execute(
-                "select rowid, session_id, workspace, language, created_at from sessions order by created_at desc, rowid desc"
+                "select rowid, session_id, workspace, language, created_at, updated_at from sessions order by updated_at desc, rowid desc"
             ).fetchall()
             sessions: list[dict[str, Any]] = []
             for row in rows:
@@ -136,7 +139,7 @@ class SessionStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "select rowid, session_id, workspace, language, created_at from sessions order by created_at desc, rowid desc limit 1"
+                "select rowid, session_id, workspace, language, created_at, updated_at from sessions order by updated_at desc, rowid desc limit 1"
             ).fetchone()
             if row is None:
                 return None
@@ -148,6 +151,8 @@ class SessionStore:
 
     def append_message(self, session: Session, message: dict[str, Any]) -> None:
         self._ensure_schema()
+        session.updated_at = datetime.now(timezone.utc)
+        self._last_session_id = session.session_id
         session.messages.append(message)
         with self._connect() as conn:
             conn.execute(
@@ -158,6 +163,10 @@ class SessionStore:
                     json.dumps(message, ensure_ascii=False),
                     datetime.now(timezone.utc).isoformat(),
                 ),
+            )
+            conn.execute(
+                "update sessions set updated_at = ? where session_id = ?",
+                (session.updated_at.isoformat(), session.session_id),
             )
 
     def _ensure_schema(self) -> None:
@@ -171,7 +180,8 @@ class SessionStore:
                     session_id text primary key,
                     workspace text not null,
                     language text not null,
-                    created_at text not null
+                    created_at text not null,
+                    updated_at text not null
                 );
 
                 create table if not exists messages (
@@ -186,6 +196,7 @@ class SessionStore:
                 create index if not exists idx_messages_session_id on messages(session_id, id);
                 """
             )
+            self._ensure_updated_at_column(conn)
         self._schema_ready = True
 
     def _connect(self) -> sqlite3.Connection:
@@ -197,10 +208,10 @@ class SessionStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                insert or ignore into sessions (session_id, workspace, language, created_at)
-                values (?, ?, ?, ?)
+                insert or ignore into sessions (session_id, workspace, language, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
                 """,
-                (session.session_id, session.workspace, session.language, session.created_at.isoformat()),
+                (session.session_id, session.workspace, session.language, session.created_at.isoformat(), session.updated_at.isoformat()),
             )
 
     def _session_from_row(self, row: sqlite3.Row) -> Session:
@@ -209,6 +220,7 @@ class SessionStore:
             workspace=str(row["workspace"]),
             language=str(row["language"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
     def _load_messages(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
@@ -223,6 +235,13 @@ class SessionStore:
             except json.JSONDecodeError:
                 continue
         return messages
+
+    def _ensure_updated_at_column(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+        if "updated_at" in columns:
+            return
+        conn.execute("alter table sessions add column updated_at text")
+        conn.execute("update sessions set updated_at = created_at where updated_at is null")
 
 
 def default_session_db_path() -> Path:

@@ -89,6 +89,8 @@ func printHelp() {
   aicode test
   aicode sessions
   aicode resume --last
+  aicode resume --last "继续刚才的任务"
+  aicode resume <session_id> "继续这个会话"
   aicode usage [--json]
   aicode usage --today [--json]
   aicode usage --session <session_id> [--json]
@@ -379,13 +381,124 @@ func configReviewUsage() error {
 }
 
 func runResume(cfg config.Config, args []string) error {
-	if len(args) == 1 && args[0] == "--last" {
+	target, err := parseResumeArgs(args)
+	if err != nil {
+		return err
+	}
+
+	if target.Inspect && target.UseLast {
 		return runSimpleGet(cfg, "/v1/sessions?last=true")
 	}
-	if len(args) != 1 {
-		return fmt.Errorf("用法: aicode resume <session_id> 或 aicode resume --last")
+	if target.Inspect {
+		return runSimpleGet(cfg, "/v1/sessions/"+url.PathEscape(target.SessionID))
 	}
-	return runSimpleGet(cfg, "/v1/sessions/"+args[0])
+
+	sessionValue, err := fetchResumeSession(cfg, target)
+	if err != nil {
+		return err
+	}
+	session, err := sessionInfoFromValue(sessionValue)
+	if err != nil {
+		return err
+	}
+	return runResumeAgent(cfg, session, target.Message)
+}
+
+type resumeTarget struct {
+	SessionID string
+	UseLast   bool
+	Message   string
+	Inspect   bool
+}
+
+type sessionInfo struct {
+	SessionID string
+	Workspace string
+	Language  string
+}
+
+func parseResumeArgs(args []string) (resumeTarget, error) {
+	if len(args) == 0 {
+		return resumeTarget{}, resumeUsage()
+	}
+	if args[0] == "--last" {
+		if len(args) == 1 {
+			return resumeTarget{UseLast: true, Inspect: true}, nil
+		}
+		return resumeTarget{UseLast: true, Message: strings.Join(args[1:], " ")}, nil
+	}
+	if len(args) == 1 {
+		return resumeTarget{SessionID: args[0], Inspect: true}, nil
+	}
+	return resumeTarget{SessionID: args[0], Message: strings.Join(args[1:], " ")}, nil
+}
+
+func resumeUsage() error {
+	return fmt.Errorf("用法: aicode resume <session_id> [message] 或 aicode resume --last [message]")
+}
+
+func fetchResumeSession(cfg config.Config, target resumeTarget) (any, error) {
+	if target.UseLast {
+		return fetchRuntimeJSON(cfg, "/v1/sessions?last=true")
+	}
+	return fetchRuntimeJSON(cfg, "/v1/sessions/"+url.PathEscape(target.SessionID))
+}
+
+func sessionInfoFromValue(value any) (sessionInfo, error) {
+	if value == nil {
+		return sessionInfo{}, fmt.Errorf("没有可恢复的 session")
+	}
+	payload, ok := value.(map[string]any)
+	if !ok {
+		return sessionInfo{}, fmt.Errorf("session 响应格式无效")
+	}
+	sessionID := strings.TrimSpace(stringValueFromMap(payload, "session_id"))
+	workspacePath := strings.TrimSpace(stringValueFromMap(payload, "workspace"))
+	language := strings.TrimSpace(stringValueFromMap(payload, "language"))
+	if sessionID == "" {
+		return sessionInfo{}, fmt.Errorf("session 缺少 session_id")
+	}
+	if workspacePath == "" {
+		return sessionInfo{}, fmt.Errorf("session 缺少 workspace")
+	}
+	if language == "" {
+		language = "zh-CN"
+	}
+	return sessionInfo{SessionID: sessionID, Workspace: workspacePath, Language: language}, nil
+}
+
+func stringValueFromMap(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
+}
+
+func runResumeAgent(cfg config.Config, session sessionInfo, message string) error {
+	if strings.TrimSpace(message) == "" {
+		return resumeUsage()
+	}
+	if err := ensureDaemon(cfg); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	api := client.New(cfg.Runtime.URL)
+	if err := api.SendMessage(ctx, session.SessionID, client.SendMessageRequest{
+		Message:   message,
+		Mode:      "chat",
+		Workspace: session.Workspace,
+		Language:  session.Language,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("恢复会话: %s\n", session.SessionID)
+	fmt.Printf("工作区: %s\n", session.Workspace)
+	return api.StreamEvents(ctx, session.SessionID, func(event map[string]any) error {
+		renderer.RenderEvent(event)
+		return handleInteractiveEvent(api, session.SessionID, event)
+	})
 }
 
 func runUsage(cfg config.Config, args []string) error {

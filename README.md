@@ -111,12 +111,16 @@ Runtime 会把 session 和 message 写入 SQLite：
 $AICODE_HOME/sessions.sqlite
 ```
 
+`resume --last` 使用最近活动的 session；继续旧会话后，它会成为新的 last session。
+
 可用命令：
 
 ```bash
 go run ./cli sessions
 go run ./cli resume --last
+go run ./cli resume --last "继续刚才的任务"
 go run ./cli resume <session_id>
+go run ./cli resume <session_id> "继续这个会话"
 ```
 
 ## 配置
