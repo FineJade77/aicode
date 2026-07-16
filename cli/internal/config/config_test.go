@@ -30,6 +30,10 @@ summarizer = "summary-model"
 base_url = "https://api.example.com/v1"
 api_key_env = "EXAMPLE_API_KEY"
 timeout_seconds = 12.5
+
+[pricing.openai_compatible.gpt-5]
+input_per_1m = 1.25
+output_per_1m = 10
 `
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -55,6 +59,10 @@ timeout_seconds = 12.5
 	if cfg.OpenAICompatible.TimeoutSeconds != 12.5 {
 		t.Fatalf("timeout = %v", cfg.OpenAICompatible.TimeoutSeconds)
 	}
+	price := cfg.Pricing["openai_compatible/gpt-5"]
+	if price.InputPer1M != 1.25 || price.OutputPer1M != 10 {
+		t.Fatalf("price = %#v", price)
+	}
 }
 
 func TestSetValueSupportsModelRoutes(t *testing.T) {
@@ -69,6 +77,12 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := SetValue("provider.openai_compatible.timeout_seconds", "7.5"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("pricing.openai_compatible.gpt-5.input_per_1m", "1.25"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("pricing.openai_compatible.gpt-5.output_per_1m", "10"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,12 +100,22 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	if cfg.OpenAICompatible.TimeoutSeconds != 7.5 {
 		t.Fatalf("timeout = %v", cfg.OpenAICompatible.TimeoutSeconds)
 	}
+	price := cfg.Pricing["openai_compatible/gpt-5"]
+	if price.InputPer1M != 1.25 || price.OutputPer1M != 10 {
+		t.Fatalf("price = %#v", price)
+	}
 
 	content, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "timeout_seconds = 7.5") {
+		t.Fatalf("config content = %s", content)
+	}
+	if !strings.Contains(string(content), "[pricing.openai_compatible.gpt-5]") {
+		t.Fatalf("config content = %s", content)
+	}
+	if !strings.Contains(string(content), "input_per_1m = 1.25") || !strings.Contains(string(content), "output_per_1m = 10") {
 		t.Fatalf("config content = %s", content)
 	}
 }
@@ -102,6 +126,7 @@ func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	cfg.OpenAICompatible.BaseURL = "https://api.example.com/v1"
 	cfg.OpenAICompatible.APIKeyEnv = "EXAMPLE_API_KEY"
 	cfg.OpenAICompatible.TimeoutSeconds = 17.5
+	cfg.Pricing["openai_compatible/gpt-5"] = ModelPriceConfig{InputPer1M: 1.25, OutputPer1M: 10}
 
 	env := envMap(cfg.RuntimeEnv())
 
@@ -116,6 +141,12 @@ func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	}
 	if env["AICODE_OPENAI_TIMEOUT_SECONDS"] != "17.5" {
 		t.Fatalf("AICODE_OPENAI_TIMEOUT_SECONDS = %q", env["AICODE_OPENAI_TIMEOUT_SECONDS"])
+	}
+	if !strings.Contains(env["AICODE_MODEL_PRICES_JSON"], `"openai_compatible/gpt-5"`) {
+		t.Fatalf("AICODE_MODEL_PRICES_JSON = %q", env["AICODE_MODEL_PRICES_JSON"])
+	}
+	if !strings.Contains(env["AICODE_MODEL_PRICES_JSON"], `"input_per_1m":1.25`) {
+		t.Fatalf("AICODE_MODEL_PRICES_JSON = %q", env["AICODE_MODEL_PRICES_JSON"])
 	}
 }
 
@@ -132,6 +163,7 @@ func clearConfigEnv(t *testing.T) {
 		"AICODE_OPENAI_BASE_URL",
 		"AICODE_OPENAI_API_KEY_ENV",
 		"AICODE_OPENAI_TIMEOUT_SECONDS",
+		"AICODE_MODEL_PRICES_JSON",
 	} {
 		t.Setenv(key, "")
 	}

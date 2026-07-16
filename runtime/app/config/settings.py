@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from app.usage.pricing import ModelPrice, parse_model_prices
 
 
 class ModelSettings(BaseModel):
@@ -19,12 +21,18 @@ class OpenAICompatibleSettings(BaseModel):
     timeout_seconds: float = 60.0
 
 
+class PricingSettings(BaseModel):
+    currency: str = "USD"
+    model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
+
+
 class Settings(BaseModel):
     app_name: str = "aicode-runtime"
     default_language: str = "zh-CN"
     version: str = "0.1.0"
     models: ModelSettings = ModelSettings()
     openai_compatible: OpenAICompatibleSettings = OpenAICompatibleSettings()
+    pricing: PricingSettings = PricingSettings()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -43,6 +51,10 @@ class Settings(BaseModel):
                 base_url=os.getenv("AICODE_OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 api_key_env=os.getenv("AICODE_OPENAI_API_KEY_ENV", "OPENAI_API_KEY"),
                 timeout_seconds=float(os.getenv("AICODE_OPENAI_TIMEOUT_SECONDS", "60")),
+            ),
+            pricing=PricingSettings(
+                currency=os.getenv("AICODE_PRICING_CURRENCY", "USD"),
+                model_prices=parse_model_prices(os.getenv("AICODE_MODEL_PRICES_JSON")),
             ),
         )
 

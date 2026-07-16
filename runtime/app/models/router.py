@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from app.config.settings import Settings
 from app.models.openai_compatible import OpenAICompatibleProvider
 from app.models.provider import ModelProvider, ModelProviderUnavailable, ModelRequest, ModelResponse, StubProvider
+from app.usage.pricing import estimate_cost, model_prices_data
 
 
 @dataclass(slots=True)
@@ -31,15 +32,17 @@ class ModelRouter:
         )
 
         try:
-            return await self.primary.complete(routed)
+            return self.with_estimated_cost(await self.primary.complete(routed))
         except ModelProviderUnavailable:
-            return await self.fallback.complete(
-                ModelRequest(
-                    purpose=routed.purpose,
-                    messages=routed.messages,
-                    model="stub",
-                    temperature=routed.temperature,
-                    max_tokens=routed.max_tokens,
+            return self.with_estimated_cost(
+                await self.fallback.complete(
+                    ModelRequest(
+                        purpose=routed.purpose,
+                        messages=routed.messages,
+                        model="stub",
+                        temperature=routed.temperature,
+                        max_tokens=routed.max_tokens,
+                    )
                 )
             )
 
@@ -53,6 +56,16 @@ class ModelRouter:
         if purpose == "summarizer":
             return self.settings.models.summarizer
         return self.settings.models.default
+
+    def with_estimated_cost(self, response: ModelResponse) -> ModelResponse:
+        response.estimated_cost = estimate_cost(
+            provider=response.provider,
+            model=response.model,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            prices=self.settings.pricing.model_prices,
+        )
+        return response
 
     def route_status(self) -> dict:
         primary_name = getattr(self.primary, "provider_name", self.primary.__class__.__name__)
@@ -76,5 +89,10 @@ class ModelRouter:
                 "base_url": self.settings.openai_compatible.base_url,
                 "api_key_env": self.settings.openai_compatible.api_key_env,
                 "timeout_seconds": self.settings.openai_compatible.timeout_seconds,
+            },
+            "pricing": {
+                "currency": self.settings.pricing.currency,
+                "unit": "per_1m_tokens",
+                "models": model_prices_data(self.settings.pricing.model_prices),
             },
         }

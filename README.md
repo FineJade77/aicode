@@ -226,7 +226,12 @@ go run ./cli config set models.summarizer gpt-5-mini
 go run ./cli config set provider.openai_compatible.base_url https://api.openai.com/v1
 go run ./cli config set provider.openai_compatible.api_key_env OPENAI_API_KEY
 go run ./cli config set provider.openai_compatible.timeout_seconds 60
+go run ./cli config set pricing.openai_compatible.gpt-5.input_per_1m 1.25
+go run ./cli config set pricing.openai_compatible.gpt-5.output_per_1m 10
 ```
+
+成本估算只使用本地价格表，不内置也不自动更新官方价格。价格单位是 USD / 1M tokens。
+如果没有为当前 provider/model 配置价格，`estimated_cost` 会保持 `0`。
 
 常用环境变量：
 
@@ -239,6 +244,7 @@ export AICODE_MODEL_PLANNER="gpt-5-high"
 export AICODE_MODEL_CODER="gpt-5"
 export AICODE_MODEL_REVIEWER="gpt-5"
 export AICODE_MODEL_SUMMARIZER="gpt-5-mini"
+export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25,"output_per_1m":10}}'
 ```
 
 也可以直接设置：

@@ -2,10 +2,11 @@ import json
 
 import pytest
 
-from app.config.settings import ModelSettings, OpenAICompatibleSettings, Settings
+from app.config.settings import ModelSettings, OpenAICompatibleSettings, PricingSettings, Settings
 from app.models.openai_compatible import chat_completions_url, parse_chat_completion_response
-from app.models.provider import ModelRequest
+from app.models.provider import ModelProvider, ModelRequest, ModelResponse
 from app.models.router import ModelRouter
+from app.usage.pricing import ModelPrice
 
 
 def test_chat_completions_url() -> None:
@@ -65,6 +66,7 @@ def test_model_router_route_status_does_not_expose_api_key(monkeypatch: pytest.M
             api_key_env="AICODE_TEST_SECRET_KEY",
             timeout_seconds=12.5,
         ),
+        pricing=PricingSettings(model_prices={"openai_compatible/review-model": ModelPrice(input_per_1m=1.25, output_per_1m=10)}),
     )
 
     status = ModelRouter.from_settings(settings).route_status()
@@ -77,4 +79,44 @@ def test_model_router_route_status_does_not_expose_api_key(monkeypatch: pytest.M
     assert status["openai_compatible"]["base_url"] == "https://api.example.com/v1"
     assert status["openai_compatible"]["api_key_env"] == "AICODE_TEST_SECRET_KEY"
     assert status["openai_compatible"]["timeout_seconds"] == 12.5
+    assert status["pricing"]["currency"] == "USD"
+    assert status["pricing"]["unit"] == "per_1m_tokens"
+    assert status["pricing"]["models"][0]["model"] == "review-model"
     assert "secret-value" not in json.dumps(status)
+
+
+@pytest.mark.asyncio
+async def test_model_router_estimates_cost_from_price_table() -> None:
+    settings = Settings(
+        pricing=PricingSettings(
+            model_prices={
+                "openai_compatible/demo-model": ModelPrice(input_per_1m=1.25, output_per_1m=10),
+            }
+        )
+    )
+    router = ModelRouter(
+        primary=FixedProvider(),
+        fallback=FixedProvider(),
+        settings=settings,
+    )
+
+    response = await router.complete(ModelRequest(purpose="summarizer", messages=[{"role": "user", "content": "hello"}]))
+
+    assert response.provider == "openai_compatible"
+    assert response.model == "demo-model"
+    assert response.input_tokens == 1_000
+    assert response.output_tokens == 2_000
+    assert response.estimated_cost == 0.02125
+
+
+class FixedProvider(ModelProvider):
+    provider_name = "openai_compatible"
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        return ModelResponse(
+            text="ok",
+            provider="openai_compatible",
+            model="demo-model",
+            input_tokens=1_000,
+            output_tokens=2_000,
+        )

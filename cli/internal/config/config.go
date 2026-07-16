@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ type Config struct {
 	Runtime          RuntimeConfig
 	Models           ModelsConfig
 	OpenAICompatible OpenAICompatibleConfig
+	Pricing          map[string]ModelPriceConfig
 }
 
 type UIConfig struct {
@@ -41,6 +43,11 @@ type OpenAICompatibleConfig struct {
 	TimeoutSeconds float64
 }
 
+type ModelPriceConfig struct {
+	InputPer1M  float64 `json:"input_per_1m"`
+	OutputPer1M float64 `json:"output_per_1m"`
+}
+
 func Default() Config {
 	return Config{
 		UI: UIConfig{
@@ -63,6 +70,7 @@ func Default() Config {
 			APIKeyEnv:      "OPENAI_API_KEY",
 			TimeoutSeconds: 60.0,
 		},
+		Pricing: map[string]ModelPriceConfig{},
 	}
 }
 
@@ -131,6 +139,12 @@ func Load() (Config, error) {
 				return cfg, fmt.Errorf("invalid provider.openai_compatible.timeout_seconds: %w", err)
 			}
 			cfg.OpenAICompatible.TimeoutSeconds = timeout
+		default:
+			if strings.HasPrefix(section, "pricing.") {
+				if err := setPricingValue(cfg.Pricing, section, key, value); err != nil {
+					return cfg, err
+				}
+			}
 		}
 	}
 
@@ -172,6 +186,9 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.OpenAICompatible.TimeoutSeconds = parsed
 		}
 	}
+	if rawPrices := os.Getenv("AICODE_MODEL_PRICES_JSON"); rawPrices != "" {
+		cfg.Pricing = parsePricingJSON(rawPrices)
+	}
 }
 
 func (cfg Config) RuntimeEnv() []string {
@@ -186,6 +203,11 @@ func (cfg Config) RuntimeEnv() []string {
 		"AICODE_OPENAI_BASE_URL=" + cfg.OpenAICompatible.BaseURL,
 		"AICODE_OPENAI_API_KEY_ENV=" + cfg.OpenAICompatible.APIKeyEnv,
 		"AICODE_OPENAI_TIMEOUT_SECONDS=" + strconv.FormatFloat(cfg.OpenAICompatible.TimeoutSeconds, 'f', -1, 64),
+	}
+	if len(cfg.Pricing) > 0 {
+		if encoded, err := json.Marshal(cfg.Pricing); err == nil {
+			runtime = append(runtime, "AICODE_MODEL_PRICES_JSON="+string(encoded))
+		}
 	}
 	return append(env, runtime...)
 }
@@ -244,6 +266,26 @@ func SetValue(key string, value string) (string, error) {
 }
 
 func configKeyTarget(key string) (string, string, error) {
+	if strings.HasPrefix(key, "pricing.") {
+		section, name, ok := strings.Cut(strings.TrimPrefix(key, "pricing."), ".")
+		if !ok {
+			return "", "", fmt.Errorf("pricing 配置项格式应为 pricing.<provider>.<model>.<input_per_1m|output_per_1m>")
+		}
+		lastDot := strings.LastIndex(name, ".")
+		if lastDot < 0 {
+			return "", "", fmt.Errorf("pricing 配置项格式应为 pricing.<provider>.<model>.<input_per_1m|output_per_1m>")
+		}
+		model := name[:lastDot]
+		field := name[lastDot+1:]
+		if strings.TrimSpace(section) == "" || strings.TrimSpace(model) == "" {
+			return "", "", fmt.Errorf("pricing provider 和 model 不能为空")
+		}
+		if field != "input_per_1m" && field != "output_per_1m" {
+			return "", "", fmt.Errorf("pricing 只支持 input_per_1m 或 output_per_1m")
+		}
+		return "pricing." + section + "." + model, field, nil
+	}
+
 	supported := map[string][2]string{
 		"ui.language":                                {"ui", "language"},
 		"models.default":                             {"models", "default"},
@@ -268,13 +310,44 @@ func configKeyTarget(key string) (string, string, error) {
 }
 
 func formatConfigLine(section string, key string, value string) (string, error) {
-	if section == "provider.openai_compatible" && key == "timeout_seconds" {
+	if (section == "provider.openai_compatible" && key == "timeout_seconds") || strings.HasPrefix(section, "pricing.") {
 		if _, err := strconv.ParseFloat(value, 64); err != nil {
-			return "", fmt.Errorf("provider.openai_compatible.timeout_seconds 必须是数字: %w", err)
+			return "", fmt.Errorf("%s.%s 必须是数字: %w", section, key, err)
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
 	return fmt.Sprintf("%s = %q", key, value), nil
+}
+
+func setPricingValue(pricing map[string]ModelPriceConfig, section string, key string, value string) error {
+	if key != "input_per_1m" && key != "output_per_1m" {
+		return nil
+	}
+	price, err := strconv.ParseFloat(strings.Trim(strings.TrimSpace(value), `"`), 64)
+	if err != nil {
+		return fmt.Errorf("invalid %s.%s: %w", section, key, err)
+	}
+	parts := strings.SplitN(strings.TrimPrefix(section, "pricing."), ".", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return fmt.Errorf("invalid pricing section: %s", section)
+	}
+	priceKey := parts[0] + "/" + parts[1]
+	current := pricing[priceKey]
+	if key == "input_per_1m" {
+		current.InputPer1M = price
+	} else {
+		current.OutputPer1M = price
+	}
+	pricing[priceKey] = current
+	return nil
+}
+
+func parsePricingJSON(raw string) map[string]ModelPriceConfig {
+	var parsed map[string]ModelPriceConfig
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return map[string]ModelPriceConfig{}
+	}
+	return parsed
 }
 
 func upsertConfigLine(lines []string, targetSection string, targetKey string, formatted string) []string {

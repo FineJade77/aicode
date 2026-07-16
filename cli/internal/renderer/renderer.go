@@ -175,7 +175,18 @@ func usageLine(event map[string]any) string {
 	if purpose == "" {
 		purpose = "unknown"
 	}
-	return fmt.Sprintf("用量: purpose=%s model=%s input=%v output=%v", purpose, stringValue(event["model"]), event["input_tokens"], event["output_tokens"])
+	cost := stringValue(event["estimated_cost"])
+	if cost == "" {
+		cost = "0"
+	}
+	return fmt.Sprintf(
+		"用量: purpose=%s model=%s input=%v output=%v cost=$%s",
+		purpose,
+		stringValue(event["model"]),
+		event["input_tokens"],
+		event["output_tokens"],
+		cost,
+	)
 }
 
 func joinStringList(value any) string {
