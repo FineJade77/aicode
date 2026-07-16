@@ -17,6 +17,11 @@ def test_parse_project_config() -> None:
             "commands": {"test": "python3 -m pytest tests/unit"},
             "protectedPaths": [".env", "secret/**"],
             "workspaces": [{"name": "api", "path": "../api", "mode": "read_only"}],
+            "review": {
+                "disabledRules": ["large_diff"],
+                "largeDiffThreshold": 1200,
+                "maxFindings": 25,
+            },
         }
     )
 
@@ -25,6 +30,9 @@ def test_parse_project_config() -> None:
     assert config.commands["test"] == "python3 -m pytest tests/unit"
     assert config.protected_paths == [".env", "secret/**"]
     assert config.workspaces[0].name == "api"
+    assert config.review.disabled_rules == ["large_diff"]
+    assert config.review.large_diff_threshold == 1200
+    assert config.review.max_findings == 25
 
 
 def test_load_project_config_defaults_when_missing(tmp_path: Path) -> None:
@@ -32,6 +40,16 @@ def test_load_project_config_defaults_when_missing(tmp_path: Path) -> None:
 
     assert ".env" in config.protected_paths
     assert config.commands == {}
+    assert config.review.disabled_rules == []
+    assert config.review.large_diff_threshold == 500
+    assert config.review.max_findings == 50
+
+
+def test_parse_project_config_bounds_review_values() -> None:
+    config = parse_project_config({"review": {"largeDiffThreshold": 1, "maxFindings": 1000}})
+
+    assert config.review.large_diff_threshold == 50
+    assert config.review.max_findings == 500
 
 
 def test_detect_test_command_uses_project_config_override(tmp_path: Path) -> None:

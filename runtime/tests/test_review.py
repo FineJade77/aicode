@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.tools.review import format_review_report, load_untracked_files, review_diff_text, review_files, review_report_data
+from app.tools.review import DiffFile, DiffLine, format_review_report, load_untracked_files, review_diff_text, review_files, review_report_data
 
 
 def test_review_detects_secrets_without_echoing_value() -> None:
@@ -72,3 +72,35 @@ def test_review_scans_untracked_files(tmp_path: Path) -> None:
 
     assert report.added_lines == 2
     assert {finding.rule for finding in report.findings} == {"risky_eval"}
+
+
+def test_review_can_disable_rules() -> None:
+    secret_name = "OPENAI_" + "API_KEY"
+    secret_value = "sk-" + "secretsecretsecret"
+    diff = f"""diff --git a/.env b/.env
+--- a/.env
++++ b/.env
+@@ -1 +1,2 @@
+ APP_ENV=dev
++{secret_name}={secret_value}
+"""
+
+    report = review_diff_text(diff, protected_paths=[".env"], disabled_rules=["sensitive_path", "secret_added"])
+
+    assert not report.findings
+
+
+def test_review_uses_configurable_large_diff_threshold_and_max_findings() -> None:
+    file = DiffFile(
+        path="src/main.py",
+        added=[
+            DiffLine(number=1, content="debugger"),
+            DiffLine(number=2, content="debugger"),
+            DiffLine(number=3, content="debugger"),
+        ],
+    )
+
+    report = review_files([file], large_diff_threshold=2, max_findings=2)
+
+    assert len(report.findings) == 2
+    assert report.findings[0].rule == "large_diff"

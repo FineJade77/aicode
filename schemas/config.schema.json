@@ -23,6 +23,28 @@
         "type": "string"
       }
     },
+    "review": {
+      "type": "object",
+      "properties": {
+        "disabledRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "largeDiffThreshold": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 50000
+        },
+        "maxFindings": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      },
+      "additionalProperties": true
+    },
     "workspaces": {
       "type": "array",
       "items": {

@@ -14,6 +14,9 @@ class ToolContext:
     mode: str = "default"
     language: str = "zh-CN"
     protected_paths: list[str] = field(default_factory=default_protected_paths)
+    review_disabled_rules: list[str] = field(default_factory=list)
+    review_large_diff_threshold: int = 500
+    review_max_findings: int = 50
 
 
 @dataclass(slots=True)

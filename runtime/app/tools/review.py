@@ -9,7 +9,8 @@ from typing import Sequence
 from app.tools.base import ToolContext, ToolResult, is_protected_path, resolve_workspace_path
 
 
-MAX_FINDINGS = 50
+DEFAULT_MAX_FINDINGS = 50
+DEFAULT_LARGE_DIFF_THRESHOLD = 500
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
@@ -85,18 +86,48 @@ class ReviewDiffTool:
 
         files = parse_unified_diff(proc.stdout)
         files.extend(load_untracked_files(context.workspace, list_untracked_paths(context.workspace, path_filter), context.protected_paths))
-        report = review_files(files, protected_paths=context.protected_paths)
+        report = review_files(
+            files,
+            protected_paths=context.protected_paths,
+            disabled_rules=context.review_disabled_rules,
+            large_diff_threshold=context.review_large_diff_threshold,
+            max_findings=context.review_max_findings,
+        )
         return ToolResult(success=True, text=format_review_report(report), data=review_report_data(report))
 
 
-def review_diff_text(diff_text: str, protected_paths: Sequence[str] | None = None) -> ReviewReport:
+def review_diff_text(
+    diff_text: str,
+    protected_paths: Sequence[str] | None = None,
+    disabled_rules: Sequence[str] | None = None,
+    large_diff_threshold: int = DEFAULT_LARGE_DIFF_THRESHOLD,
+    max_findings: int = DEFAULT_MAX_FINDINGS,
+) -> ReviewReport:
     files = parse_unified_diff(diff_text)
-    return review_files(files, protected_paths=protected_paths)
+    return review_files(
+        files,
+        protected_paths=protected_paths,
+        disabled_rules=disabled_rules,
+        large_diff_threshold=large_diff_threshold,
+        max_findings=max_findings,
+    )
 
 
-def review_files(files: list[DiffFile], protected_paths: Sequence[str] | None = None) -> ReviewReport:
+def review_files(
+    files: list[DiffFile],
+    protected_paths: Sequence[str] | None = None,
+    disabled_rules: Sequence[str] | None = None,
+    large_diff_threshold: int = DEFAULT_LARGE_DIFF_THRESHOLD,
+    max_findings: int = DEFAULT_MAX_FINDINGS,
+) -> ReviewReport:
     protected_paths = protected_paths or []
-    findings = collect_findings(files, protected_paths)
+    findings = collect_findings(
+        files,
+        protected_paths,
+        disabled_rules=disabled_rules,
+        large_diff_threshold=large_diff_threshold,
+        max_findings=max_findings,
+    )
     added_lines = sum(len(file.added) for file in files)
     removed_lines = sum(len(file.removed) for file in files)
     return ReviewReport(findings=findings, files=files, added_lines=added_lines, removed_lines=removed_lines)
@@ -239,12 +270,20 @@ def parse_unified_diff(diff_text: str) -> list[DiffFile]:
     return files
 
 
-def collect_findings(files: list[DiffFile], protected_paths: Sequence[str]) -> list[ReviewFinding]:
+def collect_findings(
+    files: list[DiffFile],
+    protected_paths: Sequence[str],
+    *,
+    disabled_rules: Sequence[str] | None = None,
+    large_diff_threshold: int = DEFAULT_LARGE_DIFF_THRESHOLD,
+    max_findings: int = DEFAULT_MAX_FINDINGS,
+) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
     seen: set[tuple[str, str, int | None, str]] = set()
+    disabled = {str(rule) for rule in disabled_rules or []}
 
     def add(severity: str, path: str, line: int | None, title: str, message: str, rule: str) -> None:
-        if len(findings) >= MAX_FINDINGS:
+        if rule in disabled:
             return
         key = (rule, path, line, severity)
         if key in seen:
@@ -297,7 +336,7 @@ def collect_findings(files: list[DiffFile], protected_paths: Sequence[str]) -> l
             if contains_debug_statement(line.content) and not looks_like_test_path(path):
                 add("low", path, line.number, "新增调试输出", "新增调试输出出现在非测试文件中，请确认不会污染运行日志或用户输出。", "debug_output")
 
-    if total_changed > 500:
+    if large_diff_threshold > 0 and total_changed > large_diff_threshold:
         add(
             "medium",
             ".",
@@ -307,7 +346,8 @@ def collect_findings(files: list[DiffFile], protected_paths: Sequence[str]) -> l
             "large_diff",
         )
 
-    return sorted(findings, key=lambda item: (SEVERITY_ORDER.get(item.severity, 99), item.path, item.line or 0, item.rule))
+    sorted_findings = sorted(findings, key=lambda item: (SEVERITY_ORDER.get(item.severity, 99), item.path, item.line or 0, item.rule))
+    return sorted_findings[: max(1, max_findings)]
 
 
 def format_review_report(report: ReviewReport) -> str:

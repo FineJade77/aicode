@@ -143,6 +143,9 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 
 - `protectedPaths`: 文件读取、搜索、列表和 patch 写入都会跳过或拦截这些路径。
 - `commands.test`: 设置为具体命令时，`aicode test` 会优先使用该命令；设置为 `auto` 时自动探测。
+- `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
+- `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
+- `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。
 
 示例：
 
@@ -150,6 +153,11 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 {
   "commands": {
     "test": "python3 -m pytest tests/unit"
+  },
+  "review": {
+    "disabledRules": ["large_diff"],
+    "largeDiffThreshold": 1200,
+    "maxFindings": 25
   },
   "protectedPaths": [
     ".env",

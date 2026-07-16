@@ -58,6 +58,9 @@ class ToolRouter:
                     mode=mode,
                     language=language,
                     protected_paths=project_config.protected_paths,
+                    review_disabled_rules=project_config.review.disabled_rules,
+                    review_large_diff_threshold=project_config.review.large_diff_threshold,
+                    review_max_findings=project_config.review.max_findings,
                 ),
             )
         except ToolError as exc:
