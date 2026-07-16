@@ -80,6 +80,7 @@ go run ./cli "replace README.md old text => new text"
 ```
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。
+Patch 应用成功后，Runtime 会自动探测项目测试命令并交给 Policy Engine；低风险测试会自动运行，没有测试命令时会跳过验证。
 显式 shell 命令会先经过 Policy Engine：低风险测试命令可自动执行，中风险命令会要求 CLI 确认，`rm`、破坏性 git、危险控制符等高风险命令不会执行。
 
 ## 审计日志

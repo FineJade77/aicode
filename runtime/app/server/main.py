@@ -18,6 +18,7 @@ from app.events.sse import encode_sse
 from app.models.provider import ModelRequest
 from app.models.router import ModelRouter
 from app.project.config import load_project_config
+from app.project.detect import detect_test_command
 from app.sessions.store import Session, store
 from app.tools.base import ToolError, ToolResult
 from app.tools.patch import PatchProposal, apply_content_patch, create_append_patch, create_file_patch, create_replace_patch
@@ -921,6 +922,48 @@ async def propose_patch(session: Session, request: MessageRequest, proposal: Pat
             "files": [proposal.path],
         }
     )
+    await run_post_patch_verification(session, request)
+
+
+async def run_post_patch_verification(session: Session, request: MessageRequest) -> ToolResult | None:
+    command = detect_test_command(Path(request.workspace))
+    if command is None:
+        await session.events.put(
+            {
+                "type": "verification.skipped",
+                "reason": localized(request.language, "未发现可自动运行的测试命令", "no test command detected"),
+            }
+        )
+        return None
+
+    await session.events.put(
+        {
+            "type": "verification.started",
+            "command": command,
+            "message": localized(request.language, f"尝试运行验证命令: {command}", f"Running verification command: {command}"),
+        }
+    )
+    result = await execute_tool(session, request, "run_tests", {"timeout": 120})
+    audit.record(
+        "verification.completed",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={
+            "command": command,
+            "success": result.success,
+            "risk_level": result.risk_level,
+            "requires_approval": result.requires_approval,
+        },
+    )
+    await session.events.put(
+        {
+            "type": "verification.completed",
+            "command": command,
+            "success": result.success,
+            "risk_level": result.risk_level,
+        }
+    )
+    return result
 
 
 async def emit_patch_write_denied(session: Session, request: MessageRequest) -> None:

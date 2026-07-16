@@ -317,6 +317,16 @@ func RenderEvent(event map[string]any) {
 		fmt.Println("Patch 已应用。")
 	case "patch.rejected":
 		fmt.Printf("Patch 已拒绝: %s\n", stringValue(event["reason"]))
+	case "verification.started":
+		fmt.Println(stringValue(event["message"]))
+	case "verification.skipped":
+		fmt.Printf("验证跳过: %s\n", stringValue(event["reason"]))
+	case "verification.completed":
+		status := "通过"
+		if !boolValue(event["success"]) {
+			status = "失败"
+		}
+		fmt.Printf("验证%s: %s\n", status, stringValue(event["command"]))
 	case "usage.recorded":
 		fmt.Println(usageLine(event))
 	case "final":

@@ -17,6 +17,7 @@ from app.server.main import (
     model_purpose_for_mode,
     model_routes,
     review_rules,
+    run_post_patch_verification,
 )
 from app.sessions.store import Session
 
@@ -203,3 +204,41 @@ async def test_execute_tool_reports_rejected_medium_shell(tmp_path: Path) -> Non
     assert not result.success
     assert "拒绝" in result.error
     assert rejected["type"] == "tool.rejected"
+
+
+@pytest.mark.asyncio
+async def test_post_patch_verification_skips_when_no_test_command(tmp_path: Path) -> None:
+    audit.path = tmp_path / "audit.jsonl"
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="create TODO.md hi", mode="default", workspace=str(tmp_path), language="zh-CN")
+
+    result = await run_post_patch_verification(session, request)
+    skipped = await asyncio.wait_for(session.events.get(), timeout=1)
+
+    assert result is None
+    assert skipped["type"] == "verification.skipped"
+
+
+@pytest.mark.asyncio
+async def test_post_patch_verification_runs_detected_tests(tmp_path: Path) -> None:
+    audit.path = tmp_path / "audit.jsonl"
+    (tmp_path / "pytest.ini").write_text("[pytest]\ntestpaths = tests\n", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="replace x", mode="default", workspace=str(tmp_path), language="zh-CN")
+
+    result = await run_post_patch_verification(session, request)
+    started = await asyncio.wait_for(session.events.get(), timeout=1)
+    tool_started = await asyncio.wait_for(session.events.get(), timeout=1)
+    tool_output = await asyncio.wait_for(session.events.get(), timeout=5)
+    completed = await asyncio.wait_for(session.events.get(), timeout=1)
+
+    assert result is not None
+    assert result.success
+    assert started["type"] == "verification.started"
+    assert tool_started["type"] == "tool.started"
+    assert tool_output["type"] == "tool.output"
+    assert completed["type"] == "verification.completed"
+    assert completed["success"] is True
