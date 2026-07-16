@@ -74,6 +74,7 @@ go run ./cli usage
 go run ./cli usage --today
 go run ./cli usage --session <session_id>
 go run ./cli usage --json
+go run ./cli "create TODO.md 第一条任务"
 go run ./cli "append README.md 一行新内容"
 go run ./cli "replace README.md old text => new text"
 ```

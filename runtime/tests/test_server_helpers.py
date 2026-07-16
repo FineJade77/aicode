@@ -9,6 +9,7 @@ from app.server.main import (
     audit,
     build_model_messages,
     detect_append_request,
+    detect_create_request,
     detect_replace_request,
     detect_shell_request,
     execute_tool,
@@ -35,6 +36,12 @@ def test_detect_replace_request() -> None:
     assert detect_replace_request("replace README.md old value => new value") == ("README.md", "old value", "new value")
     assert detect_replace_request("替换 README.md 旧值 -> 新值") == ("README.md", "旧值", "新值")
     assert detect_replace_request("replace README.md missing separator") is None
+
+
+def test_detect_create_request() -> None:
+    assert detect_create_request("create TODO.md hello world") == ("TODO.md", "hello world")
+    assert detect_create_request("创建 notes/today.md 你好") == ("notes/today.md", "你好")
+    assert detect_create_request("create TODO.md") is None
 
 
 def test_detect_shell_request() -> None:
