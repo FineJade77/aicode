@@ -27,7 +27,7 @@
 - `detect_project`
 - `run_tests`
 - `aicode test` 自动执行低风险测试命令
-- `aicode review` 对当前 git diff 执行只读规则审查
+- `aicode review` 对当前 git diff 执行只读规则审查，并用 reviewer model 汇总结果
 - append 写入场景的 inline diff 确认链路
 - 本地 JSONL 审计日志
 - SQLite session/message 持久化
@@ -162,6 +162,8 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 ## 模型配置
 
 Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发。
+
+`aicode review` 会走 `reviewer` 模型路由；没有 API key 时仍会输出确定性规则审查结果。
 
 常用环境变量：
 

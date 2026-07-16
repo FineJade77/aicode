@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from app.models.provider import ModelRequest
 from app.models.router import ModelRouter
 from app.project.config import load_project_config
 from app.sessions.store import Session, store
-from app.tools.base import ToolError
+from app.tools.base import ToolError, ToolResult
 from app.tools.patch import apply_content_patch, create_append_patch
 from app.tools.router import ToolRouter
 from app.usage.store import summarize_usage
@@ -173,6 +174,7 @@ def require_session(session_id: str) -> Session:
 
 
 async def run_agent(session: Session, request: MessageRequest) -> None:
+    observations: list[dict[str, Any]] = []
     plan_items = [
         {"id": "scan", "text": localized(request.language, "扫描当前工作区", "Scan current workspace"), "status": "pending"},
         {"id": "context", "text": localized(request.language, "调用真实工具收集上下文", "Gather context with real tools"), "status": "pending"},
@@ -182,24 +184,26 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
 
     await asyncio.sleep(0.05)
     await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "in_progress"})
-    await execute_tool(session, request, "list_files", {"path": ".", "max_depth": 1, "limit": 40})
-    await execute_tool(session, request, "detect_project", {})
-    await execute_tool(session, request, "git_status", {})
+    observations.append(observe_tool("list_files", await execute_tool(session, request, "list_files", {"path": ".", "max_depth": 1, "limit": 40})))
+    observations.append(observe_tool("detect_project", await execute_tool(session, request, "detect_project", {})))
+    observations.append(observe_tool("git_status", await execute_tool(session, request, "git_status", {})))
     await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "completed"})
 
     await asyncio.sleep(0.05)
     await session.events.put({"type": "plan.updated", "item_id": "context", "status": "in_progress"})
     for tool_name, args in choose_context_tools(request):
-        await execute_tool(session, request, tool_name, args)
+        observations.append(observe_tool(tool_name, await execute_tool(session, request, tool_name, args)))
     append_request = detect_append_request(request.message)
     if append_request is not None:
         await propose_append_patch(session, request, append_request[0], append_request[1])
     await session.events.put({"type": "plan.updated", "item_id": "context", "status": "completed"})
 
+    purpose = model_purpose_for_mode(request.mode)
     response = await model_router.complete(
         ModelRequest(
-            purpose="summarizer",
-            messages=[{"role": "user", "content": request.message}],
+            purpose=purpose,
+            messages=build_model_messages(request, observations),
+            max_tokens=900 if purpose == "reviewer" else 500,
         )
     )
     audit.record(
@@ -209,7 +213,7 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
         data={
             "model": response.model,
             "provider": response.provider,
-            "purpose": "summarizer",
+            "purpose": purpose,
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "estimated_cost": response.estimated_cost,
@@ -220,26 +224,24 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
             "type": "usage.recorded",
             "model": response.model,
             "provider": response.provider,
+            "purpose": purpose,
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "estimated_cost": response.estimated_cost,
         }
     )
     await session.events.put({"type": "plan.updated", "item_id": "summary", "status": "completed"})
-    audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode})
+    final_summary = final_summary_text(request, observations, response.text, response.provider)
+    audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode, "purpose": purpose})
     await session.events.put(
         {
             "type": "final",
-            "summary": localized(
-                request.language,
-                "Phase 1 工具系统已连通。Runtime 已通过结构化工具读取工作区、检查 git 状态，并支持写入前 inline diff 确认。",
-                "Phase 1 tool system is connected. The runtime used structured tools to inspect the workspace, check git status, and supports inline diff approval before writes.",
-            ),
+            "summary": final_summary,
         }
     )
 
 
-async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]) -> None:
+async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]) -> ToolResult:
     decision = tools.evaluate(name, args, mode=request.mode)
     audit.record(
         "tool.started",
@@ -286,7 +288,7 @@ async def execute_tool(session: Session, request: MessageRequest, name: str, arg
                 "requires_approval": result.requires_approval,
             }
         )
-        return
+        return result
 
     event_type = "tool.denied" if result.requires_approval or result.risk_level == "high" else "tool.error"
     audit.record(
@@ -311,6 +313,98 @@ async def execute_tool(session: Session, request: MessageRequest, name: str, arg
             "requires_approval": result.requires_approval,
         }
     )
+    return result
+
+
+def observe_tool(name: str, result: ToolResult) -> dict[str, Any]:
+    return {
+        "tool": name,
+        "success": result.success,
+        "risk_level": result.risk_level,
+        "requires_approval": result.requires_approval,
+        "text": truncate_for_model(result.text or result.error),
+        "data": compact_tool_data(result.data),
+    }
+
+
+def compact_tool_data(data: dict[str, Any]) -> dict[str, Any]:
+    if not data:
+        return {}
+    encoded = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+    if len(encoded) <= 12_000:
+        return data
+    return {"truncated": True, "preview": encoded[:12_000]}
+
+
+def truncate_for_model(text: str, limit: int = 12_000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...[TRUNCATED]"
+
+
+def model_purpose_for_mode(mode: str) -> str:
+    if mode == "review":
+        return "reviewer"
+    return "summarizer"
+
+
+def build_model_messages(request: MessageRequest, observations: list[dict[str, Any]]) -> list[dict[str, str]]:
+    language_name = "English" if request.language.startswith("en") else "中文"
+    if request.mode == "review":
+        system = (
+            f"你是 aicode 的只读代码审查助手。使用{language_name}回答。"
+            "只基于工具输出做结论，不要编造没有证据的问题。"
+            "不得建议已经修改代码；review 模式只允许只读分析。"
+            "优先输出: 结论、必须处理的问题、可选改进、建议验证命令。"
+        )
+    else:
+        system = (
+            f"你是 aicode 的 coding agent 摘要助手。使用{language_name}回答。"
+            "基于工具输出给出简洁进展总结和下一步建议，不要编造。"
+        )
+
+    payload = {
+        "user_request": request.message,
+        "mode": request.mode,
+        "workspace": request.workspace,
+        "tool_observations": observations,
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
+def final_summary_text(request: MessageRequest, observations: list[dict[str, Any]], model_text: str, provider: str) -> str:
+    cleaned = model_text.strip()
+    if provider != "stub" and cleaned:
+        return cleaned
+
+    if request.mode == "review":
+        review_text = review_observation_text(observations)
+        prefix = localized(
+            request.language,
+            "模型 provider 未配置，以下为确定性 Review 结果：",
+            "Model provider is not configured. Deterministic review result:",
+        )
+        return prefix + "\n\n" + review_text
+
+    if provider == "stub" or not cleaned:
+        return localized(
+            request.language,
+            "Phase 1 工具系统已连通。Runtime 已通过结构化工具读取工作区、检查 git 状态，并支持写入前 inline diff 确认。",
+            "Phase 1 tool system is connected. The runtime used structured tools to inspect the workspace, check git status, and supports inline diff approval before writes.",
+        )
+    return cleaned
+
+
+def review_observation_text(observations: list[dict[str, Any]]) -> str:
+    for observation in observations:
+        if observation.get("tool") == "review_diff" and observation.get("success"):
+            text = str(observation.get("text") or "").strip()
+            if text:
+                return text
+    return "Review 未产生可用结果。"
 
 
 def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, Any]]]:
