@@ -63,6 +63,44 @@ func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (st
 	return path, rules, os.WriteFile(path, encoded, 0o644)
 }
 
+func PruneUnknownReviewRules(workspacePath string) (string, []string, []string, error) {
+	path := filepath.Join(workspacePath, ".aicode", "config.json")
+	raw, err := readProjectConfig(path)
+	if err != nil {
+		return path, nil, nil, err
+	}
+
+	review := objectValue(raw["review"])
+	rules := stringList(review["disabledRules"])
+	kept := make([]string, 0, len(rules))
+	removed := make([]string, 0)
+	for _, rule := range rules {
+		if knownReviewRules[rule] {
+			kept = append(kept, rule)
+			continue
+		}
+		removed = append(removed, rule)
+	}
+	sort.Strings(kept)
+	sort.Strings(removed)
+
+	if len(removed) == 0 {
+		return path, removed, kept, nil
+	}
+
+	review["disabledRules"] = kept
+	raw["review"] = review
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return path, nil, nil, err
+	}
+	encoded, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return path, nil, nil, err
+	}
+	encoded = append(encoded, '\n')
+	return path, removed, kept, os.WriteFile(path, encoded, 0o644)
+}
+
 func KnownReviewRuleIDs() []string {
 	rules := make([]string, 0, len(knownReviewRules))
 	for rule := range knownReviewRules {

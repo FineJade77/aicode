@@ -124,6 +124,7 @@ go run ./cli resume <session_id>
 go run ./cli config init
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
+go run ./cli config review prune
 ```
 
 切换为英文交互：
@@ -157,6 +158,7 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 ```bash
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
+go run ./cli config review prune
 ```
 
 如果不确定 rule id，先运行：
@@ -166,6 +168,7 @@ go run ./cli review-rules
 ```
 
 `review-rules` 也会在 `config_warnings` 中标出历史配置里已经不存在的 rule id。
+可以运行 `config review prune` 自动移除这些未知 rule id。
 
 示例：
 

@@ -92,6 +92,7 @@ func printHelp() {
   aicode config set ui.language en-US
   aicode config review disable large_diff
   aicode config review enable large_diff
+  aicode config review prune
   aicode daemon start
   aicode daemon stop
   aicode daemon status`)
@@ -167,8 +168,11 @@ func runConfigCommand(args []string) error {
 }
 
 func runConfigReviewCommand(args []string) error {
+	if len(args) == 1 && args[0] == "prune" {
+		return runConfigReviewPrune()
+	}
 	if len(args) != 2 {
-		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id>")
+		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review prune")
 	}
 
 	root, err := workspace.Detect()
@@ -185,7 +189,7 @@ func runConfigReviewCommand(args []string) error {
 	case "enable":
 		disabled = false
 	default:
-		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id>")
+		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review prune")
 	}
 
 	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled)
@@ -197,6 +201,29 @@ func runConfigReviewCommand(args []string) error {
 		state = "禁用"
 	}
 	fmt.Printf("已%s review 规则 %s (%s)\n", state, rule, path)
+	if len(rules) == 0 {
+		fmt.Println("当前 disabledRules: []")
+		return nil
+	}
+	fmt.Printf("当前 disabledRules: %s\n", strings.Join(rules, ", "))
+	return nil
+}
+
+func runConfigReviewPrune() error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+
+	path, removed, rules, err := projectconfig.PruneUnknownReviewRules(root.Path)
+	if err != nil {
+		return err
+	}
+	if len(removed) == 0 {
+		fmt.Printf("未发现未知 review 规则 (%s)\n", path)
+		return nil
+	}
+	fmt.Printf("已移除未知 review 规则: %s (%s)\n", strings.Join(removed, ", "), path)
 	if len(rules) == 0 {
 		fmt.Println("当前 disabledRules: []")
 		return nil

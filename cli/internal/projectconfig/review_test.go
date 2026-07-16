@@ -129,6 +129,71 @@ func TestKnownReviewRuleIDs(t *testing.T) {
 	}
 }
 
+func TestPruneUnknownReviewRules(t *testing.T) {
+	workspace := t.TempDir()
+	configDir := filepath.Join(workspace, ".aicode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"commands":{"test":"go test ./..."},"review":{"disabledRules":["old_rule","large_diff","debug_output"],"maxFindings":25}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, removed, rules, err := PruneUnknownReviewRules(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if path != configPath {
+		t.Fatalf("path = %q", path)
+	}
+	if len(removed) != 1 || removed[0] != "old_rule" {
+		t.Fatalf("removed = %#v", removed)
+	}
+	if len(rules) != 2 || rules[0] != "debug_output" || rules[1] != "large_diff" {
+		t.Fatalf("rules = %#v", rules)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(content, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["commands"].(map[string]any)["test"] != "go test ./..." {
+		t.Fatalf("commands not preserved: %#v", raw)
+	}
+	if raw["review"].(map[string]any)["maxFindings"].(float64) != 25 {
+		t.Fatalf("maxFindings not preserved: %#v", raw)
+	}
+	disabled := raw["review"].(map[string]any)["disabledRules"].([]any)
+	if len(disabled) != 2 || disabled[0] != "debug_output" || disabled[1] != "large_diff" {
+		t.Fatalf("disabledRules = %#v", disabled)
+	}
+}
+
+func TestPruneUnknownReviewRulesNoopWhenConfigMissing(t *testing.T) {
+	workspace := t.TempDir()
+
+	path, removed, rules, err := PruneUnknownReviewRules(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if path != filepath.Join(workspace, ".aicode", "config.json") {
+		t.Fatalf("path = %q", path)
+	}
+	if len(removed) != 0 || len(rules) != 0 {
+		t.Fatalf("removed = %#v rules = %#v", removed, rules)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no config file, stat err = %v", statErr)
+	}
+}
+
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
