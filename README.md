@@ -25,6 +25,7 @@
 - `run_shell`
 - `aicode test` 自动执行低风险测试命令
 - append 写入场景的 inline diff 确认链路
+- 本地 JSONL 审计日志
 
 ## 本地运行
 
@@ -61,6 +62,20 @@ go run ./cli "append README.md 一行新内容"
 ```
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。
+
+## 审计日志
+
+Runtime 会把 session、message、tool call、approval、patch、usage 等事件记录到本地 JSONL：
+
+```text
+~/.aicode/audit.jsonl
+```
+
+开发测试时如果设置了 `AICODE_HOME`，审计文件会写入：
+
+```text
+$AICODE_HOME/audit.jsonl
+```
 
 ## 配置
 
