@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from app.server.main import detect_append_request, detect_test_command
+from app.project.detect import detect_test_command
+from app.server.main import detect_append_request
 
 
 def test_detect_test_command_for_go_work(tmp_path: Path) -> None:

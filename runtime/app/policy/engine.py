@@ -17,6 +17,7 @@ class PolicyEngine:
     """Small, conservative policy layer for Phase 1 tool execution."""
 
     read_tools = {
+        "detect_project",
         "list_files",
         "read_file",
         "search_text",
@@ -84,6 +85,11 @@ class PolicyEngine:
 
         if tool_name == "run_shell":
             return self._evaluate_shell(str(args.get("command", "")), mode=mode)
+
+        if tool_name == "run_tests":
+            if mode == "review":
+                return PolicyDecision(allowed=False, risk_level="high", requires_approval=False, reason="review 模式禁止运行测试")
+            return PolicyDecision(allowed=True, risk_level="low", requires_approval=False)
 
         if tool_name in {"generate_patch", "apply_patch"}:
             return PolicyDecision(allowed=False, risk_level="medium", requires_approval=True, reason="Phase 1 需要 inline diff 确认")

@@ -23,6 +23,8 @@
 - `git_diff`
 - `git_show`
 - `run_shell`
+- `detect_project`
+- `run_tests`
 - `aicode test` 自动执行低风险测试命令
 - append 写入场景的 inline diff 确认链路
 - 本地 JSONL 审计日志

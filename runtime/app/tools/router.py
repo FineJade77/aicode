@@ -9,6 +9,7 @@ from app.project.config import load_project_config
 from app.tools.base import ToolContext, ToolError, ToolResult
 from app.tools.file import ListFilesTool, ReadFileTool
 from app.tools.git import GitDiffTool, GitShowTool, GitStatusTool
+from app.tools.project import DetectProjectTool, RunTestsTool
 from app.tools.search import SearchTextTool
 from app.tools.shell import RunShellTool
 
@@ -22,10 +23,12 @@ class ToolRouter:
                 ListFilesTool(),
                 ReadFileTool(),
                 SearchTextTool(),
+                DetectProjectTool(),
                 GitStatusTool(),
                 GitDiffTool(),
                 GitShowTool(),
                 RunShellTool(),
+                RunTestsTool(),
             ]
         }
 
@@ -59,8 +62,9 @@ class ToolRouter:
             return ToolResult(success=False, error=str(exc), risk_level=decision.risk_level, requires_approval=decision.requires_approval)
         except Exception as exc:
             return ToolResult(success=False, error=str(exc), risk_level="high", requires_approval=False)
-        result.risk_level = decision.risk_level
-        result.requires_approval = decision.requires_approval
+        if result.risk_level == "low":
+            result.risk_level = decision.risk_level
+        result.requires_approval = result.requires_approval or decision.requires_approval
         return result
 
     def evaluate(self, name: str, args: dict[str, Any], mode: str) -> PolicyDecision:

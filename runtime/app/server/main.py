@@ -183,6 +183,7 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
     await asyncio.sleep(0.05)
     await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "in_progress"})
     await execute_tool(session, request, "list_files", {"path": ".", "max_depth": 1, "limit": 40})
+    await execute_tool(session, request, "detect_project", {})
     await execute_tool(session, request, "git_status", {})
     await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "completed"})
 
@@ -323,10 +324,7 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
         return [("git_diff", {})]
 
     if request.mode == "test" or "运行测试" in message or "run tests" in lowered:
-        command = detect_test_command(Path(request.workspace))
-        if command:
-            return [("run_shell", {"command": command, "timeout": 120})]
-        return [("search_text", {"query": "test", "limit": 40})]
+        return [("run_tests", {"timeout": 120})]
 
     target = extract_target(message)
     if target:
@@ -507,55 +505,6 @@ def extract_target(message: str) -> str | None:
             if cleaned and not cleaned.startswith("http"):
                 return cleaned
     return None
-
-
-def detect_test_command(workspace: Path) -> str | None:
-    configured = load_project_config(workspace).commands.get("test")
-    if configured and configured != "auto":
-        return configured
-
-    if (workspace / "go.mod").exists():
-        return "go test ./..."
-
-    go_work = workspace / "go.work"
-    if go_work.exists():
-        modules = parse_go_work_modules(go_work)
-        if modules:
-            packages = " ".join(f"{module}/..." for module in modules)
-            return f"go test {packages}"
-
-    if (workspace / "pyproject.toml").exists() or (workspace / "pytest.ini").exists() or (workspace / "setup.cfg").exists():
-        return "python3 -m pytest"
-
-    if (workspace / "package.json").exists():
-        if (workspace / "pnpm-lock.yaml").exists():
-            return "pnpm test"
-        if (workspace / "yarn.lock").exists():
-            return "yarn test"
-        return "npm test"
-
-    return None
-
-
-def parse_go_work_modules(go_work: Path) -> list[str]:
-    modules: list[str] = []
-    in_use_block = False
-    for raw in go_work.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("//"):
-            continue
-        if line == "use (":
-            in_use_block = True
-            continue
-        if in_use_block and line == ")":
-            in_use_block = False
-            continue
-        if line.startswith("use "):
-            modules.append(line.removeprefix("use ").strip())
-            continue
-        if in_use_block:
-            modules.append(line)
-    return [module for module in modules if module.startswith("./")]
 
 
 def datetime_utc_today():

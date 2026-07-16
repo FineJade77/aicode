@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.project.config import load_project_config, parse_project_config
-from app.server.main import detect_test_command
+from app.project.detect import detect_project, detect_test_command
 from app.tools.patch import create_append_patch
 from app.tools.router import ToolRouter
 
@@ -39,6 +39,16 @@ def test_detect_test_command_uses_project_config_override(tmp_path: Path) -> Non
     (tmp_path / "go.work").write_text("go 1.22\n\nuse ./cli\n", encoding="utf-8")
 
     assert detect_test_command(tmp_path) == "python3 -m pytest tests/unit"
+
+
+def test_detect_project_for_go_work(tmp_path: Path) -> None:
+    (tmp_path / "go.work").write_text("go 1.22\n\nuse ./cli\n", encoding="utf-8")
+
+    info = detect_project(tmp_path)
+
+    assert info.languages == ["go"]
+    assert info.package_manager == "go"
+    assert info.test_command == "go test ./cli/..."
 
 
 @pytest.mark.asyncio
@@ -88,6 +98,37 @@ def test_append_patch_blocks_project_protected_path(tmp_path: Path) -> None:
 
     with pytest.raises(Exception, match="受保护路径"):
         create_append_patch(tmp_path, "secret.txt", "new", protected_paths=["secret.txt"])
+
+
+@pytest.mark.asyncio
+async def test_detect_project_tool(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module demo\n", encoding="utf-8")
+
+    result = await ToolRouter().run("detect_project", {}, str(tmp_path), "default", "zh-CN")
+
+    assert result.success
+    assert result.data["languages"] == ["go"]
+    assert result.data["test_command"] == "go test ./..."
+
+
+@pytest.mark.asyncio
+async def test_run_tests_tool_uses_safe_configured_command(tmp_path: Path) -> None:
+    write_project_config(tmp_path, {"commands": {"test": "python3 -m unittest discover"}})
+
+    result = await ToolRouter().run("run_tests", {"timeout": 30}, str(tmp_path), "default", "zh-CN")
+
+    assert result.success
+    assert result.data["command"] == ["python3", "-m", "unittest", "discover"]
+
+
+@pytest.mark.asyncio
+async def test_run_tests_tool_blocks_dangerous_configured_command(tmp_path: Path) -> None:
+    write_project_config(tmp_path, {"commands": {"test": "rm -rf build"}})
+
+    result = await ToolRouter().run("run_tests", {"timeout": 30}, str(tmp_path), "default", "zh-CN")
+
+    assert not result.success
+    assert result.risk_level == "high"
 
 
 def write_project_config(tmp_path: Path, data: dict) -> None:
