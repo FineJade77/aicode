@@ -20,6 +20,7 @@ from app.project.config import load_project_config
 from app.sessions.store import Session, store
 from app.tools.base import ToolError, ToolResult
 from app.tools.patch import apply_content_patch, create_append_patch
+from app.tools.review import review_rules_data
 from app.tools.router import ToolRouter
 from app.usage.store import summarize_usage
 
@@ -164,6 +165,18 @@ async def usage(today: bool = False, session_id: str | None = None) -> dict[str,
 @app.get("/v1/usage/sessions/{session_id}")
 async def usage_for_session(session_id: str) -> dict[str, Any]:
     return summarize_usage(audit.path, session_id=session_id)
+
+
+@app.get("/v1/review/rules")
+async def review_rules(workspace: str | None = None) -> dict[str, Any]:
+    project_config = load_project_config(Path(workspace)) if workspace else None
+    if project_config is None:
+        return review_rules_data()
+    return review_rules_data(
+        disabled_rules=project_config.review.disabled_rules,
+        large_diff_threshold=project_config.review.large_diff_threshold,
+        max_findings=project_config.review.max_findings,
+    )
 
 
 def require_session(session_id: str) -> Session:

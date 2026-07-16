@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.tools.review import DiffFile, DiffLine, format_review_report, load_untracked_files, review_diff_text, review_files, review_report_data
+from app.tools.review import DiffFile, DiffLine, format_review_report, load_untracked_files, review_diff_text, review_files, review_report_data, review_rules_data
 
 
 def test_review_detects_secrets_without_echoing_value() -> None:
@@ -104,3 +104,13 @@ def test_review_uses_configurable_large_diff_threshold_and_max_findings() -> Non
 
     assert len(report.findings) == 2
     assert report.findings[0].rule == "large_diff"
+
+
+def test_review_rules_data_marks_disabled_rules() -> None:
+    data = review_rules_data(disabled_rules=["large_diff"], large_diff_threshold=1200, max_findings=25)
+    rules = {rule["id"]: rule for rule in data["rules"]}
+
+    assert data["effective_config"]["large_diff_threshold"] == 1200
+    assert data["effective_config"]["max_findings"] == 25
+    assert rules["large_diff"]["enabled"] is False
+    assert rules["secret_added"]["enabled"] is True

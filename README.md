@@ -28,6 +28,7 @@
 - `run_tests`
 - `aicode test` 自动执行低风险测试命令
 - `aicode review` 对当前 git diff 执行只读规则审查，并用 reviewer model 汇总结果
+- `aicode review-rules` 查看 review 规则和项目配置后的生效状态
 - append 写入场景的 inline diff 确认链路
 - 本地 JSONL 审计日志
 - SQLite session/message 持久化
@@ -62,6 +63,8 @@ python3 -m uvicorn app.server.main:app --host 127.0.0.1 --port 8765
 ```bash
 go run ./cli daemon status
 go run ./cli chat "你好"
+go run ./cli review
+go run ./cli review-rules
 go run ./cli test
 go run ./cli usage
 go run ./cli usage --today

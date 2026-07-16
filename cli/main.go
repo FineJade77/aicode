@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -44,6 +45,8 @@ func run(args []string) error {
 		return runSimpleGet(cfg, "/v1/sessions")
 	case "usage":
 		return runUsage(cfg, args[1:])
+	case "review-rules":
+		return runReviewRules(cfg)
 	case "resume":
 		return runResume(cfg, args[1:])
 	case "review":
@@ -74,6 +77,7 @@ func printHelp() {
   aicode "修复这个测试失败"
   aicode chat "解释当前目录"
   aicode review
+  aicode review-rules
   aicode explain src/foo.ts
   aicode diff
   aicode test
@@ -178,6 +182,14 @@ func runUsage(cfg config.Config, args []string) error {
 		return runSimpleGet(cfg, "/v1/usage/sessions/"+args[1])
 	}
 	return fmt.Errorf("用法: aicode usage [--today|--session <session_id>]")
+}
+
+func runReviewRules(cfg config.Config) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	return runSimpleGet(cfg, "/v1/review/rules?workspace="+url.QueryEscape(root.Path))
 }
 
 func runSimpleGet(cfg config.Config, path string) error {

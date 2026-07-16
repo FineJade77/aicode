@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from app.project.detect import detect_test_command
-from app.server.main import MessageRequest, build_model_messages, detect_append_request, final_summary_text, model_purpose_for_mode
+from app.server.main import MessageRequest, build_model_messages, detect_append_request, final_summary_text, model_purpose_for_mode, review_rules
 
 
 def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
@@ -95,3 +97,20 @@ def test_review_final_groups_findings_for_stub() -> None:
     assert "发现 1 个确定性问题：high=1 medium=0 low=0。" in summary
     assert "- [high] .env:2 新增行包含疑似密钥：新增内容匹配凭证或私钥特征。" in summary
     assert "- 运行 `python3 -m pytest`。" in summary
+
+
+@pytest.mark.asyncio
+async def test_review_rules_endpoint_uses_workspace_config(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".aicode"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        '{"review":{"disabledRules":["large_diff"],"largeDiffThreshold":1200,"maxFindings":25}}',
+        encoding="utf-8",
+    )
+
+    data = await review_rules(str(tmp_path))
+    rules = {rule["id"]: rule for rule in data["rules"]}
+
+    assert data["effective_config"]["large_diff_threshold"] == 1200
+    assert data["effective_config"]["max_findings"] == 25
+    assert rules["large_diff"]["enabled"] is False

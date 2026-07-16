@@ -75,6 +75,90 @@ class ReviewReport:
     removed_lines: int
 
 
+@dataclass(slots=True)
+class ReviewRule:
+    rule_id: str
+    severity: str
+    title: str
+    description: str
+
+
+REVIEW_RULES = [
+    ReviewRule(
+        rule_id="sensitive_path",
+        severity="high",
+        title="受保护或敏感路径发生变更",
+        description="diff 触及受保护路径、生产配置、凭证文件或私钥文件。",
+    ),
+    ReviewRule(
+        rule_id="secret_added",
+        severity="high",
+        title="新增行包含疑似密钥",
+        description="新增内容匹配 API key、token、password、private key 等凭证特征。",
+    ),
+    ReviewRule(
+        rule_id="deleted_test",
+        severity="medium",
+        title="测试文件被删除",
+        description="变更删除测试文件，需要确认有替代覆盖或这是预期清理。",
+    ),
+    ReviewRule(
+        rule_id="risky_eval",
+        severity="medium",
+        title="新增 eval 调用",
+        description="eval 会执行动态代码，容易引入注入风险。",
+    ),
+    ReviewRule(
+        rule_id="risky_exec",
+        severity="medium",
+        title="新增 exec 调用",
+        description="exec 会执行动态代码，容易引入注入风险。",
+    ),
+    ReviewRule(
+        rule_id="risky_os_system",
+        severity="medium",
+        title="新增 os.system 调用",
+        description="os.system 会把字符串交给 shell 执行，请优先使用参数化 subprocess。",
+    ),
+    ReviewRule(
+        rule_id="risky_shell_true",
+        severity="medium",
+        title="新增 subprocess shell=True",
+        description="subprocess shell=True 需要额外审查命令注入风险。",
+    ),
+    ReviewRule(
+        rule_id="risky_child_exec",
+        severity="medium",
+        title="新增 child_process.exec",
+        description="child_process.exec 会通过 shell 执行命令，需要确认输入不可被用户控制。",
+    ),
+    ReviewRule(
+        rule_id="risky_tls_verify",
+        severity="medium",
+        title="关闭 TLS 校验",
+        description="TLS 校验被关闭，需要确认只用于测试环境。",
+    ),
+    ReviewRule(
+        rule_id="large_diff",
+        severity="medium",
+        title="diff 规模较大",
+        description="当前 diff 超过阈值，建议拆分提交或扩大测试覆盖后再合入。",
+    ),
+    ReviewRule(
+        rule_id="task_marker_added",
+        severity="low",
+        title="新增 TODO/FIXME",
+        description="新增待办标记可能表示变更尚未完成。",
+    ),
+    ReviewRule(
+        rule_id="debug_output",
+        severity="low",
+        title="新增调试输出",
+        description="新增 console.log、debugger 或 pdb.set_trace 等常见调试残留。",
+    ),
+]
+
+
 class ReviewDiffTool:
     name = "review_diff"
 
@@ -383,6 +467,36 @@ def review_report_data(report: ReviewReport) -> dict:
             "by_severity": by_severity,
         },
         "findings": [asdict(finding) for finding in report.findings],
+    }
+
+
+def review_rules_data(
+    *,
+    disabled_rules: Sequence[str] | None = None,
+    large_diff_threshold: int = DEFAULT_LARGE_DIFF_THRESHOLD,
+    max_findings: int = DEFAULT_MAX_FINDINGS,
+) -> dict:
+    disabled = {str(rule) for rule in disabled_rules or []}
+    return {
+        "effective_config": {
+            "disabled_rules": sorted(disabled),
+            "large_diff_threshold": large_diff_threshold,
+            "max_findings": max_findings,
+        },
+        "defaults": {
+            "large_diff_threshold": DEFAULT_LARGE_DIFF_THRESHOLD,
+            "max_findings": DEFAULT_MAX_FINDINGS,
+        },
+        "rules": [
+            {
+                "id": rule.rule_id,
+                "severity": rule.severity,
+                "enabled": rule.rule_id not in disabled,
+                "title": rule.title,
+                "description": rule.description,
+            }
+            for rule in REVIEW_RULES
+        ],
     }
 
 
