@@ -350,7 +350,69 @@ async def execute_tool(session: Session, request: MessageRequest, name: str, arg
         }
     )
 
-    result = await tools.run(name, args, workspace=request.workspace, mode=request.mode, language=request.language)
+    if not decision.allowed and tools.is_approvable(name, decision):
+        accepted, approval_id = await request_tool_approval(session, request, name, args, decision)
+        if accepted is not True:
+            reason = localized(request.language, "等待工具确认超时", "tool approval timed out")
+            if accepted is False:
+                reason = localized(request.language, "用户拒绝工具执行", "user rejected the tool")
+            return await emit_tool_rejected(session, name, args, reason, decision.risk_level, approval_id)
+        result = await tools.run_after_approval(name, args, workspace=request.workspace, mode=request.mode, language=request.language)
+    else:
+        result = await tools.run(name, args, workspace=request.workspace, mode=request.mode, language=request.language)
+
+    return await emit_tool_result(session, name, result)
+
+
+async def request_tool_approval(
+    session: Session,
+    request: MessageRequest,
+    name: str,
+    args: dict[str, Any],
+    decision,
+) -> tuple[bool | None, str]:
+    approval = session.create_approval(
+        "tool",
+        {
+            "tool": name,
+            "args": args,
+            "risk_level": decision.risk_level,
+            "reason": decision.reason,
+        },
+    )
+    message = localized(
+        request.language,
+        f"是否允许执行工具 {name}: {args}？原因: {decision.reason}",
+        f"Allow tool {name}: {args}? Reason: {decision.reason}",
+    )
+    audit.record(
+        "approval.requested",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={
+            "approval_id": approval.approval_id,
+            "kind": "tool",
+            "tool": name,
+            "args": args,
+            "risk_level": decision.risk_level,
+            "reason": decision.reason,
+        },
+    )
+    await session.events.put(
+        {
+            "type": "approval.requested",
+            "approval_id": approval.approval_id,
+            "kind": "tool",
+            "tool": name,
+            "args": args,
+            "risk_level": decision.risk_level,
+            "message": message,
+        }
+    )
+    return await session.wait_for_approval(approval.approval_id), approval.approval_id
+
+
+async def emit_tool_result(session: Session, name: str, result: ToolResult) -> ToolResult:
     if result.success:
         audit.record(
             "tool.completed",
@@ -397,6 +459,47 @@ async def execute_tool(session: Session, request: MessageRequest, name: str, arg
             "data": result.data,
             "risk_level": result.risk_level,
             "requires_approval": result.requires_approval,
+        }
+    )
+    return result
+
+
+async def emit_tool_rejected(
+    session: Session,
+    name: str,
+    args: dict[str, Any],
+    reason: str,
+    risk_level: str,
+    approval_id: str,
+) -> ToolResult:
+    result = ToolResult(
+        success=False,
+        error=reason,
+        risk_level=risk_level,
+        requires_approval=True,
+        data={"approval_id": approval_id, "args": args},
+    )
+    audit.record(
+        "tool.rejected",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={
+            "tool": name,
+            "error": reason,
+            "risk_level": risk_level,
+            "requires_approval": True,
+            "approval_id": approval_id,
+            "args": args,
+        },
+    )
+    await session.events.put(
+        {
+            "type": "tool.rejected",
+            "tool": name,
+            "error": reason,
+            "risk_level": risk_level,
+            "requires_approval": True,
+            "approval_id": approval_id,
         }
     )
     return result
@@ -619,6 +722,10 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
     if detect_append_request(message) is not None:
         return []
 
+    shell_command = detect_shell_request(message)
+    if shell_command and request.mode != "review":
+        return [("run_shell", {"command": shell_command, "timeout": 120})]
+
     if request.mode == "review" or "审查" in message:
         return [("review_diff", {})]
 
@@ -637,6 +744,17 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
         return [("search_text", {"query": keyword, "limit": 40})]
 
     return []
+
+
+def detect_shell_request(message: str) -> str | None:
+    stripped = message.strip()
+    lowered = stripped.lower()
+    prefixes = ["shell ", "run shell ", "运行命令 ", "执行命令 "]
+    for prefix in prefixes:
+        if lowered.startswith(prefix) or stripped.startswith(prefix):
+            command = stripped[len(prefix) :].strip()
+            return command or None
+    return None
 
 
 async def propose_append_patch(session: Session, request: MessageRequest, path: str, text: str) -> None:

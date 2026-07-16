@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -5,13 +6,17 @@ import pytest
 from app.project.detect import detect_test_command
 from app.server.main import (
     MessageRequest,
+    audit,
     build_model_messages,
+    detect_shell_request,
     detect_append_request,
+    execute_tool,
     final_summary_text,
     model_purpose_for_mode,
     model_routes,
     review_rules,
 )
+from app.sessions.store import Session
 
 
 def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
@@ -23,6 +28,12 @@ def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
 def test_detect_append_request() -> None:
     assert detect_append_request("append README.md hello world") == ("README.md", "hello world")
     assert detect_append_request("追加 README.md 你好") == ("README.md", "你好")
+
+
+def test_detect_shell_request() -> None:
+    assert detect_shell_request("shell python3 -m pytest") == "python3 -m pytest"
+    assert detect_shell_request("运行命令 python3 -m pytest") == "python3 -m pytest"
+    assert detect_shell_request("执行命令 go test ./...") == "go test ./..."
 
 
 def test_review_mode_uses_reviewer_model_purpose() -> None:
@@ -134,3 +145,47 @@ async def test_model_routes_endpoint_returns_route_status() -> None:
     assert "reviewer" in data["routes"]
     assert "summarizer" in data["routes"]
     assert "api_key_env" in data["openai_compatible"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_waits_for_medium_shell_approval(tmp_path: Path) -> None:
+    audit.path = tmp_path / "audit.jsonl"
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="shell python3 -c 'print(123)'", mode="default", workspace=str(tmp_path), language="zh-CN")
+
+    task = asyncio.create_task(execute_tool(session, request, "run_shell", {"command": "python3 -c 'print(123)'"}))
+    started = await asyncio.wait_for(session.events.get(), timeout=1)
+    approval = await asyncio.wait_for(session.events.get(), timeout=1)
+
+    assert started["type"] == "tool.started"
+    assert approval["type"] == "approval.requested"
+    assert approval["kind"] == "tool"
+    assert approval["tool"] == "run_shell"
+    assert session.resolve_approval(approval["approval_id"], accepted=True)
+
+    result = await asyncio.wait_for(task, timeout=5)
+    output = await asyncio.wait_for(session.events.get(), timeout=1)
+
+    assert result.success
+    assert "123" in result.text
+    assert output["type"] == "tool.output"
+    assert output["data"]["approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_reports_rejected_medium_shell(tmp_path: Path) -> None:
+    audit.path = tmp_path / "audit.jsonl"
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="shell python3 -c 'print(123)'", mode="default", workspace=str(tmp_path), language="zh-CN")
+
+    task = asyncio.create_task(execute_tool(session, request, "run_shell", {"command": "python3 -c 'print(123)'"}))
+    await asyncio.wait_for(session.events.get(), timeout=1)
+    approval = await asyncio.wait_for(session.events.get(), timeout=1)
+    assert session.resolve_approval(approval["approval_id"], accepted=False)
+
+    result = await asyncio.wait_for(task, timeout=5)
+    rejected = await asyncio.wait_for(session.events.get(), timeout=1)
+
+    assert not result.success
+    assert "拒绝" in result.error
+    assert rejected["type"] == "tool.rejected"

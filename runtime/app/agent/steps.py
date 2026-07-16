@@ -81,6 +81,12 @@ TOOL_DOCS: list[dict[str, Any]] = [
         "description": "Run the detected or provided low-risk test command.",
         "args": {"timeout": 120},
     },
+    {
+        "name": "run_shell",
+        "read_only": False,
+        "description": "Run an explicit shell command after policy checks; medium-risk commands require user approval.",
+        "args": {"command": "python3 -m pytest", "timeout": 120},
+    },
 ]
 
 READ_ONLY_TOOLS = {tool["name"] for tool in TOOL_DOCS if tool["read_only"]}

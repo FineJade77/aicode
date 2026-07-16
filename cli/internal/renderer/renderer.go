@@ -305,6 +305,8 @@ func RenderEvent(event map[string]any) {
 		}
 	case "tool.denied":
 		fmt.Printf("工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+	case "tool.rejected":
+		fmt.Printf("工具执行已拒绝: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.error":
 		fmt.Printf("工具失败: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "approval.requested":

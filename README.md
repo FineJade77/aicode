@@ -28,6 +28,7 @@
 - `detect_project`
 - `run_tests`
 - `aicode test` 自动执行低风险测试命令
+- 显式 `shell <command>` / `运行命令 <command>` 支持策略检查；中风险命令需用户确认，高风险命令直接拦截
 - `aicode review` 对当前 git diff 执行只读规则审查，并用 reviewer model 汇总结果
 - `aicode review-rules` 查看 review 规则和项目配置后的生效状态
 - append 写入场景的 inline diff 确认链路
@@ -77,6 +78,7 @@ go run ./cli "append README.md 一行新内容"
 ```
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。
+显式 shell 命令会先经过 Policy Engine：低风险测试命令可自动执行，中风险命令会要求 CLI 确认，`rm`、破坏性 git、危险控制符等高风险命令不会执行。
 
 ## 审计日志
 

@@ -569,16 +569,30 @@ func runAgent(cfg config.Config, mode string, prompt string) error {
 
 func handleInteractiveEvent(api client.Client, sessionID string, event map[string]any) error {
 	eventType, _ := event["type"].(string)
-	if eventType != "patch.preview" {
+	switch eventType {
+	case "approval.requested":
+		kind, _ := event["kind"].(string)
+		if kind == "patch" {
+			return nil
+		}
+		approvalID, _ := event["approval_id"].(string)
+		if approvalID == "" {
+			return fmt.Errorf("approval.requested 缺少 approval_id")
+		}
+		return resolveApprovalWithPrompt(api, sessionID, approvalID, "允许执行这个工具操作吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
+	case "patch.preview":
+		approvalID, _ := event["approval_id"].(string)
+		if approvalID == "" {
+			return fmt.Errorf("patch.preview 缺少 approval_id")
+		}
+		return resolveApprovalWithPrompt(api, sessionID, approvalID, "应用这个 patch 吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
+	default:
 		return nil
 	}
+}
 
-	approvalID, _ := event["approval_id"].(string)
-	if approvalID == "" {
-		return fmt.Errorf("patch.preview 缺少 approval_id")
-	}
-
-	fmt.Print("应用这个 patch 吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
+func resolveApprovalWithPrompt(api client.Client, sessionID string, approvalID string, prompt string) error {
+	fmt.Print(prompt)
 	reader := bufio.NewReader(os.Stdin)
 	answer, err := reader.ReadString('\n')
 	if err != nil && len(answer) == 0 {

@@ -34,3 +34,34 @@ async def test_run_shell_policy_blocks_rm(tmp_path: Path) -> None:
 
     assert not result.success
     assert result.risk_level == "high"
+
+
+@pytest.mark.asyncio
+async def test_run_shell_after_approval_executes_medium_command(tmp_path: Path) -> None:
+    result = await ToolRouter().run_after_approval(
+        "run_shell",
+        {"command": "python3 -c 'print(123)'"},
+        str(tmp_path),
+        "default",
+        "zh-CN",
+    )
+
+    assert result.success
+    assert result.risk_level == "medium"
+    assert result.requires_approval
+    assert result.data["approved"] is True
+    assert "123" in result.text
+
+
+@pytest.mark.asyncio
+async def test_run_shell_after_approval_still_blocks_high_risk_command(tmp_path: Path) -> None:
+    result = await ToolRouter().run_after_approval(
+        "run_shell",
+        {"command": "rm -rf build"},
+        str(tmp_path),
+        "default",
+        "zh-CN",
+    )
+
+    assert not result.success
+    assert result.risk_level == "high"

@@ -45,6 +45,33 @@ class ToolRouter:
                 data={"policy": asdict(decision)},
             )
 
+        return await self._run_allowed(name, args, workspace, mode, language, decision, approved=False)
+
+    async def run_after_approval(self, name: str, args: dict[str, Any], workspace: str, mode: str, language: str) -> ToolResult:
+        decision = self.policy.evaluate(name, args, mode=mode)
+        if not self.is_approvable(name, decision):
+            return ToolResult(
+                success=False,
+                error=decision.reason or "工具不支持审批后执行",
+                risk_level=decision.risk_level,
+                requires_approval=decision.requires_approval,
+                data={"policy": asdict(decision)},
+            )
+        return await self._run_allowed(name, args, workspace, mode, language, decision, approved=True)
+
+    def is_approvable(self, name: str, decision: PolicyDecision) -> bool:
+        return name == "run_shell" and decision.requires_approval and decision.risk_level == "medium"
+
+    async def _run_allowed(
+        self,
+        name: str,
+        args: dict[str, Any],
+        workspace: str,
+        mode: str,
+        language: str,
+        decision: PolicyDecision,
+        approved: bool,
+    ) -> ToolResult:
         tool = self.tools.get(name)
         if tool is None:
             return ToolResult(success=False, error=f"未知工具: {name}", risk_level="high")
@@ -70,6 +97,8 @@ class ToolRouter:
         if result.risk_level == "low":
             result.risk_level = decision.risk_level
         result.requires_approval = result.requires_approval or decision.requires_approval
+        if approved:
+            result.data["approved"] = True
         return result
 
     def evaluate(self, name: str, args: dict[str, Any], mode: str) -> PolicyDecision:

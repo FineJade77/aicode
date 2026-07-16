@@ -50,3 +50,11 @@ def test_shell_control_tokens_require_approval() -> None:
 
     assert not decision.allowed
     assert decision.requires_approval
+
+
+def test_medium_shell_command_requires_approval() -> None:
+    decision = PolicyEngine().evaluate("run_shell", {"command": "python3 -c 'print(123)'"}, mode="default")
+
+    assert not decision.allowed
+    assert decision.risk_level == "medium"
+    assert decision.requires_approval
