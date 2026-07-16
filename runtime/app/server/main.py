@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -102,6 +102,7 @@ async def get_session(session_id: str) -> dict[str, Any]:
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
     effective_request = bind_message_request_to_session(session, request)
+    session.events.set_default_after(session.events.last_event_id())
     store.append_message(session, effective_request.model_dump())
     audit.record(
         "message.received",
@@ -119,12 +120,14 @@ async def send_message(session_id: str, request: MessageRequest) -> dict[str, st
 
 
 @app.get("/v1/sessions/{session_id}/events")
-async def stream_events(session_id: str) -> StreamingResponse:
+async def stream_events(session_id: str, request: Request, after: int | None = None) -> StreamingResponse:
     session = require_session(session_id)
+    cursor = event_cursor(after, request.headers.get("last-event-id"))
+    if cursor is None:
+        cursor = session.events.default_after()
 
     async def iterator():
-        while True:
-            event = await session.events.get()
+        async for event in session.events.subscribe(after=cursor):
             yield encode_sse(event)
             if event.get("type") == "final":
                 break
@@ -208,6 +211,17 @@ def same_workspace(left: str, right: str) -> bool:
         return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
     except OSError:
         return False
+
+
+def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
+    if after is not None:
+        return after
+    if not last_event_id:
+        return None
+    try:
+        return int(last_event_id)
+    except ValueError:
+        return None
 
 
 async def run_agent(session: Session, request: MessageRequest) -> None:

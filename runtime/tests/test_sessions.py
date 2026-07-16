@@ -1,7 +1,9 @@
 import sqlite3
 from pathlib import Path
 
-from app.sessions.store import SessionStore
+import pytest
+
+from app.sessions.store import SessionEvents, SessionStore
 
 
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
@@ -93,3 +95,52 @@ def test_session_store_migrates_old_schema(tmp_path: Path) -> None:
 
     assert session is not None
     assert session.updated_at.isoformat() == "2026-07-16T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_session_events_assign_ids_and_support_independent_subscribers() -> None:
+    events = SessionEvents()
+    await events.put({"type": "one"})
+
+    first = events.subscribe(after=0)
+    second = events.subscribe(after=0)
+
+    first_event = await first.__anext__()
+    second_event = await second.__anext__()
+
+    assert first_event == second_event
+    assert first_event["event_id"] == 1
+    assert events.last_event_id() == 1
+
+    await first.aclose()
+    await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_events_default_after_marks_latest_run_start() -> None:
+    events = SessionEvents()
+    await events.put({"type": "final"})
+    events.set_default_after(events.last_event_id())
+    await events.put({"type": "plan.created"})
+
+    replay = events.events_after(events.default_after())
+
+    assert [event["type"] for event in replay] == ["plan.created"]
+
+
+@pytest.mark.asyncio
+async def test_session_store_persists_events(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    await session.events.put({"type": "plan.created"})
+    await session.events.put({"type": "final", "summary": "done"})
+
+    reloaded = SessionStore(db_path)
+    restored = reloaded.get(session.session_id)
+
+    assert restored is not None
+    events = restored.events.events_after(0)
+    assert [event["type"] for event in events] == ["plan.created", "final"]
+    assert [event["event_id"] for event in events] == [1, 2]

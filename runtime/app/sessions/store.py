@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,79 @@ class PendingApproval:
         }
 
 
+class SessionEvents:
+    def __init__(
+        self,
+        events: list[dict[str, Any]] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        self._events = [dict(event) for event in events or []]
+        self._condition = asyncio.Condition()
+        self._on_event = on_event
+        self._read_cursor = 0
+        self._next_sequence = max((int(event.get("event_id") or 0) for event in self._events), default=0) + 1
+        self._default_after: int | None = None
+
+    async def put(self, event: dict[str, Any]) -> None:
+        event = dict(event)
+        if "event_id" not in event:
+            event["event_id"] = self._next_sequence
+            self._next_sequence += 1
+        else:
+            self._next_sequence = max(self._next_sequence, int(event["event_id"]) + 1)
+
+        if self._on_event is not None:
+            try:
+                self._on_event(event)
+            except Exception:
+                pass
+
+        async with self._condition:
+            self._events.append(event)
+            self._condition.notify_all()
+
+    async def get(self) -> dict[str, Any]:
+        async with self._condition:
+            while self._read_cursor >= len(self._events):
+                await self._condition.wait()
+            event = self._events[self._read_cursor]
+            self._read_cursor += 1
+            return dict(event)
+
+    def empty(self) -> bool:
+        return self._read_cursor >= len(self._events)
+
+    def events_after(self, after: int | None = None) -> list[dict[str, Any]]:
+        after = after or 0
+        return [dict(event) for event in self._events if int(event.get("event_id") or 0) > after]
+
+    def last_event_id(self) -> int:
+        return self._next_sequence - 1
+
+    def set_default_after(self, after: int | None) -> None:
+        self._default_after = after
+
+    def default_after(self) -> int | None:
+        return self._default_after
+
+    async def subscribe(self, after: int | None = None) -> AsyncIterator[dict[str, Any]]:
+        cursor = self._cursor_after(after)
+        while True:
+            async with self._condition:
+                while cursor >= len(self._events):
+                    await self._condition.wait()
+                event = self._events[cursor]
+                cursor += 1
+            yield dict(event)
+
+    def _cursor_after(self, after: int | None) -> int:
+        after = after or 0
+        for index, event in enumerate(self._events):
+            if int(event.get("event_id") or 0) > after:
+                return index
+        return len(self._events)
+
+
 @dataclass(slots=True)
 class Session:
     session_id: str
@@ -36,7 +110,7 @@ class Session:
     language: str
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    events: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
+    events: SessionEvents = field(default_factory=SessionEvents)
     messages: list[dict[str, Any]] = field(default_factory=list)
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
 
@@ -93,6 +167,7 @@ class SessionStore:
             workspace=workspace,
             language=language,
         )
+        self._attach_events(session)
         session.updated_at = session.created_at
         self._sessions[session.session_id] = session
         self._last_session_id = session.session_id
@@ -113,6 +188,7 @@ class SessionStore:
                 return None
             session = self._session_from_row(row)
             session.messages = self._load_messages(conn, session.session_id)
+            self._attach_events(session, self._load_events(conn, session.session_id))
             self._sessions[session.session_id] = session
             return session
 
@@ -124,7 +200,10 @@ class SessionStore:
             ).fetchall()
             sessions: list[dict[str, Any]] = []
             for row in rows:
-                session = self._sessions.get(row["session_id"]) or self._session_from_row(row)
+                session = self._sessions.get(row["session_id"])
+                if session is None:
+                    session = self._session_from_row(row)
+                    self._attach_events(session, self._load_events(conn, session.session_id))
                 session.messages = self._load_messages(conn, session.session_id)
                 self._sessions[session.session_id] = session
                 sessions.append(session.to_dict())
@@ -145,6 +224,7 @@ class SessionStore:
                 return None
             session = self._session_from_row(row)
             session.messages = self._load_messages(conn, session.session_id)
+            self._attach_events(session, self._load_events(conn, session.session_id))
             self._sessions[session.session_id] = session
             self._last_session_id = session.session_id
             return session
@@ -194,7 +274,18 @@ class SessionStore:
                 );
 
                 create index if not exists idx_messages_session_id on messages(session_id, id);
-                """
+
+                create table if not exists events (
+                    id integer primary key autoincrement,
+                    session_id text not null,
+                    sequence integer not null,
+                    payload text not null,
+                    created_at text not null,
+                    foreign key (session_id) references sessions(session_id)
+                );
+
+                create unique index if not exists idx_events_session_sequence on events(session_id, sequence);
+            """
             )
             self._ensure_updated_at_column(conn)
         self._schema_ready = True
@@ -223,6 +314,31 @@ class SessionStore:
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
+    def _attach_events(self, session: Session, events: list[dict[str, Any]] | None = None) -> None:
+        session.events = SessionEvents(
+            events=events,
+            on_event=lambda event: self._append_event(session.session_id, event),
+        )
+
+    def _append_event(self, session_id: str, event: dict[str, Any]) -> None:
+        self._ensure_schema()
+        sequence = int(event.get("event_id") or 0)
+        if sequence <= 0:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert or ignore into events (session_id, sequence, payload, created_at)
+                values (?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    sequence,
+                    json.dumps(event, ensure_ascii=False),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
     def _load_messages(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
         rows = conn.execute(
             "select payload from messages where session_id = ? order by id asc",
@@ -235,6 +351,23 @@ class SessionStore:
             except json.JSONDecodeError:
                 continue
         return messages
+
+    def _load_events(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "select sequence, payload from events where session_id = ? order by sequence asc",
+            (session_id,),
+        ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                event = json.loads(str(row["payload"]))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            event.setdefault("event_id", int(row["sequence"]))
+            events.append(event)
+        return events
 
     def _ensure_updated_at_column(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
