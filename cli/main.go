@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -180,7 +181,7 @@ func runConfigReviewCommand(cfg config.Config, args []string) error {
 		return runConfigReviewDocs(cfg)
 	}
 	if len(args) == 1 && args[0] == "prune" {
-		return runConfigReviewPrune()
+		return runConfigReviewPrune(cfg)
 	}
 	if len(args) == 2 && args[0] == "unset" {
 		return runConfigReviewUnset(args[1])
@@ -196,6 +197,11 @@ func runConfigReviewCommand(cfg config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
+	ruleData, err := fetchReviewRulesForWorkspace(cfg, root.Path)
+	if err != nil {
+		return err
+	}
+	knownRules := reviewRuleIDs(ruleData)
 
 	action := args[0]
 	rule := args[1]
@@ -209,7 +215,7 @@ func runConfigReviewCommand(cfg config.Config, args []string) error {
 		return configReviewUsage()
 	}
 
-	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled)
+	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled, knownRules)
 	if err != nil {
 		return err
 	}
@@ -274,13 +280,17 @@ func runConfigReviewDocs(cfg config.Config) error {
 	return nil
 }
 
-func runConfigReviewPrune() error {
+func runConfigReviewPrune(cfg config.Config) error {
 	root, err := workspace.Detect()
 	if err != nil {
 		return err
 	}
+	ruleData, err := fetchReviewRulesForWorkspace(cfg, root.Path)
+	if err != nil {
+		return err
+	}
 
-	path, removed, rules, err := projectconfig.PruneUnknownReviewRules(root.Path)
+	path, removed, rules, err := projectconfig.PruneUnknownReviewRules(root.Path, reviewRuleIDs(ruleData))
 	if err != nil {
 		return err
 	}
@@ -338,6 +348,10 @@ func fetchReviewRules(cfg config.Config) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return fetchReviewRulesForWorkspace(cfg, root.Path)
+}
+
+func fetchReviewRulesForWorkspace(cfg config.Config, workspacePath string) (any, error) {
 	if err := ensureDaemon(cfg); err != nil {
 		return nil, err
 	}
@@ -346,7 +360,36 @@ func fetchReviewRules(cfg config.Config) (any, error) {
 	defer cancel()
 
 	api := client.New(cfg.Runtime.URL)
-	return api.GetJSON(ctx, "/v1/review/rules?workspace="+url.QueryEscape(root.Path))
+	return api.GetJSON(ctx, "/v1/review/rules?workspace="+url.QueryEscape(workspacePath))
+}
+
+func reviewRuleIDs(value any) []string {
+	payload, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawRules, ok := payload["rules"].([]any)
+	if !ok {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(rawRules))
+	for _, item := range rawRules {
+		rule, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, ok := rule["id"].(string)
+		id = strings.TrimSpace(id)
+		if !ok || id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func runSimpleGet(cfg config.Config, path string) error {

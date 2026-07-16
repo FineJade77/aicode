@@ -10,33 +10,12 @@ import (
 	"strings"
 )
 
-var knownReviewRules = map[string]bool{
-	"sensitive_path":                   true,
-	"secret_added":                     true,
-	"deleted_test":                     true,
-	"risky_eval":                       true,
-	"risky_exec":                       true,
-	"risky_os_system":                  true,
-	"risky_shell_true":                 true,
-	"risky_child_exec":                 true,
-	"risky_tls_verify":                 true,
-	"risky_inner_html":                 true,
-	"risky_dangerously_set_inner_html": true,
-	"risky_yaml_load":                  true,
-	"risky_pickle":                     true,
-	"risky_go_insecure_tls":            true,
-	"risky_chmod_777":                  true,
-	"large_diff":                       true,
-	"task_marker_added":                true,
-	"debug_output":                     true,
-}
-
-func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (string, []string, error) {
+func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool, knownRules []string) (string, []string, error) {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return "", nil, errors.New("rule id 不能为空")
 	}
-	if !knownReviewRules[rule] {
+	if !knownRuleSet(knownRules)[rule] {
 		return "", nil, fmt.Errorf("未知 review 规则: %s。运行 aicode review-rules 查看支持列表", rule)
 	}
 
@@ -61,7 +40,7 @@ func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (st
 	return path, rules, writeProjectConfig(path, raw)
 }
 
-func PruneUnknownReviewRules(workspacePath string) (string, []string, []string, error) {
+func PruneUnknownReviewRules(workspacePath string, knownRules []string) (string, []string, []string, error) {
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
 	raw, err := readProjectConfig(path)
 	if err != nil {
@@ -70,10 +49,11 @@ func PruneUnknownReviewRules(workspacePath string) (string, []string, []string, 
 
 	review := objectValue(raw["review"])
 	rules := stringList(review["disabledRules"])
+	known := knownRuleSet(knownRules)
 	kept := make([]string, 0, len(rules))
 	removed := make([]string, 0)
 	for _, rule := range rules {
-		if knownReviewRules[rule] {
+		if known[rule] {
 			kept = append(kept, rule)
 			continue
 		}
@@ -136,15 +116,6 @@ func UnsetReviewNumber(workspacePath string, key string) (string, string, error)
 	return path, field, nil
 }
 
-func KnownReviewRuleIDs() []string {
-	rules := make([]string, 0, len(knownReviewRules))
-	for rule := range knownReviewRules {
-		rules = append(rules, rule)
-	}
-	sort.Strings(rules)
-	return rules
-}
-
 func reviewNumberField(key string) (string, int, int, error) {
 	switch strings.TrimSpace(key) {
 	case "largeDiffThreshold":
@@ -154,6 +125,17 @@ func reviewNumberField(key string) (string, int, int, error) {
 	default:
 		return "", 0, 0, fmt.Errorf("未知 review 配置项: %s。支持 largeDiffThreshold 或 maxFindings", key)
 	}
+}
+
+func knownRuleSet(knownRules []string) map[string]bool {
+	known := make(map[string]bool, len(knownRules))
+	for _, rule := range knownRules {
+		rule = strings.TrimSpace(rule)
+		if rule != "" {
+			known[rule] = true
+		}
+	}
+	return known
 }
 
 func readProjectConfig(path string) (map[string]any, error) {

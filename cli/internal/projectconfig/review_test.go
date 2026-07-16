@@ -8,10 +8,12 @@ import (
 	"testing"
 )
 
+var testKnownReviewRules = []string{"debug_output", "large_diff", "risky_inner_html", "secret_added"}
+
 func TestSetReviewRuleDisabledCreatesProjectConfig(t *testing.T) {
 	workspace := t.TempDir()
 
-	path, rules, err := SetReviewRuleDisabled(workspace, "large_diff", true)
+	path, rules, err := SetReviewRuleDisabled(workspace, "large_diff", true, testKnownReviewRules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +51,7 @@ func TestSetReviewRuleDisabledPreservesExistingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, rules, err := SetReviewRuleDisabled(workspace, "large_diff", true)
+	_, rules, err := SetReviewRuleDisabled(workspace, "large_diff", true, testKnownReviewRules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func TestSetReviewRuleEnabledRemovesRule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, rules, err := SetReviewRuleDisabled(workspace, "large_diff", false)
+	_, rules, err := SetReviewRuleDisabled(workspace, "large_diff", false, testKnownReviewRules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +99,7 @@ func TestSetReviewRuleEnabledRemovesRule(t *testing.T) {
 func TestSetReviewRuleDisabledRejectsUnknownRule(t *testing.T) {
 	workspace := t.TempDir()
 
-	path, rules, err := SetReviewRuleDisabled(workspace, "not_a_rule", true)
+	path, rules, err := SetReviewRuleDisabled(workspace, "not_a_rule", true, testKnownReviewRules)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -115,17 +117,15 @@ func TestSetReviewRuleDisabledRejectsUnknownRule(t *testing.T) {
 	}
 }
 
-func TestKnownReviewRuleIDs(t *testing.T) {
-	rules := KnownReviewRuleIDs()
+func TestSetReviewRuleDisabledUsesProvidedKnownRules(t *testing.T) {
+	workspace := t.TempDir()
 
-	if len(rules) != 18 {
+	_, rules, err := SetReviewRuleDisabled(workspace, "runtime_only_rule", true, []string{"runtime_only_rule"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0] != "runtime_only_rule" {
 		t.Fatalf("rules = %#v", rules)
-	}
-	if rules[0] != "debug_output" {
-		t.Fatalf("rules not sorted: %#v", rules)
-	}
-	if !contains(rules, "large_diff") || !contains(rules, "secret_added") || !contains(rules, "risky_inner_html") {
-		t.Fatalf("missing expected rules: %#v", rules)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestPruneUnknownReviewRules(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, removed, rules, err := PruneUnknownReviewRules(workspace)
+	path, removed, rules, err := PruneUnknownReviewRules(workspace, testKnownReviewRules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestPruneUnknownReviewRules(t *testing.T) {
 func TestPruneUnknownReviewRulesNoopWhenConfigMissing(t *testing.T) {
 	workspace := t.TempDir()
 
-	path, removed, rules, err := PruneUnknownReviewRules(workspace)
+	path, removed, rules, err := PruneUnknownReviewRules(workspace, testKnownReviewRules)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,13 +270,4 @@ func TestUnsetReviewNumber(t *testing.T) {
 	if review["disabledRules"].([]any)[0] != "large_diff" {
 		t.Fatalf("disabledRules not preserved: %#v", review)
 	}
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
