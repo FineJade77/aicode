@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/aicode-dev/aicode/cli/internal/client"
@@ -94,6 +95,8 @@ func printHelp() {
   aicode models
   aicode config init
   aicode config show
+  aicode config list
+  aicode config get models.reviewer
   aicode config set ui.language en-US
   aicode config set models.reviewer gpt-5
   aicode config review disable large_diff
@@ -142,7 +145,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|set|review>")
+		return fmt.Errorf("用法: aicode config <init|show|list|get|set|review>")
 	}
 
 	switch args[0] {
@@ -160,6 +163,16 @@ func runConfigCommand(cfg config.Config, args []string) error {
 		}
 		fmt.Printf("# %s\n%s", path, content)
 		return nil
+	case "list":
+		if len(args) != 1 {
+			return fmt.Errorf("用法: aicode config list")
+		}
+		return runConfigList(cfg)
+	case "get":
+		if len(args) != 2 {
+			return fmt.Errorf("用法: aicode config get <key>")
+		}
+		return runConfigGet(cfg, args[1])
 	case "set":
 		if len(args) != 3 {
 			return fmt.Errorf("用法: aicode config set <key> <value>")
@@ -175,6 +188,25 @@ func runConfigCommand(cfg config.Config, args []string) error {
 	default:
 		return fmt.Errorf("未知 config 命令: %s", args[0])
 	}
+}
+
+func runConfigList(cfg config.Config) error {
+	fmt.Println("Effective Config")
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "KEY\tVALUE")
+	for _, entry := range cfg.Entries() {
+		fmt.Fprintf(writer, "%s\t%s\n", entry.Key, entry.Value)
+	}
+	return writer.Flush()
+}
+
+func runConfigGet(cfg config.Config, key string) error {
+	value, ok := cfg.GetValue(key)
+	if !ok {
+		return fmt.Errorf("未知配置项: %s。运行 aicode config list 查看支持列表", key)
+	}
+	fmt.Printf("%s = %s\n", key, value)
+	return nil
 }
 
 func runConfigReviewCommand(cfg config.Config, args []string) error {

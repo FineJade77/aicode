@@ -123,6 +123,8 @@ go run ./cli resume <session_id>
 
 ```bash
 go run ./cli config init
+go run ./cli config list
+go run ./cli config get models.reviewer
 go run ./cli config set models.reviewer gpt-5
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
@@ -215,6 +217,14 @@ CLI 的用量事件会显示本次模型调用目的，例如 `purpose=reviewer`
 
 ```bash
 go run ./cli models
+```
+
+查看 CLI 本地生效配置：
+
+```bash
+go run ./cli config list
+go run ./cli config get provider.openai_compatible.base_url
+go run ./cli config get pricing.openai_compatible.gpt-5.input_per_1m
 ```
 
 通过用户级配置设置路由：

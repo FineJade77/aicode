@@ -150,6 +150,27 @@ func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	}
 }
 
+func TestEntriesAndGetValueIncludePricing(t *testing.T) {
+	cfg := Default()
+	cfg.Pricing["openai_compatible/gpt-5"] = ModelPriceConfig{InputPer1M: 1.25, OutputPer1M: 10}
+	cfg.Pricing["stub/stub"] = ModelPriceConfig{InputPer1M: 1, OutputPer1M: 1}
+
+	value, ok := cfg.GetValue("pricing.openai_compatible.gpt-5.input_per_1m")
+	if !ok || value != "1.25" {
+		t.Fatalf("value = %q ok = %v", value, ok)
+	}
+	value, ok = cfg.GetValue("pricing.stub.stub.output_per_1m")
+	if !ok || value != "1" {
+		t.Fatalf("value = %q ok = %v", value, ok)
+	}
+	if _, ok := cfg.GetValue("pricing.openai_compatible.gpt-5.unknown"); ok {
+		t.Fatal("expected unknown key")
+	}
+
+	entries := cfg.Entries()
+	assertEntryOrder(t, entries, "pricing.openai_compatible.gpt-5.input_per_1m", "pricing.stub.stub.input_per_1m")
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
@@ -166,6 +187,23 @@ func clearConfigEnv(t *testing.T) {
 		"AICODE_MODEL_PRICES_JSON",
 	} {
 		t.Setenv(key, "")
+	}
+}
+
+func assertEntryOrder(t *testing.T, entries []Entry, before string, after string) {
+	t.Helper()
+	beforeIndex := -1
+	afterIndex := -1
+	for i, entry := range entries {
+		if entry.Key == before {
+			beforeIndex = i
+		}
+		if entry.Key == after {
+			afterIndex = i
+		}
+	}
+	if beforeIndex < 0 || afterIndex < 0 || beforeIndex >= afterIndex {
+		t.Fatalf("unexpected order for %q and %q in %#v", before, after, entries)
 	}
 }
 

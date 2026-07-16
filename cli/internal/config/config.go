@@ -48,6 +48,11 @@ type ModelPriceConfig struct {
 	OutputPer1M float64 `json:"output_per_1m"`
 }
 
+type Entry struct {
+	Key   string
+	Value string
+}
+
 func Default() Config {
 	return Config{
 		UI: UIConfig{
@@ -212,6 +217,41 @@ func (cfg Config) RuntimeEnv() []string {
 	return append(env, runtime...)
 }
 
+func (cfg Config) Entries() []Entry {
+	entries := []Entry{
+		{"ui.language", cfg.UI.Language},
+		{"ui.style", cfg.UI.Style},
+		{"runtime.url", cfg.Runtime.URL},
+		{"runtime.port", strconv.Itoa(cfg.Runtime.Port)},
+		{"models.default", cfg.Models.Default},
+		{"models.planner", cfg.Models.Planner},
+		{"models.coder", cfg.Models.Coder},
+		{"models.reviewer", cfg.Models.Reviewer},
+		{"models.summarizer", cfg.Models.Summarizer},
+		{"provider.openai_compatible.base_url", cfg.OpenAICompatible.BaseURL},
+		{"provider.openai_compatible.api_key_env", cfg.OpenAICompatible.APIKeyEnv},
+		{"provider.openai_compatible.timeout_seconds", formatFloat(cfg.OpenAICompatible.TimeoutSeconds)},
+	}
+	for _, key := range sortedPricingKeys(cfg.Pricing) {
+		price := cfg.Pricing[key]
+		configKey := pricingConfigKeyPrefix(key)
+		entries = append(entries,
+			Entry{configKey + ".input_per_1m", formatFloat(price.InputPer1M)},
+			Entry{configKey + ".output_per_1m", formatFloat(price.OutputPer1M)},
+		)
+	}
+	return entries
+}
+
+func (cfg Config) GetValue(key string) (string, bool) {
+	for _, entry := range cfg.Entries() {
+		if entry.Key == key {
+			return entry.Value, true
+		}
+	}
+	return "", false
+}
+
 func Init() (string, error) {
 	path, err := Path()
 	if err != nil {
@@ -347,7 +387,31 @@ func parsePricingJSON(raw string) map[string]ModelPriceConfig {
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return map[string]ModelPriceConfig{}
 	}
+	if parsed == nil {
+		return map[string]ModelPriceConfig{}
+	}
 	return parsed
+}
+
+func sortedPricingKeys(pricing map[string]ModelPriceConfig) []string {
+	keys := make([]string, 0, len(pricing))
+	for key := range pricing {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func pricingConfigKeyPrefix(priceKey string) string {
+	provider, model, ok := strings.Cut(priceKey, "/")
+	if !ok {
+		return "pricing." + priceKey
+	}
+	return "pricing." + provider + "." + model
+}
+
+func formatFloat(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func upsertConfigLine(lines []string, targetSection string, targetKey string, formatted string) []string {
