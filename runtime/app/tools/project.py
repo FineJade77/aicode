@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
 
 from app.policy.engine import PolicyEngine
 from app.project.detect import detect_project
 from app.tools.base import ToolContext, ToolResult
+from app.tools.command import run_command
 
 
 class DetectProjectTool:
@@ -43,25 +43,14 @@ class RunTestsTool:
 
         timeout = int(args.get("timeout", 120))
         parts = shlex.split(command)
-        proc = subprocess.run(
-            parts,
-            cwd=context.workspace,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        stdout = proc.stdout.strip()
-        stderr = proc.stderr.strip()
-        output = stdout
-        if stderr:
-            output = output + ("\n" if output else "") + stderr
+        proc = await run_command(parts, cwd=context.workspace, timeout=timeout)
+        output = proc.combined_output
 
         return ToolResult(
             success=proc.returncode == 0,
             text=output or "测试命令无输出",
             error="" if proc.returncode == 0 else output or f"测试命令退出码: {proc.returncode}",
-            data={"project": info.to_dict(), "command": parts, "returncode": proc.returncode},
+            data={"project": info.to_dict(), "command": parts, "returncode": proc.returncode, "timed_out": proc.timed_out},
             risk_level=decision.risk_level,
             requires_approval=decision.requires_approval,
         )

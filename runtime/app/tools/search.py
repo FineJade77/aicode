@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 
 from pathlib import Path
 
 from app.tools.base import IGNORED_DIRS, ToolContext, ToolResult, display_path, is_protected_path, resolve_workspace_path
+from app.tools.command import run_command
 
 
 class SearchTextTool:
@@ -20,11 +20,11 @@ class SearchTextTool:
         limit = int(args.get("limit", 80))
 
         if shutil.which("rg"):
-            return run_rg(context, root, query, limit)
+            return await run_rg(context, root, query, limit)
         return run_python_search(context, root, query, limit)
 
 
-def run_rg(context: ToolContext, root, query: str, limit: int) -> ToolResult:
+async def run_rg(context: ToolContext, root, query: str, limit: int) -> ToolResult:
     command = [
         "rg",
         "--line-number",
@@ -41,7 +41,7 @@ def run_rg(context: ToolContext, root, query: str, limit: int) -> ToolResult:
     for pattern in context.protected_paths:
         command.extend(["--glob", "!" + pattern])
     command.extend([query, str(root)])
-    proc = subprocess.run(command, text=True, capture_output=True, timeout=15, check=False)
+    proc = await run_command(command, cwd=context.workspace, timeout=15)
     if proc.returncode not in {0, 1}:
         return ToolResult(success=False, error=proc.stderr.strip() or "rg 执行失败")
 
