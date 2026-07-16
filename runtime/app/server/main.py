@@ -320,7 +320,10 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
     if detect_append_request(message) is not None:
         return []
 
-    if request.mode in {"review", "diff"} or "diff" in lowered or "变更" in message or "审查" in message:
+    if request.mode == "review" or "审查" in message:
+        return [("review_diff", {})]
+
+    if request.mode == "diff" or "diff" in lowered or "变更" in message:
         return [("git_diff", {})]
 
     if request.mode == "test" or "运行测试" in message or "run tests" in lowered:

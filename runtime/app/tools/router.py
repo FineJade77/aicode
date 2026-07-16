@@ -10,6 +10,7 @@ from app.tools.base import ToolContext, ToolError, ToolResult
 from app.tools.file import ListFilesTool, ReadFileTool
 from app.tools.git import GitDiffTool, GitShowTool, GitStatusTool
 from app.tools.project import DetectProjectTool, RunTestsTool
+from app.tools.review import ReviewDiffTool
 from app.tools.search import SearchTextTool
 from app.tools.shell import RunShellTool
 
@@ -27,6 +28,7 @@ class ToolRouter:
                 GitStatusTool(),
                 GitDiffTool(),
                 GitShowTool(),
+                ReviewDiffTool(),
                 RunShellTool(),
                 RunTestsTool(),
             ]

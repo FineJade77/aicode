@@ -24,6 +24,7 @@ class PolicyEngine:
         "git_status",
         "git_diff",
         "git_show",
+        "review_diff",
     }
 
     blocked_shell_commands = {
