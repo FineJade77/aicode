@@ -48,6 +48,8 @@ func run(args []string) error {
 		return runSimpleGet(cfg, "/v1/sessions")
 	case "usage":
 		return runUsage(cfg, args[1:])
+	case "models":
+		return runSimpleGet(cfg, "/v1/models/routes")
 	case "review-rules":
 		return runReviewRules(cfg)
 	case "resume":
@@ -89,9 +91,11 @@ func printHelp() {
   aicode usage
   aicode usage --today
   aicode usage --session <session_id>
+  aicode models
   aicode config init
   aicode config show
   aicode config set ui.language en-US
+  aicode config set models.reviewer gpt-5
   aicode config review disable large_diff
   aicode config review enable large_diff
   aicode config review set largeDiffThreshold 1200

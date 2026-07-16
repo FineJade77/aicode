@@ -65,6 +65,7 @@ go run ./cli daemon status
 go run ./cli chat "你好"
 go run ./cli review
 go run ./cli review-rules
+go run ./cli models
 go run ./cli test
 go run ./cli usage
 go run ./cli usage --today
@@ -122,6 +123,7 @@ go run ./cli resume <session_id>
 
 ```bash
 go run ./cli config init
+go run ./cli config set models.reviewer gpt-5
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
 go run ./cli config review set largeDiffThreshold 1200
@@ -209,11 +211,30 @@ Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key �
 `aicode review` 会走 `reviewer` 模型路由；没有 API key 时仍会输出确定性规则审查结果。
 CLI 的用量事件会显示本次模型调用目的，例如 `purpose=reviewer` 或 `purpose=summarizer`。
 
+查看当前 Runtime 生效的模型路由：
+
+```bash
+go run ./cli models
+```
+
+通过用户级配置设置路由：
+
+```bash
+go run ./cli config set models.planner gpt-5-high
+go run ./cli config set models.reviewer gpt-5
+go run ./cli config set models.summarizer gpt-5-mini
+go run ./cli config set provider.openai_compatible.base_url https://api.openai.com/v1
+go run ./cli config set provider.openai_compatible.api_key_env OPENAI_API_KEY
+go run ./cli config set provider.openai_compatible.timeout_seconds 60
+```
+
 常用环境变量：
 
 ```bash
 export OPENAI_API_KEY="..."
 export AICODE_OPENAI_BASE_URL="https://api.openai.com/v1"
+export AICODE_OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+export AICODE_OPENAI_TIMEOUT_SECONDS="60"
 export AICODE_MODEL_PLANNER="gpt-5-high"
 export AICODE_MODEL_CODER="gpt-5"
 export AICODE_MODEL_REVIEWER="gpt-5"

@@ -53,3 +53,28 @@ class ModelRouter:
         if purpose == "summarizer":
             return self.settings.models.summarizer
         return self.settings.models.default
+
+    def route_status(self) -> dict:
+        primary_name = getattr(self.primary, "provider_name", self.primary.__class__.__name__)
+        fallback_name = getattr(self.fallback, "provider_name", self.fallback.__class__.__name__)
+        is_configured = getattr(self.primary, "is_configured", None)
+        primary_configured = bool(is_configured()) if callable(is_configured) else True
+        return {
+            "provider": {
+                "primary": primary_name,
+                "primary_configured": primary_configured,
+                "fallback": fallback_name,
+            },
+            "routes": {
+                "default": self.settings.models.default,
+                "planner": self.settings.models.planner,
+                "coder": self.settings.models.coder,
+                "reviewer": self.settings.models.reviewer,
+                "summarizer": self.settings.models.summarizer,
+            },
+            "openai_compatible": {
+                "base_url": self.settings.openai_compatible.base_url,
+                "api_key_env": self.settings.openai_compatible.api_key_env,
+                "timeout_seconds": self.settings.openai_compatible.timeout_seconds,
+            },
+        }

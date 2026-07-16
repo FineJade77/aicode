@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.config.settings import ModelSettings, OpenAICompatibleSettings, Settings
@@ -52,3 +54,27 @@ def test_model_router_selects_model_by_purpose() -> None:
 
     assert router.model_for_purpose("planner") == "plan-model"
     assert router.model_for_purpose("coder") == "code-model"
+
+
+def test_model_router_route_status_does_not_expose_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AICODE_TEST_SECRET_KEY", "secret-value")
+    settings = Settings(
+        models=ModelSettings(reviewer="review-model", summarizer="summary-model"),
+        openai_compatible=OpenAICompatibleSettings(
+            base_url="https://api.example.com/v1",
+            api_key_env="AICODE_TEST_SECRET_KEY",
+            timeout_seconds=12.5,
+        ),
+    )
+
+    status = ModelRouter.from_settings(settings).route_status()
+
+    assert status["provider"]["primary"] == "openai_compatible"
+    assert status["provider"]["primary_configured"] is True
+    assert status["provider"]["fallback"] == "stub"
+    assert status["routes"]["reviewer"] == "review-model"
+    assert status["routes"]["summarizer"] == "summary-model"
+    assert status["openai_compatible"]["base_url"] == "https://api.example.com/v1"
+    assert status["openai_compatible"]["api_key_env"] == "AICODE_TEST_SECRET_KEY"
+    assert status["openai_compatible"]["timeout_seconds"] == 12.5
+    assert "secret-value" not in json.dumps(status)

@@ -73,6 +73,7 @@ func Start(cfg config.Config) error {
 		strconv.Itoa(cfg.Runtime.Port),
 	)
 	cmd.Dir = runtimeDir
+	cmd.Env = cfg.RuntimeEnv()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -167,6 +167,11 @@ async def usage_for_session(session_id: str) -> dict[str, Any]:
     return summarize_usage(audit.path, session_id=session_id)
 
 
+@app.get("/v1/models/routes")
+async def model_routes() -> dict[str, Any]:
+    return model_router.route_status()
+
+
 @app.get("/v1/review/rules")
 async def review_rules(workspace: str | None = None) -> dict[str, Any]:
     project_config = load_project_config(Path(workspace)) if workspace else None

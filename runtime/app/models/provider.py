@@ -32,6 +32,8 @@ class ModelProvider:
 
 
 class StubProvider(ModelProvider):
+    provider_name = "stub"
+
     async def complete(self, request: ModelRequest) -> ModelResponse:
         return ModelResponse(
             text="Runtime 骨架已连接。模型 provider 后续接入 OpenAI-compatible API。",

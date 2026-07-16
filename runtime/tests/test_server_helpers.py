@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 from app.project.detect import detect_test_command
-from app.server.main import MessageRequest, build_model_messages, detect_append_request, final_summary_text, model_purpose_for_mode, review_rules
+from app.server.main import (
+    MessageRequest,
+    build_model_messages,
+    detect_append_request,
+    final_summary_text,
+    model_purpose_for_mode,
+    model_routes,
+    review_rules,
+)
 
 
 def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
@@ -115,3 +123,14 @@ async def test_review_rules_endpoint_uses_workspace_config(tmp_path: Path) -> No
     assert data["effective_config"]["max_findings"] == 25
     assert rules["large_diff"]["enabled"] is False
     assert data["config_warnings"][0]["rule"] == "old_rule"
+
+
+@pytest.mark.asyncio
+async def test_model_routes_endpoint_returns_route_status() -> None:
+    data = await model_routes()
+
+    assert data["provider"]["primary"] == "openai_compatible"
+    assert data["provider"]["fallback"] == "stub"
+    assert "reviewer" in data["routes"]
+    assert "summarizer" in data["routes"]
+    assert "api_key_env" in data["openai_compatible"]
