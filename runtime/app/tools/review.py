@@ -477,6 +477,8 @@ def review_rules_data(
     max_findings: int = DEFAULT_MAX_FINDINGS,
 ) -> dict:
     disabled = {str(rule) for rule in disabled_rules or []}
+    known_rules = {rule.rule_id for rule in REVIEW_RULES}
+    unknown_disabled_rules = sorted(disabled - known_rules)
     return {
         "effective_config": {
             "disabled_rules": sorted(disabled),
@@ -487,6 +489,14 @@ def review_rules_data(
             "large_diff_threshold": DEFAULT_LARGE_DIFF_THRESHOLD,
             "max_findings": DEFAULT_MAX_FINDINGS,
         },
+        "config_warnings": [
+            {
+                "type": "unknown_disabled_rule",
+                "rule": rule,
+                "message": f"disabledRules 包含未知规则 {rule}，该配置不会生效。",
+            }
+            for rule in unknown_disabled_rules
+        ],
         "rules": [
             {
                 "id": rule.rule_id,

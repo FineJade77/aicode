@@ -104,7 +104,7 @@ async def test_review_rules_endpoint_uses_workspace_config(tmp_path: Path) -> No
     config_dir = tmp_path / ".aicode"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(
-        '{"review":{"disabledRules":["large_diff"],"largeDiffThreshold":1200,"maxFindings":25}}',
+        '{"review":{"disabledRules":["large_diff","old_rule"],"largeDiffThreshold":1200,"maxFindings":25}}',
         encoding="utf-8",
     )
 
@@ -114,3 +114,4 @@ async def test_review_rules_endpoint_uses_workspace_config(tmp_path: Path) -> No
     assert data["effective_config"]["large_diff_threshold"] == 1200
     assert data["effective_config"]["max_findings"] == 25
     assert rules["large_diff"]["enabled"] is False
+    assert data["config_warnings"][0]["rule"] == "old_rule"

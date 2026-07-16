@@ -110,7 +110,21 @@ def test_review_rules_data_marks_disabled_rules() -> None:
     data = review_rules_data(disabled_rules=["large_diff"], large_diff_threshold=1200, max_findings=25)
     rules = {rule["id"]: rule for rule in data["rules"]}
 
+    assert data["config_warnings"] == []
     assert data["effective_config"]["large_diff_threshold"] == 1200
     assert data["effective_config"]["max_findings"] == 25
     assert rules["large_diff"]["enabled"] is False
     assert rules["secret_added"]["enabled"] is True
+
+
+def test_review_rules_data_reports_unknown_disabled_rules() -> None:
+    data = review_rules_data(disabled_rules=["large_diff", "old_rule"])
+
+    assert data["effective_config"]["disabled_rules"] == ["large_diff", "old_rule"]
+    assert data["config_warnings"] == [
+        {
+            "type": "unknown_disabled_rule",
+            "rule": "old_rule",
+            "message": "disabledRules 包含未知规则 old_rule，该配置不会生效。",
+        }
+    ]

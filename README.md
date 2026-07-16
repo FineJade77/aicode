@@ -165,6 +165,8 @@ go run ./cli config review enable large_diff
 go run ./cli review-rules
 ```
 
+`review-rules` 也会在 `config_warnings` 中标出历史配置里已经不存在的 rule id。
+
 示例：
 
 ```json
