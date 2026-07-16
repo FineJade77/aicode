@@ -13,6 +13,7 @@ class UsageRecord:
     timestamp: datetime
     session_id: str
     workspace: str
+    provider: str
     model: str
     purpose: str
     input_tokens: int
@@ -28,12 +29,14 @@ def summarize_usage(audit_path: Path, *, session_id: str | None = None, day: dat
         records = [record for record in records if record.timestamp.date() == day]
 
     by_model: dict[str, dict[str, Any]] = defaultdict(empty_summary)
+    by_provider: dict[str, dict[str, Any]] = defaultdict(empty_summary)
     by_purpose: dict[str, dict[str, Any]] = defaultdict(empty_summary)
 
     summary = empty_summary()
     for record in records:
         add_record(summary, record)
         add_record(by_model[record.model], record)
+        add_record(by_provider[record.provider], record)
         add_record(by_purpose[record.purpose], record)
 
     return {
@@ -43,6 +46,7 @@ def summarize_usage(audit_path: Path, *, session_id: str | None = None, day: dat
         "total_output_tokens": summary["output_tokens"],
         "total_tokens": summary["total_tokens"],
         "estimated_cost": round(summary["estimated_cost"], 8),
+        "by_provider": normalize_groups(by_provider),
         "by_model": normalize_groups(by_model),
         "by_purpose": normalize_groups(by_purpose),
         "filters": {
@@ -78,6 +82,7 @@ def read_usage_records(audit_path: Path):
                 timestamp=timestamp,
                 session_id=str(event.get("session_id") or ""),
                 workspace=str(event.get("workspace") or ""),
+                provider=str(data.get("provider") or "unknown"),
                 model=str(data.get("model") or "unknown"),
                 purpose=str(data.get("purpose") or "unknown"),
                 input_tokens=as_int(data.get("input_tokens")),

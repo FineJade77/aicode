@@ -13,7 +13,8 @@ from pydantic import BaseModel
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import settings
 from app.events.sse import encode_sse
-from app.models.provider import ModelRequest, StubProvider
+from app.models.provider import ModelRequest
+from app.models.router import ModelRouter
 from app.sessions.store import Session, store
 from app.tools.base import ToolError
 from app.tools.patch import apply_content_patch, create_append_patch
@@ -21,7 +22,7 @@ from app.tools.router import ToolRouter
 from app.usage.store import summarize_usage
 
 app = FastAPI(title=settings.app_name, version=settings.version)
-provider = StubProvider()
+model_router = ModelRouter.from_settings(settings)
 tools = ToolRouter()
 audit = AuditLogger.from_env()
 
@@ -193,10 +194,9 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
         await propose_append_patch(session, request, append_request[0], append_request[1])
     await session.events.put({"type": "plan.updated", "item_id": "context", "status": "completed"})
 
-    response = await provider.complete(
+    response = await model_router.complete(
         ModelRequest(
             purpose="summarizer",
-            model="stub",
             messages=[{"role": "user", "content": request.message}],
         )
     )
@@ -206,6 +206,7 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
         workspace=session.workspace,
         data={
             "model": response.model,
+            "provider": response.provider,
             "purpose": "summarizer",
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
@@ -216,6 +217,7 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
         {
             "type": "usage.recorded",
             "model": response.model,
+            "provider": response.provider,
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "estimated_cost": response.estimated_cost,

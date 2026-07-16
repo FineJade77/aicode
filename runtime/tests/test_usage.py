@@ -34,6 +34,7 @@ def test_summarize_usage_totals_and_groups(tmp_path: Path) -> None:
     assert summary["total_output_tokens"] == 15
     assert summary["total_tokens"] == 45
     assert summary["estimated_cost"] == 0.03
+    assert summary["by_provider"]["stub"]["record_count"] == 2
     assert summary["by_model"]["stub"]["total_tokens"] == 15
     assert summary["by_purpose"]["coder"]["record_count"] == 1
 
@@ -63,6 +64,7 @@ def write_event(
     session_id: str,
     timestamp: str = "2026-07-16T08:00:00+00:00",
     model: str = "stub",
+    provider: str = "stub",
     purpose: str = "summarizer",
     input_tokens: int = 0,
     output_tokens: int = 0,
@@ -74,6 +76,7 @@ def write_event(
         "session_id": session_id,
         "workspace": "/repo",
         "data": {
+            "provider": provider,
             "model": model,
             "purpose": purpose,
             "input_tokens": input_tokens,

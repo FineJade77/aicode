@@ -106,6 +106,27 @@ go run ./cli config set ui.language en-US
 AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 ```
 
+## 模型配置
+
+Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发。
+
+常用环境变量：
+
+```bash
+export OPENAI_API_KEY="..."
+export AICODE_OPENAI_BASE_URL="https://api.openai.com/v1"
+export AICODE_MODEL_PLANNER="gpt-5-high"
+export AICODE_MODEL_CODER="gpt-5"
+export AICODE_MODEL_REVIEWER="gpt-5"
+export AICODE_MODEL_SUMMARIZER="gpt-5-mini"
+```
+
+也可以直接设置：
+
+```bash
+export AICODE_OPENAI_API_KEY="..."
+```
+
 ## 验证
 
 ```bash
