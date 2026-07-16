@@ -2,11 +2,13 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.project.detect import detect_test_command
 from app.server.main import (
     MessageRequest,
     audit,
+    bind_message_request_to_session,
     build_model_messages,
     detect_append_request,
     detect_create_request,
@@ -49,6 +51,31 @@ def test_detect_shell_request() -> None:
     assert detect_shell_request("shell python3 -m pytest") == "python3 -m pytest"
     assert detect_shell_request("运行命令 python3 -m pytest") == "python3 -m pytest"
     assert detect_shell_request("执行命令 go test ./...") == "go test ./..."
+
+
+def test_message_request_is_bound_to_session_context(tmp_path: Path) -> None:
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="en")
+
+    effective = bind_message_request_to_session(session, request)
+
+    assert effective.workspace == session.workspace
+    assert effective.language == "zh-CN"
+    assert request.language == "en"
+
+
+def test_message_request_rejects_workspace_mismatch(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    repo.mkdir()
+    other.mkdir()
+    session = Session(session_id="sess_test", workspace=str(repo), language="zh-CN")
+    request = MessageRequest(message="hello", mode="default", workspace=str(other), language="zh-CN")
+
+    with pytest.raises(HTTPException) as exc_info:
+        bind_message_request_to_session(session, request)
+
+    assert exc_info.value.status_code == 400
 
 
 def test_review_mode_uses_reviewer_model_purpose() -> None:

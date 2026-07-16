@@ -58,6 +58,44 @@ async def run_agent(session: Session, request: AgentRequest, runtime: AgentRunti
     )
 
 
+async def run_agent_safely(session: Session, request: AgentRequest, runtime: AgentRuntime) -> None:
+    try:
+        await run_agent(session, request, runtime)
+    except Exception as exc:
+        await emit_agent_failure(session, request, exc, runtime)
+
+
+async def emit_agent_failure(session: Session, request: AgentRequest, exc: Exception, runtime: AgentRuntime) -> None:
+    runtime.audit.record(
+        "session.error",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={
+            "mode": request.mode,
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+        },
+    )
+    message = localized(
+        request.language,
+        f"Agent 执行失败: {exc}",
+        f"Agent execution failed: {exc}",
+    )
+    await session.events.put(
+        {
+            "type": "error",
+            "error": message,
+            "error_type": exc.__class__.__name__,
+        }
+    )
+    await session.events.put(
+        {
+            "type": "final",
+            "summary": message,
+        }
+    )
+
+
 async def run_context_loop(session: Session, request: AgentRequest, runtime: AgentRuntime, max_steps: int = 8) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     context_tools = choose_context_tools(request)

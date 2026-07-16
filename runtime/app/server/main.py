@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.commands import detect_append_request, detect_create_request, detect_replace_request, detect_shell_request
-from app.agent.loop import run_agent as agent_run_agent
+from app.agent.loop import run_agent_safely as agent_run_agent_safely
 from app.agent.patch_flow import run_post_patch_verification as agent_run_post_patch_verification
 from app.agent.summary import build_model_messages, final_summary_text, model_purpose_for_mode
 from app.agent.tool_flow import execute_tool as agent_execute_tool
@@ -101,19 +101,20 @@ async def get_session(session_id: str) -> dict[str, Any]:
 @app.post("/v1/sessions/{session_id}/messages")
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
-    store.append_message(session, request.model_dump())
+    effective_request = bind_message_request_to_session(session, request)
+    store.append_message(session, effective_request.model_dump())
     audit.record(
         "message.received",
         session_id=session.session_id,
         workspace=session.workspace,
         data={
-            "mode": request.mode,
-            "language": request.language,
-            "message_hash": stable_hash(request.message),
-            "message_preview": request.message[:200],
+            "mode": effective_request.mode,
+            "language": effective_request.language,
+            "message_hash": stable_hash(effective_request.message),
+            "message_preview": effective_request.message[:200],
         },
     )
-    asyncio.create_task(run_agent(session, request))
+    asyncio.create_task(run_agent(session, effective_request))
     return {"status": "accepted"}
 
 
@@ -194,8 +195,23 @@ def require_session(session_id: str) -> Session:
     return session
 
 
+def bind_message_request_to_session(session: Session, request: MessageRequest) -> MessageRequest:
+    if not same_workspace(session.workspace, request.workspace):
+        raise HTTPException(status_code=400, detail="message workspace does not match session workspace")
+    return request.model_copy(update={"workspace": session.workspace, "language": session.language})
+
+
+def same_workspace(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except OSError:
+        return False
+
+
 async def run_agent(session: Session, request: MessageRequest) -> None:
-    await agent_run_agent(session, request, agent_runtime)
+    await agent_run_agent_safely(session, request, agent_runtime)
 
 
 async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]):
