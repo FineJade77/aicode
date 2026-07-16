@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.policy.engine import PolicyDecision, PolicyEngine
+from app.project.config import load_project_config
 from app.tools.base import ToolContext, ToolError, ToolResult
 from app.tools.file import ListFilesTool, ReadFileTool
 from app.tools.git import GitDiffTool, GitShowTool, GitStatusTool
@@ -43,8 +44,17 @@ class ToolRouter:
         if tool is None:
             return ToolResult(success=False, error=f"未知工具: {name}", risk_level="high")
 
+        project_config = load_project_config(Path(workspace))
         try:
-            result = await tool.run(args, ToolContext(workspace=Path(workspace), mode=mode, language=language))
+            result = await tool.run(
+                args,
+                ToolContext(
+                    workspace=Path(workspace),
+                    mode=mode,
+                    language=language,
+                    protected_paths=project_config.protected_paths,
+                ),
+            )
         except ToolError as exc:
             return ToolResult(success=False, error=str(exc), risk_level=decision.risk_level, requires_approval=decision.requires_approval)
         except Exception as exc:

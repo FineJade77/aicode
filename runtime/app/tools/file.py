@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.tools.base import IGNORED_DIRS, ToolContext, ToolError, ToolResult, display_path, reject_protected_path, resolve_workspace_path
+from app.tools.base import IGNORED_DIRS, ToolContext, ToolError, ToolResult, display_path, is_protected_path, reject_protected_path, resolve_workspace_path
 
 
 class ListFilesTool:
@@ -19,7 +19,7 @@ class ListFilesTool:
             return ToolResult(success=False, error=f"不是目录: {root}")
 
         files: list[str] = []
-        walk(root, context.workspace, files, max_depth=max_depth, limit=limit)
+        walk(root, context.workspace, files, max_depth=max_depth, limit=limit, protected_paths=context.protected_paths)
         text = "\n".join(f"- {item}" for item in files) if files else "未发现文件"
         return ToolResult(success=True, text=text, data={"files": files})
 
@@ -29,7 +29,7 @@ class ReadFileTool:
 
     async def run(self, args: dict, context: ToolContext) -> ToolResult:
         path = resolve_workspace_path(context.workspace, str(args.get("path", "")))
-        reject_protected_path(path)
+        reject_protected_path(context.workspace, path, context.protected_paths)
 
         if not path.exists():
             return ToolResult(success=False, error=f"文件不存在: {display_path(context.workspace, path)}")
@@ -54,7 +54,7 @@ class ReadFileTool:
         )
 
 
-def walk(root: Path, workspace: Path, out: list[str], max_depth: int, limit: int, depth: int = 0) -> None:
+def walk(root: Path, workspace: Path, out: list[str], max_depth: int, limit: int, protected_paths: list[str], depth: int = 0) -> None:
     if len(out) >= limit:
         return
     if depth > max_depth:
@@ -65,7 +65,10 @@ def walk(root: Path, workspace: Path, out: list[str], max_depth: int, limit: int
             return
         if child.name in IGNORED_DIRS:
             continue
+        rel = display_path(workspace, child)
+        if is_protected_path(rel, protected_paths):
+            continue
         suffix = "/" if child.is_dir() else ""
-        out.append(display_path(workspace, child) + suffix)
+        out.append(rel + suffix)
         if child.is_dir() and depth < max_depth:
-            walk(child, workspace, out, max_depth=max_depth, limit=limit, depth=depth + 1)
+            walk(child, workspace, out, max_depth=max_depth, limit=limit, protected_paths=protected_paths, depth=depth + 1)

@@ -15,6 +15,7 @@ from app.config.settings import settings
 from app.events.sse import encode_sse
 from app.models.provider import ModelRequest
 from app.models.router import ModelRouter
+from app.project.config import load_project_config
 from app.sessions.store import Session, store
 from app.tools.base import ToolError
 from app.tools.patch import apply_content_patch, create_append_patch
@@ -352,7 +353,8 @@ async def propose_append_patch(session: Session, request: MessageRequest, path: 
         return
 
     try:
-        proposal = create_append_patch(Path(request.workspace), path, text)
+        project_config = load_project_config(Path(request.workspace))
+        proposal = create_append_patch(Path(request.workspace), path, text, protected_paths=project_config.protected_paths)
     except (ToolError, UnicodeDecodeError) as exc:
         audit.record(
             "tool.error",
@@ -445,7 +447,8 @@ async def propose_append_patch(session: Session, request: MessageRequest, path: 
         return
 
     try:
-        apply_content_patch(Path(request.workspace), proposal.path, proposal.new_content)
+        project_config = load_project_config(Path(request.workspace))
+        apply_content_patch(Path(request.workspace), proposal.path, proposal.new_content, protected_paths=project_config.protected_paths)
     except ToolError as exc:
         await session.events.put(
             {
@@ -507,6 +510,10 @@ def extract_target(message: str) -> str | None:
 
 
 def detect_test_command(workspace: Path) -> str | None:
+    configured = load_project_config(workspace).commands.get("test")
+    if configured and configured != "auto":
+        return configured
+
     if (workspace / "go.mod").exists():
         return "go test ./..."
 

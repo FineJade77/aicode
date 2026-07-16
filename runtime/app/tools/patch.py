@@ -4,6 +4,7 @@ import difflib
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.project.config import default_protected_paths
 from app.tools.base import ToolError, display_path, reject_protected_path, resolve_workspace_path
 
 
@@ -14,9 +15,15 @@ class PatchProposal:
     new_content: str
 
 
-def create_append_patch(workspace: Path, raw_path: str, append_text: str) -> PatchProposal:
+def create_append_patch(
+    workspace: Path,
+    raw_path: str,
+    append_text: str,
+    protected_paths: list[str] | None = None,
+) -> PatchProposal:
+    protected_paths = protected_paths or default_protected_paths()
     path = resolve_workspace_path(workspace, raw_path)
-    reject_protected_path(path)
+    reject_protected_path(workspace, path, protected_paths)
 
     if not path.exists():
         raise ToolError(f"文件不存在: {display_path(workspace, path)}")
@@ -39,9 +46,15 @@ def create_append_patch(workspace: Path, raw_path: str, append_text: str) -> Pat
     return PatchProposal(path=rel, diff=diff, new_content=new_content)
 
 
-def apply_content_patch(workspace: Path, raw_path: str, new_content: str) -> None:
+def apply_content_patch(
+    workspace: Path,
+    raw_path: str,
+    new_content: str,
+    protected_paths: list[str] | None = None,
+) -> None:
+    protected_paths = protected_paths or default_protected_paths()
     path = resolve_workspace_path(workspace, raw_path)
-    reject_protected_path(path)
+    reject_protected_path(workspace, path, protected_paths)
     if not path.exists() or not path.is_file():
         raise ToolError(f"文件不存在: {display_path(workspace, path)}")
     path.write_text(new_content, encoding="utf-8")

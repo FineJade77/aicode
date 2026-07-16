@@ -106,6 +106,32 @@ go run ./cli config set ui.language en-US
 AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 ```
 
+项目级配置路径：
+
+```text
+.aicode/config.json
+```
+
+当前已生效的字段：
+
+- `protectedPaths`: 文件读取、搜索、列表和 patch 写入都会跳过或拦截这些路径。
+- `commands.test`: 设置为具体命令时，`aicode test` 会优先使用该命令；设置为 `auto` 时自动探测。
+
+示例：
+
+```json
+{
+  "commands": {
+    "test": "python3 -m pytest tests/unit"
+  },
+  "protectedPaths": [
+    ".env",
+    "secrets/**",
+    "infra/prod/**"
+  ]
+}
+```
+
 ## 模型配置
 
 Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发。

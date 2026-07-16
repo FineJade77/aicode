@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Protocol
+
+from app.project.config import default_protected_paths
 
 
 @dataclass(slots=True)
@@ -10,6 +13,7 @@ class ToolContext:
     workspace: Path
     mode: str = "default"
     language: str = "zh-CN"
+    protected_paths: list[str] = field(default_factory=default_protected_paths)
 
 
 @dataclass(slots=True)
@@ -33,7 +37,6 @@ class ToolError(Exception):
     pass
 
 
-PROTECTED_NAMES = {".env", ".env.local", ".env.production"}
 IGNORED_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "dist", "build"}
 
 
@@ -50,9 +53,21 @@ def resolve_workspace_path(workspace: Path, raw_path: str | None = None) -> Path
     return candidate
 
 
-def reject_protected_path(path: Path) -> None:
-    if path.name in PROTECTED_NAMES:
-        raise ToolError(f"受保护文件不可读取: {path.name}")
+def reject_protected_path(workspace: Path, path: Path, protected_paths: list[str]) -> None:
+    rel = display_path(workspace, path)
+    if is_protected_path(rel, protected_paths):
+        raise ToolError(f"受保护路径不可访问: {rel}")
+
+
+def is_protected_path(rel_path: str, protected_paths: list[str]) -> bool:
+    normalized = rel_path.replace("\\", "/").lstrip("./")
+    for pattern in protected_paths:
+        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
+        if fnmatch(normalized, normalized_pattern):
+            return True
+        if "/" not in normalized_pattern and Path(normalized).name == normalized_pattern:
+            return True
+    return False
 
 
 def display_path(workspace: Path, path: Path) -> str:

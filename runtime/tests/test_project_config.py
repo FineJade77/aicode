@@ -1,0 +1,96 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from app.project.config import load_project_config, parse_project_config
+from app.server.main import detect_test_command
+from app.tools.patch import create_append_patch
+from app.tools.router import ToolRouter
+
+
+def test_parse_project_config() -> None:
+    config = parse_project_config(
+        {
+            "projectName": "demo",
+            "defaultLanguage": "en-US",
+            "commands": {"test": "python3 -m pytest tests/unit"},
+            "protectedPaths": [".env", "secret/**"],
+            "workspaces": [{"name": "api", "path": "../api", "mode": "read_only"}],
+        }
+    )
+
+    assert config.project_name == "demo"
+    assert config.default_language == "en-US"
+    assert config.commands["test"] == "python3 -m pytest tests/unit"
+    assert config.protected_paths == [".env", "secret/**"]
+    assert config.workspaces[0].name == "api"
+
+
+def test_load_project_config_defaults_when_missing(tmp_path: Path) -> None:
+    config = load_project_config(tmp_path)
+
+    assert ".env" in config.protected_paths
+    assert config.commands == {}
+
+
+def test_detect_test_command_uses_project_config_override(tmp_path: Path) -> None:
+    write_project_config(tmp_path, {"commands": {"test": "python3 -m pytest tests/unit"}})
+    (tmp_path / "go.work").write_text("go 1.22\n\nuse ./cli\n", encoding="utf-8")
+
+    assert detect_test_command(tmp_path) == "python3 -m pytest tests/unit"
+
+
+@pytest.mark.asyncio
+async def test_read_file_blocks_project_protected_path(tmp_path: Path) -> None:
+    write_project_config(tmp_path, {"protectedPaths": ["secret/**"]})
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "token.txt").write_text("token", encoding="utf-8")
+
+    result = await ToolRouter().run("read_file", {"path": "secret/token.txt"}, str(tmp_path), "default", "zh-CN")
+
+    assert not result.success
+    assert "受保护路径" in result.error
+
+
+@pytest.mark.asyncio
+async def test_list_files_hides_project_protected_path(tmp_path: Path) -> None:
+    write_project_config(tmp_path, {"protectedPaths": ["secret/**"]})
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "token.txt").write_text("token", encoding="utf-8")
+    (tmp_path / "public.txt").write_text("ok", encoding="utf-8")
+
+    result = await ToolRouter().run("list_files", {"max_depth": 2}, str(tmp_path), "default", "zh-CN")
+
+    assert result.success
+    assert "public.txt" in result.text
+    assert "secret/token.txt" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_search_text_skips_project_protected_path(tmp_path: Path) -> None:
+    write_project_config(tmp_path, {"protectedPaths": ["secret/**"]})
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "token.txt").write_text("needle", encoding="utf-8")
+
+    result = await ToolRouter().run("search_text", {"query": "needle"}, str(tmp_path), "default", "zh-CN")
+
+    assert result.success
+    assert "token.txt" not in result.text
+
+
+def test_append_patch_blocks_project_protected_path(tmp_path: Path) -> None:
+    protected = tmp_path / "secret.txt"
+    protected.write_text("secret\n", encoding="utf-8")
+
+    with pytest.raises(Exception, match="受保护路径"):
+        create_append_patch(tmp_path, "secret.txt", "new", protected_paths=["secret.txt"])
+
+
+def write_project_config(tmp_path: Path, data: dict) -> None:
+    config_dir = tmp_path / ".aicode"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(json.dumps(data), encoding="utf-8")
