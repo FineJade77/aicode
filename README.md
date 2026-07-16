@@ -124,7 +124,10 @@ go run ./cli resume <session_id>
 go run ./cli config init
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
+go run ./cli config review set largeDiffThreshold 1200
+go run ./cli config review unset largeDiffThreshold
 go run ./cli config review list
+go run ./cli config review docs
 go run ./cli config review prune
 ```
 
@@ -159,7 +162,11 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 ```bash
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
+go run ./cli config review set largeDiffThreshold 1200
+go run ./cli config review set maxFindings 25
+go run ./cli config review unset largeDiffThreshold
 go run ./cli config review list
+go run ./cli config review docs
 go run ./cli config review prune
 ```
 
@@ -169,7 +176,7 @@ go run ./cli config review prune
 go run ./cli review-rules
 ```
 
-`config review list` 会用表格显示规则启用状态；`review-rules` 会输出完整 JSON。
+`config review list` 会用表格显示规则启用状态；`config review docs` 会输出 Markdown 规则说明；`review-rules` 会输出完整 JSON。
 `review-rules` 也会在 `config_warnings` 中标出历史配置里已经不存在的 rule id。
 可以运行 `config review prune` 自动移除这些未知 rule id。
 

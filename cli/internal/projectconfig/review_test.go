@@ -194,6 +194,84 @@ func TestPruneUnknownReviewRulesNoopWhenConfigMissing(t *testing.T) {
 	}
 }
 
+func TestSetReviewNumber(t *testing.T) {
+	workspace := t.TempDir()
+
+	path, field, value, err := SetReviewNumber(workspace, "largeDiffThreshold", 1200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if field != "largeDiffThreshold" || value != 1200 {
+		t.Fatalf("field = %q value = %d", field, value)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(content, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["review"].(map[string]any)["largeDiffThreshold"].(float64) != 1200 {
+		t.Fatalf("config = %#v", raw)
+	}
+}
+
+func TestSetReviewNumberRejectsInvalidValue(t *testing.T) {
+	workspace := t.TempDir()
+
+	path, _, _, err := SetReviewNumber(workspace, "largeDiffThreshold", 10)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if path != "" {
+		t.Fatalf("path = %q", path)
+	}
+	if !strings.Contains(err.Error(), "必须在 50 到 50000 之间") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUnsetReviewNumber(t *testing.T) {
+	workspace := t.TempDir()
+	configDir := filepath.Join(workspace, ".aicode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"review":{"disabledRules":["large_diff"],"largeDiffThreshold":1200,"maxFindings":25}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, field, err := UnsetReviewNumber(workspace, "largeDiffThreshold")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != configPath || field != "largeDiffThreshold" {
+		t.Fatalf("path = %q field = %q", path, field)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(content, &raw); err != nil {
+		t.Fatal(err)
+	}
+	review := raw["review"].(map[string]any)
+	if _, ok := review["largeDiffThreshold"]; ok {
+		t.Fatalf("largeDiffThreshold still present: %#v", review)
+	}
+	if review["maxFindings"].(float64) != 25 {
+		t.Fatalf("maxFindings not preserved: %#v", review)
+	}
+	if review["disabledRules"].([]any)[0] != "large_diff" {
+		t.Fatalf("disabledRules not preserved: %#v", review)
+	}
+}
+
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

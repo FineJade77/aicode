@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,7 +93,10 @@ func printHelp() {
   aicode config set ui.language en-US
   aicode config review disable large_diff
   aicode config review enable large_diff
+  aicode config review set largeDiffThreshold 1200
+  aicode config review unset largeDiffThreshold
   aicode config review list
+  aicode config review docs
   aicode config review prune
   aicode daemon start
   aicode daemon stop
@@ -172,11 +176,20 @@ func runConfigReviewCommand(cfg config.Config, args []string) error {
 	if len(args) == 1 && args[0] == "list" {
 		return runConfigReviewList(cfg)
 	}
+	if len(args) == 1 && args[0] == "docs" {
+		return runConfigReviewDocs(cfg)
+	}
 	if len(args) == 1 && args[0] == "prune" {
 		return runConfigReviewPrune()
 	}
+	if len(args) == 2 && args[0] == "unset" {
+		return runConfigReviewUnset(args[1])
+	}
+	if len(args) == 3 && args[0] == "set" {
+		return runConfigReviewSet(args[1], args[2])
+	}
 	if len(args) != 2 {
-		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review list|prune")
+		return configReviewUsage()
 	}
 
 	root, err := workspace.Detect()
@@ -193,7 +206,7 @@ func runConfigReviewCommand(cfg config.Config, args []string) error {
 	case "enable":
 		disabled = false
 	default:
-		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review list|prune")
+		return configReviewUsage()
 	}
 
 	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled)
@@ -213,12 +226,51 @@ func runConfigReviewCommand(cfg config.Config, args []string) error {
 	return nil
 }
 
+func runConfigReviewSet(key string, rawValue string) error {
+	value, err := strconv.Atoi(rawValue)
+	if err != nil {
+		return fmt.Errorf("%s 必须是整数: %w", key, err)
+	}
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, field, saved, err := projectconfig.SetReviewNumber(root.Path, key, value)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已设置 review.%s = %d (%s)\n", field, saved, path)
+	return nil
+}
+
+func runConfigReviewUnset(key string) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, field, err := projectconfig.UnsetReviewNumber(root.Path, key)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已重置 review.%s 为默认值 (%s)\n", field, path)
+	return nil
+}
+
 func runConfigReviewList(cfg config.Config) error {
 	value, err := fetchReviewRules(cfg)
 	if err != nil {
 		return err
 	}
 	renderer.PrintReviewRulesTable(value)
+	return nil
+}
+
+func runConfigReviewDocs(cfg config.Config) error {
+	value, err := fetchReviewRules(cfg)
+	if err != nil {
+		return err
+	}
+	renderer.PrintReviewRulesMarkdown(value)
 	return nil
 }
 
@@ -243,6 +295,10 @@ func runConfigReviewPrune() error {
 	}
 	fmt.Printf("当前 disabledRules: %s\n", strings.Join(rules, ", "))
 	return nil
+}
+
+func configReviewUsage() error {
+	return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> | set <largeDiffThreshold|maxFindings> <value> | unset <largeDiffThreshold|maxFindings> | list | docs | prune")
 }
 
 func runResume(cfg config.Config, args []string) error {

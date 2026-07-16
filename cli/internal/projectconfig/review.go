@@ -52,15 +52,7 @@ func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (st
 	review["disabledRules"] = rules
 	raw["review"] = review
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return path, nil, err
-	}
-	encoded, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return path, nil, err
-	}
-	encoded = append(encoded, '\n')
-	return path, rules, os.WriteFile(path, encoded, 0o644)
+	return path, rules, writeProjectConfig(path, raw)
 }
 
 func PruneUnknownReviewRules(workspacePath string) (string, []string, []string, error) {
@@ -90,15 +82,52 @@ func PruneUnknownReviewRules(workspacePath string) (string, []string, []string, 
 
 	review["disabledRules"] = kept
 	raw["review"] = review
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return path, nil, nil, err
-	}
-	encoded, err := json.MarshalIndent(raw, "", "  ")
+	return path, removed, kept, writeProjectConfig(path, raw)
+}
+
+func SetReviewNumber(workspacePath string, key string, value int) (string, string, int, error) {
+	field, minValue, maxValue, err := reviewNumberField(key)
 	if err != nil {
-		return path, nil, nil, err
+		return "", "", 0, err
 	}
-	encoded = append(encoded, '\n')
-	return path, removed, kept, os.WriteFile(path, encoded, 0o644)
+	if value < minValue || value > maxValue {
+		return "", "", 0, fmt.Errorf("%s 必须在 %d 到 %d 之间", key, minValue, maxValue)
+	}
+
+	path := filepath.Join(workspacePath, ".aicode", "config.json")
+	raw, err := readProjectConfig(path)
+	if err != nil {
+		return path, field, value, err
+	}
+
+	review := objectValue(raw["review"])
+	review[field] = value
+	raw["review"] = review
+	if err := writeProjectConfig(path, raw); err != nil {
+		return path, field, value, err
+	}
+	return path, field, value, nil
+}
+
+func UnsetReviewNumber(workspacePath string, key string) (string, string, error) {
+	field, _, _, err := reviewNumberField(key)
+	if err != nil {
+		return "", "", err
+	}
+
+	path := filepath.Join(workspacePath, ".aicode", "config.json")
+	raw, err := readProjectConfig(path)
+	if err != nil {
+		return path, field, err
+	}
+
+	review := objectValue(raw["review"])
+	delete(review, field)
+	raw["review"] = review
+	if err := writeProjectConfig(path, raw); err != nil {
+		return path, field, err
+	}
+	return path, field, nil
 }
 
 func KnownReviewRuleIDs() []string {
@@ -108,6 +137,17 @@ func KnownReviewRuleIDs() []string {
 	}
 	sort.Strings(rules)
 	return rules
+}
+
+func reviewNumberField(key string) (string, int, int, error) {
+	switch strings.TrimSpace(key) {
+	case "largeDiffThreshold":
+		return "largeDiffThreshold", 50, 50_000, nil
+	case "maxFindings":
+		return "maxFindings", 1, 500, nil
+	default:
+		return "", 0, 0, fmt.Errorf("未知 review 配置项: %s。支持 largeDiffThreshold 或 maxFindings", key)
+	}
 }
 
 func readProjectConfig(path string) (map[string]any, error) {
@@ -127,6 +167,18 @@ func readProjectConfig(path string) (map[string]any, error) {
 		return nil, fmt.Errorf("项目配置不是合法 JSON: %w", err)
 	}
 	return raw, nil
+}
+
+func writeProjectConfig(path string, raw map[string]any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	return os.WriteFile(path, encoded, 0o644)
 }
 
 func objectValue(value any) map[string]any {

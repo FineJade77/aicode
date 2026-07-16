@@ -21,6 +21,10 @@ func PrintReviewRulesTable(value any) {
 	fmt.Print(ReviewRulesTable(value))
 }
 
+func PrintReviewRulesMarkdown(value any) {
+	fmt.Print(ReviewRulesMarkdown(value))
+}
+
 func ReviewRulesTable(value any) string {
 	root, ok := value.(map[string]any)
 	if !ok {
@@ -65,6 +69,57 @@ func ReviewRulesTable(value any) string {
 	}
 	writer.Flush()
 	out.WriteString(table.String())
+	return out.String()
+}
+
+func ReviewRulesMarkdown(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("# aicode Review Rules\n\n")
+	out.WriteString("## Effective Config\n\n")
+	if config, ok := root["effective_config"].(map[string]any); ok {
+		out.WriteString(fmt.Sprintf("- disabledRules: `%s`\n", joinStringList(config["disabled_rules"])))
+		out.WriteString(fmt.Sprintf("- largeDiffThreshold: `%v`\n", config["large_diff_threshold"]))
+		out.WriteString(fmt.Sprintf("- maxFindings: `%v`\n", config["max_findings"]))
+	}
+
+	if warnings, ok := root["config_warnings"].([]any); ok && len(warnings) > 0 {
+		out.WriteString("\n## Config Warnings\n\n")
+		for _, item := range warnings {
+			warning, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			out.WriteString(fmt.Sprintf("- `%s`: %s\n", stringValue(warning["rule"]), stringValue(warning["message"])))
+		}
+	}
+
+	out.WriteString("\n## Rules\n\n")
+	out.WriteString("| State | Severity | Rule | Description |\n")
+	out.WriteString("| --- | --- | --- | --- |\n")
+	if rules, ok := root["rules"].([]any); ok {
+		for _, item := range rules {
+			rule, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			state := "disabled"
+			if boolValue(rule["enabled"]) {
+				state = "enabled"
+			}
+			out.WriteString(fmt.Sprintf(
+				"| %s | %s | `%s` | %s |\n",
+				state,
+				escapeMarkdownTable(stringValue(rule["severity"])),
+				escapeMarkdownTable(stringValue(rule["id"])),
+				escapeMarkdownTable(stringValue(rule["description"])),
+			))
+		}
+	}
 	return out.String()
 }
 
@@ -140,6 +195,10 @@ func boolValue(value any) bool {
 		return v
 	}
 	return false
+}
+
+func escapeMarkdownTable(value string) string {
+	return strings.ReplaceAll(value, "|", "\\|")
 }
 
 func stringField(m map[string]any, key string) string {
