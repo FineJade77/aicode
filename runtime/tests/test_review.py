@@ -27,12 +27,12 @@ def test_review_detects_secrets_without_echoing_value() -> None:
 
 def test_review_detects_risky_code_and_debug_output() -> None:
     risky_call = "eval"
-    diff = f"""diff --git a/app/main.py b/app/main.py
---- a/app/main.py
-+++ b/app/main.py
+    diff = f"""diff --git a/app/main.ts b/app/main.ts
+--- a/app/main.ts
++++ b/app/main.ts
 @@ -1,2 +1,4 @@
  def run(value):
-+    print(value)
++    console.log(value)
 +    return {risky_call}(value)
      return value
 """

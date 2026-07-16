@@ -46,10 +46,52 @@ def test_review_final_falls_back_to_deterministic_text_for_stub() -> None:
     request = MessageRequest(message="请审查当前代码变更。", mode="review", workspace="/repo", language="zh-CN")
     summary = final_summary_text(
         request,
-        [{"tool": "review_diff", "success": True, "text": "Review 结果: 未发现确定性风险。"}],
+        [
+            {"tool": "detect_project", "success": True, "data": {"test_command": "go test ./..."}},
+            {
+                "tool": "review_diff",
+                "success": True,
+                "text": "Review 结果: 未发现确定性风险。",
+                "data": {"summary": {"finding_count": 0, "by_severity": {"high": 0, "medium": 0, "low": 0}}, "findings": []},
+            },
+        ],
         "Runtime 骨架已连接。",
         "stub",
     )
 
     assert "模型 provider 未配置" in summary
-    assert "Review 结果: 未发现确定性风险。" in summary
+    assert "结论\n未发现确定性风险。" in summary
+    assert "风险\n- 无必须处理问题。" in summary
+    assert "建议验证\n- 运行 `go test ./...`。" in summary
+
+
+def test_review_final_groups_findings_for_stub() -> None:
+    request = MessageRequest(message="请审查当前代码变更。", mode="review", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [
+            {"tool": "detect_project", "success": True, "data": {"test_command": "python3 -m pytest"}},
+            {
+                "tool": "review_diff",
+                "success": True,
+                "data": {
+                    "summary": {"finding_count": 1, "by_severity": {"high": 1, "medium": 0, "low": 0}},
+                    "findings": [
+                        {
+                            "severity": "high",
+                            "path": ".env",
+                            "line": 2,
+                            "title": "新增行包含疑似密钥",
+                            "message": "新增内容匹配凭证或私钥特征。",
+                        }
+                    ],
+                },
+            },
+        ],
+        "Runtime 骨架已连接。",
+        "stub",
+    )
+
+    assert "发现 1 个确定性问题：high=1 medium=0 low=0。" in summary
+    assert "- [high] .env:2 新增行包含疑似密钥：新增内容匹配凭证或私钥特征。" in summary
+    assert "- 运行 `python3 -m pytest`。" in summary

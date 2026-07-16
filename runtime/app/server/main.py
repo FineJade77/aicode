@@ -381,13 +381,12 @@ def final_summary_text(request: MessageRequest, observations: list[dict[str, Any
         return cleaned
 
     if request.mode == "review":
-        review_text = review_observation_text(observations)
         prefix = localized(
             request.language,
             "模型 provider 未配置，以下为确定性 Review 结果：",
             "Model provider is not configured. Deterministic review result:",
         )
-        return prefix + "\n\n" + review_text
+        return prefix + "\n\n" + format_review_fallback_summary(request.language, observations)
 
     if provider == "stub" or not cleaned:
         return localized(
@@ -405,6 +404,124 @@ def review_observation_text(observations: list[dict[str, Any]]) -> str:
             if text:
                 return text
     return "Review 未产生可用结果。"
+
+
+def format_review_fallback_summary(language: str, observations: list[dict[str, Any]]) -> str:
+    review = find_observation(observations, "review_diff")
+    if not review or not review.get("success"):
+        return localized(language, "结论\nReview 未产生可用结果。", "Conclusion\nReview did not produce a usable result.")
+
+    data = review.get("data") if isinstance(review.get("data"), dict) else {}
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    findings = data.get("findings") if isinstance(data.get("findings"), list) else []
+    finding_count = int_value(summary.get("finding_count"), len(findings))
+    severity = summary.get("by_severity") if isinstance(summary.get("by_severity"), dict) else {}
+    high = int_value(severity.get("high"), 0)
+    medium = int_value(severity.get("medium"), 0)
+    low = int_value(severity.get("low"), 0)
+
+    if language.startswith("en"):
+        return format_review_fallback_summary_en(observations, findings, finding_count, high, medium, low)
+    return format_review_fallback_summary_zh(observations, findings, finding_count, high, medium, low)
+
+
+def format_review_fallback_summary_zh(
+    observations: list[dict[str, Any]], findings: list[Any], finding_count: int, high: int, medium: int, low: int
+) -> str:
+    lines: list[str] = ["结论"]
+    if finding_count == 0:
+        lines.append("未发现确定性风险。")
+    else:
+        lines.append(f"发现 {finding_count} 个确定性问题：high={high} medium={medium} low={low}。")
+
+    lines.extend(["", "风险"])
+    if finding_count == 0:
+        lines.append("- 无必须处理问题。")
+    else:
+        for finding in normalized_findings(findings)[:8]:
+            lines.append(f"- [{finding['severity']}] {finding['location']} {finding['title']}：{finding['message']}")
+        if finding_count > 8:
+            lines.append(f"- 其余 {finding_count - 8} 个问题已省略，请查看上方 review_diff 输出。")
+
+    lines.extend(["", "建议验证"])
+    test_command = detected_test_command(observations)
+    if test_command:
+        lines.append(f"- 运行 `{test_command}`。")
+    else:
+        lines.append("- 运行项目测试。")
+    lines.append("- 修复后重新运行 `aicode review`。")
+    return "\n".join(lines)
+
+
+def format_review_fallback_summary_en(
+    observations: list[dict[str, Any]], findings: list[Any], finding_count: int, high: int, medium: int, low: int
+) -> str:
+    lines: list[str] = ["Conclusion"]
+    if finding_count == 0:
+        lines.append("No deterministic risks found.")
+    else:
+        lines.append(f"Found {finding_count} deterministic issues: high={high} medium={medium} low={low}.")
+
+    lines.extend(["", "Risks"])
+    if finding_count == 0:
+        lines.append("- No must-fix issues.")
+    else:
+        for finding in normalized_findings(findings)[:8]:
+            lines.append(f"- [{finding['severity']}] {finding['location']} {finding['title']}: {finding['message']}")
+        if finding_count > 8:
+            lines.append(f"- {finding_count - 8} more findings omitted; see the review_diff output above.")
+
+    lines.extend(["", "Suggested Verification"])
+    test_command = detected_test_command(observations)
+    if test_command:
+        lines.append(f"- Run `{test_command}`.")
+    else:
+        lines.append("- Run the project test suite.")
+    lines.append("- Run `aicode review` again after fixes.")
+    return "\n".join(lines)
+
+
+def normalized_findings(findings: list[Any]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for raw in findings:
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path") or ".")
+        line = raw.get("line")
+        location = path + (f":{line}" if line is not None else "")
+        normalized.append(
+            {
+                "severity": str(raw.get("severity") or "low"),
+                "location": location,
+                "title": str(raw.get("title") or "问题"),
+                "message": str(raw.get("message") or ""),
+            }
+        )
+    return normalized
+
+
+def detected_test_command(observations: list[dict[str, Any]]) -> str | None:
+    project = find_observation(observations, "detect_project")
+    if not project or not isinstance(project.get("data"), dict):
+        return None
+    command = project["data"].get("test_command")
+    if not command:
+        return None
+    return str(command)
+
+
+def find_observation(observations: list[dict[str, Any]], tool: str) -> dict[str, Any] | None:
+    for observation in observations:
+        if observation.get("tool") == tool:
+            return observation
+    return None
+
+
+def int_value(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, Any]]]:

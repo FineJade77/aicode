@@ -164,6 +164,7 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发。
 
 `aicode review` 会走 `reviewer` 模型路由；没有 API key 时仍会输出确定性规则审查结果。
+CLI 的用量事件会显示本次模型调用目的，例如 `purpose=reviewer` 或 `purpose=summarizer`。
 
 常用环境变量：
 

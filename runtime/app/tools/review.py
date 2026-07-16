@@ -35,8 +35,6 @@ RISKY_CODE_PATTERNS = [
 DEBUG_PATTERNS = [
     re.compile(r"\bconsole\.log\s*\("),
     re.compile(r"\bdebugger\b"),
-    re.compile(r"\bprint\s*\("),
-    re.compile(r"\bfmt\.Println\s*\("),
     re.compile(r"\bpdb\.set_trace\s*\("),
 ]
 

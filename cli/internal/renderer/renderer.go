@@ -52,7 +52,7 @@ func RenderEvent(event map[string]any) {
 	case "patch.rejected":
 		fmt.Printf("Patch 已拒绝: %s\n", stringValue(event["reason"]))
 	case "usage.recorded":
-		fmt.Printf("用量: model=%s input=%v output=%v\n", stringValue(event["model"]), event["input_tokens"], event["output_tokens"])
+		fmt.Println(usageLine(event))
 	case "final":
 		fmt.Printf("\n%s\n", stringValue(event["summary"]))
 	default:
@@ -60,6 +60,14 @@ func RenderEvent(event map[string]any) {
 			PrintJSON(event)
 		}
 	}
+}
+
+func usageLine(event map[string]any) string {
+	purpose := stringValue(event["purpose"])
+	if purpose == "" {
+		purpose = "unknown"
+	}
+	return fmt.Sprintf("用量: purpose=%s model=%s input=%v output=%v", purpose, stringValue(event["model"]), event["input_tokens"], event["output_tokens"])
 }
 
 func stringField(m map[string]any, key string) string {
