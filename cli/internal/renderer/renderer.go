@@ -49,6 +49,8 @@ func RenderEvent(event map[string]any) {
 		fmt.Println(stringValue(event["diff"]))
 	case "patch.applied":
 		fmt.Println("Patch 已应用。")
+	case "patch.rejected":
+		fmt.Printf("Patch 已拒绝: %s\n", stringValue(event["reason"]))
 	case "usage.recorded":
 		fmt.Printf("用量: model=%s input=%v output=%v\n", stringValue(event["model"]), event["input_tokens"], event["output_tokens"])
 	case "final":

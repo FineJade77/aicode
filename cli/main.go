@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -216,7 +217,37 @@ func runAgent(cfg config.Config, mode string, prompt string) error {
 	}
 
 	fmt.Printf("会话: %s\n", session.SessionID)
-	return api.StreamEvents(ctx, session.SessionID, renderer.RenderEvent)
+	return api.StreamEvents(ctx, session.SessionID, func(event map[string]any) error {
+		renderer.RenderEvent(event)
+		return handleInteractiveEvent(api, session.SessionID, event)
+	})
+}
+
+func handleInteractiveEvent(api client.Client, sessionID string, event map[string]any) error {
+	eventType, _ := event["type"].(string)
+	if eventType != "patch.preview" {
+		return nil
+	}
+
+	approvalID, _ := event["approval_id"].(string)
+	if approvalID == "" {
+		return fmt.Errorf("patch.preview 缺少 approval_id")
+	}
+
+	fmt.Print("应用这个 patch 吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
+	reader := bufio.NewReader(os.Stdin)
+	answer, err := reader.ReadString('\n')
+	if err != nil && len(answer) == 0 {
+		answer = "n"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	if strings.EqualFold(strings.TrimSpace(answer), "y") {
+		return api.Approve(ctx, sessionID, approvalID)
+	}
+	return api.Reject(ctx, sessionID, approvalID)
 }
 
 func ensureDaemon(cfg config.Config) error {

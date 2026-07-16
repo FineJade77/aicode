@@ -33,6 +33,10 @@ type SendMessageRequest struct {
 	Language  string `json:"language"`
 }
 
+type ApprovalRequest struct {
+	ApprovalID string `json:"approval_id"`
+}
+
 func New(baseURL string) Client {
 	return Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -78,7 +82,15 @@ func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendM
 	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/messages", payload, nil)
 }
 
-func (c Client) StreamEvents(ctx context.Context, sessionID string, handle func(map[string]any)) error {
+func (c Client) Approve(ctx context.Context, sessionID string, approvalID string) error {
+	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApprovalRequest{ApprovalID: approvalID}, nil)
+}
+
+func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {
+	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+}
+
+func (c Client) StreamEvents(ctx context.Context, sessionID string, handle func(map[string]any) error) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/sessions/"+sessionID+"/events", nil)
 	if err != nil {
 		return err
@@ -108,7 +120,9 @@ func (c Client) StreamEvents(ctx context.Context, sessionID string, handle func(
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
 			return err
 		}
-		handle(event)
+		if err := handle(event); err != nil {
+			return err
+		}
 		if event["type"] == "final" {
 			return nil
 		}

@@ -24,6 +24,7 @@
 - `git_show`
 - `run_shell`
 - `aicode test` 自动执行低风险测试命令
+- append 写入场景的 inline diff 确认链路
 
 ## 本地运行
 
@@ -56,7 +57,10 @@ python3 -m uvicorn app.server.main:app --host 127.0.0.1 --port 8765
 go run ./cli daemon status
 go run ./cli chat "你好"
 go run ./cli test
+go run ./cli "append README.md 一行新内容"
 ```
+
+所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。
 
 ## 配置
 

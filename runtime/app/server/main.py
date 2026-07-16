@@ -13,6 +13,8 @@ from app.config.settings import settings
 from app.events.sse import encode_sse
 from app.models.provider import ModelRequest, StubProvider
 from app.sessions.store import Session, store
+from app.tools.base import ToolError
+from app.tools.patch import apply_content_patch, create_append_patch
 from app.tools.router import ToolRouter
 
 app = FastAPI(title=settings.app_name, version=settings.version)
@@ -103,13 +105,17 @@ async def stream_events(session_id: str) -> StreamingResponse:
 
 @app.post("/v1/sessions/{session_id}/approve")
 async def approve(session_id: str, request: ApprovalRequest) -> dict[str, str]:
-    require_session(session_id)
+    session = require_session(session_id)
+    if not session.resolve_approval(request.approval_id, accepted=True):
+        raise HTTPException(status_code=404, detail="approval not found or already resolved")
     return {"status": "accepted", "approval_id": request.approval_id}
 
 
 @app.post("/v1/sessions/{session_id}/reject")
 async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
-    require_session(session_id)
+    session = require_session(session_id)
+    if not session.resolve_approval(request.approval_id, accepted=False):
+        raise HTTPException(status_code=404, detail="approval not found or already resolved")
     return {"status": "rejected", "approval_id": request.approval_id}
 
 
@@ -149,6 +155,9 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
     await session.events.put({"type": "plan.updated", "item_id": "context", "status": "in_progress"})
     for tool_name, args in choose_context_tools(request):
         await execute_tool(session, request, tool_name, args)
+    append_request = detect_append_request(request.message)
+    if append_request is not None:
+        await propose_append_patch(session, request, append_request[0], append_request[1])
     await session.events.put({"type": "plan.updated", "item_id": "context", "status": "completed"})
 
     response = await provider.complete(
@@ -173,8 +182,8 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
             "type": "final",
             "summary": localized(
                 request.language,
-                "Phase 1 工具系统已连通。Runtime 已通过结构化工具读取工作区、检查 git 状态，并按策略执行只读工具。",
-                "Phase 1 tool system is connected. The runtime used structured tools to inspect the workspace, check git status, and execute read-only tools under policy.",
+                "Phase 1 工具系统已连通。Runtime 已通过结构化工具读取工作区、检查 git 状态，并支持写入前 inline diff 确认。",
+                "Phase 1 tool system is connected. The runtime used structured tools to inspect the workspace, check git status, and supports inline diff approval before writes.",
             ),
         }
     )
@@ -223,6 +232,9 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
     message = request.message.strip()
     lowered = message.lower()
 
+    if detect_append_request(message) is not None:
+        return []
+
     if request.mode in {"review", "diff"} or "diff" in lowered or "变更" in message or "审查" in message:
         return [("git_diff", {})]
 
@@ -241,6 +253,129 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
         return [("search_text", {"query": keyword, "limit": 40})]
 
     return []
+
+
+async def propose_append_patch(session: Session, request: MessageRequest, path: str, text: str) -> None:
+    if request.mode == "review":
+        await session.events.put(
+            {
+                "type": "tool.denied",
+                "tool": "apply_patch",
+                "error": localized(request.language, "review 模式禁止写入", "review mode forbids writes"),
+                "risk_level": "high",
+                "requires_approval": False,
+            }
+        )
+        return
+
+    try:
+        proposal = create_append_patch(Path(request.workspace), path, text)
+    except (ToolError, UnicodeDecodeError) as exc:
+        await session.events.put(
+            {
+                "type": "tool.error",
+                "tool": "generate_patch",
+                "error": str(exc),
+                "risk_level": "medium",
+                "requires_approval": True,
+            }
+        )
+        return
+
+    approval = session.create_approval(
+        "patch",
+        {
+            "operation": "append",
+            "path": proposal.path,
+            "new_content": proposal.new_content,
+        },
+    )
+    await session.events.put(
+        {
+            "type": "approval.requested",
+            "approval_id": approval.approval_id,
+            "kind": "patch",
+            "risk_level": "medium",
+            "message": localized(
+                request.language,
+                f"是否允许修改 {proposal.path}？",
+                f"Allow changes to {proposal.path}?",
+            ),
+        }
+    )
+    await session.events.put(
+        {
+            "type": "patch.preview",
+            "approval_id": approval.approval_id,
+            "files": [proposal.path],
+            "diff": proposal.diff,
+        }
+    )
+
+    accepted = await session.wait_for_approval(approval.approval_id)
+    if accepted is None:
+        await session.events.put(
+            {
+                "type": "patch.rejected",
+                "approval_id": approval.approval_id,
+                "reason": localized(request.language, "等待确认超时", "approval timed out"),
+            }
+        )
+        return
+    if not accepted:
+        await session.events.put(
+            {
+                "type": "patch.rejected",
+                "approval_id": approval.approval_id,
+                "reason": localized(request.language, "用户拒绝修改", "user rejected the patch"),
+            }
+        )
+        return
+
+    try:
+        apply_content_patch(Path(request.workspace), proposal.path, proposal.new_content)
+    except ToolError as exc:
+        await session.events.put(
+            {
+                "type": "tool.error",
+                "tool": "apply_patch",
+                "error": str(exc),
+                "risk_level": "medium",
+                "requires_approval": True,
+            }
+        )
+        return
+
+    await session.events.put(
+        {
+            "type": "patch.applied",
+            "approval_id": approval.approval_id,
+            "files": [proposal.path],
+        }
+    )
+
+
+def detect_append_request(message: str) -> tuple[str, str] | None:
+    stripped = message.strip()
+    lowered = stripped.lower()
+    prefixes = ["append ", "追加 "]
+    for prefix in prefixes:
+        if lowered.startswith(prefix) or stripped.startswith(prefix):
+            body = stripped[len(prefix) :].strip()
+            path, text = split_path_and_text(body)
+            if path and text:
+                return path, text
+    return None
+
+
+def split_path_and_text(body: str) -> tuple[str | None, str | None]:
+    if " " not in body:
+        return None, None
+    path, text = body.split(" ", 1)
+    text = text.strip()
+    if not path or not text:
+        return None, None
+    return path.strip("，。,. "), text
 
 
 def extract_target(message: str) -> str | None:
