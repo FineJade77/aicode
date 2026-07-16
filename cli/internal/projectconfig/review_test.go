@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -91,4 +92,48 @@ func TestSetReviewRuleEnabledRemovesRule(t *testing.T) {
 	if len(rules) != 1 || rules[0] != "debug_output" {
 		t.Fatalf("rules = %#v", rules)
 	}
+}
+
+func TestSetReviewRuleDisabledRejectsUnknownRule(t *testing.T) {
+	workspace := t.TempDir()
+
+	path, rules, err := SetReviewRuleDisabled(workspace, "not_a_rule", true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if path != "" {
+		t.Fatalf("path = %q", path)
+	}
+	if rules != nil {
+		t.Fatalf("rules = %#v", rules)
+	}
+	if !strings.Contains(err.Error(), "未知 review 规则") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".aicode", "config.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no config file, stat err = %v", statErr)
+	}
+}
+
+func TestKnownReviewRuleIDs(t *testing.T) {
+	rules := KnownReviewRuleIDs()
+
+	if len(rules) != 12 {
+		t.Fatalf("rules = %#v", rules)
+	}
+	if rules[0] != "debug_output" {
+		t.Fatalf("rules not sorted: %#v", rules)
+	}
+	if !contains(rules, "large_diff") || !contains(rules, "secret_added") {
+		t.Fatalf("missing expected rules: %#v", rules)
+	}
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

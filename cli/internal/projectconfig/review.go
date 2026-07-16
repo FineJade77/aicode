@@ -10,10 +10,28 @@ import (
 	"strings"
 )
 
+var knownReviewRules = map[string]bool{
+	"sensitive_path":    true,
+	"secret_added":      true,
+	"deleted_test":      true,
+	"risky_eval":        true,
+	"risky_exec":        true,
+	"risky_os_system":   true,
+	"risky_shell_true":  true,
+	"risky_child_exec":  true,
+	"risky_tls_verify":  true,
+	"large_diff":        true,
+	"task_marker_added": true,
+	"debug_output":      true,
+}
+
 func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (string, []string, error) {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return "", nil, errors.New("rule id 不能为空")
+	}
+	if !knownReviewRules[rule] {
+		return "", nil, fmt.Errorf("未知 review 规则: %s。运行 aicode review-rules 查看支持列表", rule)
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -43,6 +61,15 @@ func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (st
 	}
 	encoded = append(encoded, '\n')
 	return path, rules, os.WriteFile(path, encoded, 0o644)
+}
+
+func KnownReviewRuleIDs() []string {
+	rules := make([]string, 0, len(knownReviewRules))
+	for rule := range knownReviewRules {
+		rules = append(rules, rule)
+	}
+	sort.Strings(rules)
+	return rules
 }
 
 func readProjectConfig(path string) (map[string]any, error) {

@@ -159,6 +159,12 @@ go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
 ```
 
+如果不确定 rule id，先运行：
+
+```bash
+go run ./cli review-rules
+```
+
 示例：
 
 ```json
