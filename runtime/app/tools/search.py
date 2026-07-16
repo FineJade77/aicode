@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import shutil
+import subprocess
+
+from app.tools.base import IGNORED_DIRS, ToolContext, ToolResult, display_path, resolve_workspace_path
+
+
+class SearchTextTool:
+    name = "search_text"
+
+    async def run(self, args: dict, context: ToolContext) -> ToolResult:
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return ToolResult(success=False, error="搜索词不能为空")
+
+        root = resolve_workspace_path(context.workspace, args.get("path"))
+        limit = int(args.get("limit", 80))
+
+        if shutil.which("rg"):
+            return run_rg(root, query, limit)
+        return run_python_search(context, root, query, limit)
+
+
+def run_rg(root, query: str, limit: int) -> ToolResult:
+    command = [
+        "rg",
+        "--line-number",
+        "--hidden",
+        "--glob",
+        "!.git",
+        "--glob",
+        "!node_modules",
+        "--glob",
+        "!.venv",
+        "--glob",
+        "!__pycache__",
+        query,
+        str(root),
+    ]
+    proc = subprocess.run(command, text=True, capture_output=True, timeout=15, check=False)
+    if proc.returncode not in {0, 1}:
+        return ToolResult(success=False, error=proc.stderr.strip() or "rg 执行失败")
+
+    lines = proc.stdout.splitlines()[:limit]
+    text = "\n".join(lines) if lines else "未找到匹配"
+    return ToolResult(success=True, text=text, data={"matches": lines, "truncated": len(proc.stdout.splitlines()) > limit})
+
+
+def run_python_search(context: ToolContext, root, query: str, limit: int) -> ToolResult:
+    matches: list[str] = []
+    for path in root.rglob("*"):
+        if len(matches) >= limit:
+            break
+        if any(part in IGNORED_DIRS for part in path.parts):
+            continue
+        if not path.is_file():
+            continue
+        try:
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if query in line:
+                    matches.append(f"{display_path(context.workspace, path)}:{line_number}:{line.strip()}")
+                    if len(matches) >= limit:
+                        break
+        except UnicodeDecodeError:
+            continue
+    text = "\n".join(matches) if matches else "未找到匹配"
+    return ToolResult(success=True, text=text, data={"matches": matches, "truncated": len(matches) >= limit})

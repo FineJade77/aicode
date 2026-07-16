@@ -13,9 +13,11 @@ from app.config.settings import settings
 from app.events.sse import encode_sse
 from app.models.provider import ModelRequest, StubProvider
 from app.sessions.store import Session, store
+from app.tools.router import ToolRouter
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 provider = StubProvider()
+tools = ToolRouter()
 
 
 class CreateSessionRequest(BaseModel):
@@ -132,26 +134,21 @@ def require_session(session_id: str) -> Session:
 async def run_agent(session: Session, request: MessageRequest) -> None:
     plan_items = [
         {"id": "scan", "text": localized(request.language, "扫描当前工作区", "Scan current workspace"), "status": "pending"},
-        {"id": "context", "text": localized(request.language, "收集最小上下文", "Gather minimal context"), "status": "pending"},
+        {"id": "context", "text": localized(request.language, "调用真实工具收集上下文", "Gather context with real tools"), "status": "pending"},
         {"id": "summary", "text": localized(request.language, "输出阶段性结果", "Return phase summary"), "status": "pending"},
     ]
     await session.events.put({"type": "plan.created", "items": plan_items})
 
     await asyncio.sleep(0.05)
     await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "in_progress"})
-    await session.events.put({"type": "tool.started", "tool": "workspace.inspect", "args": {"workspace": request.workspace}})
-
-    files = list_workspace_files(Path(request.workspace))
-    await session.events.put(
-        {
-            "type": "tool.output",
-            "tool": "workspace.inspect",
-            "text": format_workspace_output(request.language, request.workspace, files),
-        }
-    )
+    await execute_tool(session, request, "list_files", {"path": ".", "max_depth": 1, "limit": 40})
+    await execute_tool(session, request, "git_status", {})
     await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "completed"})
 
     await asyncio.sleep(0.05)
+    await session.events.put({"type": "plan.updated", "item_id": "context", "status": "in_progress"})
+    for tool_name, args in choose_context_tools(request):
+        await execute_tool(session, request, tool_name, args)
     await session.events.put({"type": "plan.updated", "item_id": "context", "status": "completed"})
 
     response = await provider.complete(
@@ -176,37 +173,136 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
             "type": "final",
             "summary": localized(
                 request.language,
-                "Phase 0 Runtime 已连通。当前骨架已能创建会话、展示实时计划、检查工作区并通过 SSE 返回事件。",
-                "Phase 0 runtime is connected. The scaffold can create sessions, show a live plan, inspect the workspace, and stream events over SSE.",
+                "Phase 1 工具系统已连通。Runtime 已通过结构化工具读取工作区、检查 git 状态，并按策略执行只读工具。",
+                "Phase 1 tool system is connected. The runtime used structured tools to inspect the workspace, check git status, and execute read-only tools under policy.",
             ),
         }
     )
 
 
-def list_workspace_files(workspace: Path) -> list[str]:
-    if not workspace.exists() or not workspace.is_dir():
-        return []
+async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]) -> None:
+    decision = tools.evaluate(name, args, mode=request.mode)
+    await session.events.put(
+        {
+            "type": "tool.started",
+            "tool": name,
+            "args": args,
+            "risk_level": decision.risk_level,
+            "requires_approval": decision.requires_approval,
+        }
+    )
 
-    ignored = {".git", ".venv", "node_modules", "__pycache__"}
-    files: list[str] = []
-    for child in sorted(workspace.iterdir(), key=lambda item: item.name):
-        if child.name in ignored:
+    result = await tools.run(name, args, workspace=request.workspace, mode=request.mode, language=request.language)
+    if result.success:
+        await session.events.put(
+            {
+                "type": "tool.output",
+                "tool": name,
+                "text": result.text,
+                "data": result.data,
+                "risk_level": result.risk_level,
+                "requires_approval": result.requires_approval,
+            }
+        )
+        return
+
+    event_type = "tool.denied" if result.requires_approval or result.risk_level == "high" else "tool.error"
+    await session.events.put(
+        {
+            "type": event_type,
+            "tool": name,
+            "error": result.error,
+            "data": result.data,
+            "risk_level": result.risk_level,
+            "requires_approval": result.requires_approval,
+        }
+    )
+
+
+def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, Any]]]:
+    message = request.message.strip()
+    lowered = message.lower()
+
+    if request.mode in {"review", "diff"} or "diff" in lowered or "变更" in message or "审查" in message:
+        return [("git_diff", {})]
+
+    if request.mode == "test" or "运行测试" in message or "run tests" in lowered:
+        command = detect_test_command(Path(request.workspace))
+        if command:
+            return [("run_shell", {"command": command, "timeout": 120})]
+        return [("search_text", {"query": "test", "limit": 40})]
+
+    target = extract_target(message)
+    if target:
+        return [("read_file", {"path": target, "max_bytes": 30_000})]
+
+    keyword = extract_keyword(message)
+    if keyword:
+        return [("search_text", {"query": keyword, "limit": 40})]
+
+    return []
+
+
+def extract_target(message: str) -> str | None:
+    parts = message.split()
+    for part in reversed(parts):
+        if "/" in part or "." in part:
+            cleaned = part.strip("，。,. ")
+            if cleaned and not cleaned.startswith("http"):
+                return cleaned
+    return None
+
+
+def detect_test_command(workspace: Path) -> str | None:
+    if (workspace / "go.mod").exists():
+        return "go test ./..."
+
+    go_work = workspace / "go.work"
+    if go_work.exists():
+        modules = parse_go_work_modules(go_work)
+        if modules:
+            packages = " ".join(f"{module}/..." for module in modules)
+            return f"go test {packages}"
+
+    if (workspace / "pyproject.toml").exists() or (workspace / "pytest.ini").exists() or (workspace / "setup.cfg").exists():
+        return "python3 -m pytest"
+
+    if (workspace / "package.json").exists():
+        if (workspace / "pnpm-lock.yaml").exists():
+            return "pnpm test"
+        if (workspace / "yarn.lock").exists():
+            return "yarn test"
+        return "npm test"
+
+    return None
+
+
+def parse_go_work_modules(go_work: Path) -> list[str]:
+    modules: list[str] = []
+    in_use_block = False
+    for raw in go_work.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//"):
             continue
-        suffix = "/" if child.is_dir() else ""
-        files.append(child.name + suffix)
-        if len(files) >= 12:
-            break
-    return files
+        if line == "use (":
+            in_use_block = True
+            continue
+        if in_use_block and line == ")":
+            in_use_block = False
+            continue
+        if line.startswith("use "):
+            modules.append(line.removeprefix("use ").strip())
+            continue
+        if in_use_block:
+            modules.append(line)
+    return [module for module in modules if module.startswith("./")]
 
 
-def format_workspace_output(language: str, workspace: str, files: list[str]) -> str:
-    if language.startswith("en"):
-        if not files:
-            return f"Workspace: {workspace}\nNo top-level files found."
-        return "Workspace: " + workspace + "\nTop-level files:\n" + "\n".join(f"- {item}" for item in files)
-    if not files:
-        return f"工作区: {workspace}\n未发现顶层文件。"
-    return "工作区: " + workspace + "\n顶层文件:\n" + "\n".join(f"- {item}" for item in files)
+def extract_keyword(message: str) -> str | None:
+    for token in ["login", "auth", "test", "pytest", "go test", "错误", "失败", "测试", "登录", "认证"]:
+        if token in message.lower() or token in message:
+            return token
+    return None
 
 
 def localized(language: str, zh: str, en: str) -> str:

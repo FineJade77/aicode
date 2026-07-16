@@ -39,6 +39,10 @@ func RenderEvent(event map[string]any) {
 		if text != "" {
 			fmt.Println(text)
 		}
+	case "tool.denied":
+		fmt.Printf("工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+	case "tool.error":
+		fmt.Printf("工具失败: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "approval.requested":
 		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
 	case "patch.preview":

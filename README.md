@@ -2,13 +2,28 @@
 
 `aicode` 是一个本地优先、CLI-first、默认中文交互的 Coding Agent。
 
-当前仓库处于 Phase 0 骨架阶段：
+当前仓库处于 Phase 1 工具系统起步阶段：
 
 - Go CLI: `cli/`
 - Python Runtime: `runtime/`
 - Runtime 协议和配置 schema: `schemas/`
 - 架构文档: `ARCHITECTURE.md`
 - 路线图: `ROADMAP.md`
+
+已具备：
+
+- CLI 自动启动/停止 Runtime daemon
+- HTTP + SSE 事件流
+- 结构化工具系统
+- Policy Engine v1
+- `list_files`
+- `read_file`
+- `search_text`
+- `git_status`
+- `git_diff`
+- `git_show`
+- `run_shell`
+- `aicode test` 自动执行低风险测试命令
 
 ## 本地运行
 
@@ -40,6 +55,7 @@ python3 -m uvicorn app.server.main:app --host 127.0.0.1 --port 8765
 ```bash
 go run ./cli daemon status
 go run ./cli chat "你好"
+go run ./cli test
 ```
 
 ## 配置

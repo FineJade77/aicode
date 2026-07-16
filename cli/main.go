@@ -49,6 +49,8 @@ func run(args []string) error {
 		return runAgent(cfg, "review", "请审查当前代码变更。")
 	case "diff":
 		return runAgent(cfg, "diff", "请查看当前 git diff 并总结变更。")
+	case "test":
+		return runAgent(cfg, "test", "请自动发现并运行当前项目的低风险测试命令。")
 	case "explain":
 		if len(args) < 2 {
 			return fmt.Errorf("用法: aicode explain <file-or-symbol>")
@@ -73,6 +75,7 @@ func printHelp() {
   aicode review
   aicode explain src/foo.ts
   aicode diff
+  aicode test
   aicode sessions
   aicode resume --last
   aicode usage
