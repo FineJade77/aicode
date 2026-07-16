@@ -43,7 +43,7 @@ func run(args []string) error {
 	case "sessions":
 		return runSimpleGet(cfg, "/v1/sessions")
 	case "usage":
-		return runSimpleGet(cfg, "/v1/usage")
+		return runUsage(cfg, args[1:])
 	case "resume":
 		return runResume(cfg, args[1:])
 	case "review":
@@ -80,6 +80,8 @@ func printHelp() {
   aicode sessions
   aicode resume --last
   aicode usage
+  aicode usage --today
+  aicode usage --session <session_id>
   aicode config init
   aicode config show
   aicode config set ui.language en-US
@@ -163,6 +165,19 @@ func runResume(cfg config.Config, args []string) error {
 		return fmt.Errorf("用法: aicode resume <session_id> 或 aicode resume --last")
 	}
 	return runSimpleGet(cfg, "/v1/sessions/"+args[0])
+}
+
+func runUsage(cfg config.Config, args []string) error {
+	if len(args) == 0 {
+		return runSimpleGet(cfg, "/v1/usage")
+	}
+	if len(args) == 1 && args[0] == "--today" {
+		return runSimpleGet(cfg, "/v1/usage?today=true")
+	}
+	if len(args) == 2 && args[0] == "--session" {
+		return runSimpleGet(cfg, "/v1/usage/sessions/"+args[1])
+	}
+	return fmt.Errorf("用法: aicode usage [--today|--session <session_id>]")
 }
 
 func runSimpleGet(cfg config.Config, path string) error {

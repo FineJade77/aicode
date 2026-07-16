@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.sessions.store import Session, store
 from app.tools.base import ToolError
 from app.tools.patch import apply_content_patch, create_append_patch
 from app.tools.router import ToolRouter
+from app.usage.store import summarize_usage
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 provider = StubProvider()
@@ -151,14 +153,14 @@ async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
 
 
 @app.get("/v1/usage")
-async def usage() -> dict[str, Any]:
-    return {
-        "storage": "local",
-        "total_input_tokens": 0,
-        "total_output_tokens": 0,
-        "estimated_cost": 0.0,
-        "note": "usage persistence will be implemented in Phase 2",
-    }
+async def usage(today: bool = False, session_id: str | None = None) -> dict[str, Any]:
+    day = datetime_utc_today() if today else None
+    return summarize_usage(audit.path, session_id=session_id, day=day)
+
+
+@app.get("/v1/usage/sessions/{session_id}")
+async def usage_for_session(session_id: str) -> dict[str, Any]:
+    return summarize_usage(audit.path, session_id=session_id)
 
 
 def require_session(session_id: str) -> Session:
@@ -545,6 +547,10 @@ def parse_go_work_modules(go_work: Path) -> list[str]:
         if in_use_block:
             modules.append(line)
     return [module for module in modules if module.startswith("./")]
+
+
+def datetime_utc_today():
+    return datetime.now(timezone.utc).date()
 
 
 def extract_keyword(message: str) -> str | None:

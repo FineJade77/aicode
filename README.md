@@ -58,6 +58,9 @@ python3 -m uvicorn app.server.main:app --host 127.0.0.1 --port 8765
 go run ./cli daemon status
 go run ./cli chat "你好"
 go run ./cli test
+go run ./cli usage
+go run ./cli usage --today
+go run ./cli usage --session <session_id>
 go run ./cli "append README.md 一行新内容"
 ```
 
