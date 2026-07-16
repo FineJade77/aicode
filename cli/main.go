@@ -99,6 +99,7 @@ func printHelp() {
   aicode config get models.reviewer
   aicode config set ui.language en-US
   aicode config set models.reviewer gpt-5
+  aicode config unset models.reviewer
   aicode config review disable large_diff
   aicode config review enable large_diff
   aicode config review set largeDiffThreshold 1200
@@ -145,7 +146,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|list|get|set|review>")
+		return fmt.Errorf("用法: aicode config <init|show|list|get|set|unset|review>")
 	}
 
 	switch args[0] {
@@ -182,6 +183,20 @@ func runConfigCommand(cfg config.Config, args []string) error {
 			return err
 		}
 		fmt.Printf("已更新 %s = %s (%s)\n", args[1], args[2], path)
+		return nil
+	case "unset":
+		if len(args) != 2 {
+			return fmt.Errorf("用法: aicode config unset <key>")
+		}
+		path, removed, err := config.UnsetValue(args[1])
+		if err != nil {
+			return err
+		}
+		if removed {
+			fmt.Printf("已移除 %s (%s)\n", args[1], path)
+			return nil
+		}
+		fmt.Printf("%s 未在用户配置中显式设置 (%s)\n", args[1], path)
 		return nil
 	case "review":
 		return runConfigReviewCommand(cfg, args[1:])

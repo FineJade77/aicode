@@ -127,6 +127,7 @@ go run ./cli config init
 go run ./cli config list
 go run ./cli config get models.reviewer
 go run ./cli config set models.reviewer gpt-5
+go run ./cli config unset models.reviewer
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
 go run ./cli config review set largeDiffThreshold 1200
@@ -240,10 +241,12 @@ go run ./cli config set provider.openai_compatible.api_key_env OPENAI_API_KEY
 go run ./cli config set provider.openai_compatible.timeout_seconds 60
 go run ./cli config set pricing.openai_compatible.gpt-5.input_per_1m 1.25
 go run ./cli config set pricing.openai_compatible.gpt-5.output_per_1m 10
+go run ./cli config unset pricing.openai_compatible.gpt-5.input_per_1m
 ```
 
 成本估算只使用本地价格表，不内置也不自动更新官方价格。价格单位是 USD / 1M tokens。
 如果没有为当前 provider/model 配置价格，`estimated_cost` 会保持 `0`。
+`config unset` 会移除用户配置里的显式项，让它回到默认值或环境变量覆盖值。
 
 常用环境变量：
 

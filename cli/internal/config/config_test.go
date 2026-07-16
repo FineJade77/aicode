@@ -120,6 +120,105 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	}
 }
 
+func TestUnsetValueRemovesExplicitConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AICODE_HOME", home)
+	clearConfigEnv(t)
+
+	content := `[models]
+reviewer = "custom-reviewer"
+summarizer = "custom-summary"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path, removed, err := UnsetValue("models.reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("expected removed")
+	}
+	if path != filepath.Join(home, "config.toml") {
+		t.Fatalf("path = %q", path)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Models.Reviewer != Default().Models.Reviewer {
+		t.Fatalf("reviewer = %q", cfg.Models.Reviewer)
+	}
+	if cfg.Models.Summarizer != "custom-summary" {
+		t.Fatalf("summarizer = %q", cfg.Models.Summarizer)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "reviewer") {
+		t.Fatalf("config content = %s", raw)
+	}
+	if !strings.Contains(string(raw), `summarizer = "custom-summary"`) {
+		t.Fatalf("config content = %s", raw)
+	}
+}
+
+func TestUnsetValueRemovesEmptyPricingSection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AICODE_HOME", home)
+	clearConfigEnv(t)
+
+	content := `[models]
+reviewer = "custom-reviewer"
+
+[pricing.openai_compatible.gpt-5]
+input_per_1m = 1.25
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path, removed, err := UnsetValue("pricing.openai_compatible.gpt-5.input_per_1m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("expected removed")
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "pricing.openai_compatible.gpt-5") || strings.Contains(string(raw), "input_per_1m") {
+		t.Fatalf("config content = %s", raw)
+	}
+	if !strings.Contains(string(raw), `reviewer = "custom-reviewer"`) {
+		t.Fatalf("config content = %s", raw)
+	}
+}
+
+func TestUnsetValueNoopWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AICODE_HOME", home)
+	clearConfigEnv(t)
+
+	path, removed, err := UnsetValue("models.reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("expected noop")
+	}
+	if path != filepath.Join(home, "config.toml") {
+		t.Fatalf("path = %q", path)
+	}
+}
+
 func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	cfg := Default()
 	cfg.Models.Reviewer = "review-model"

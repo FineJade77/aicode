@@ -305,6 +305,31 @@ func SetValue(key string, value string) (string, error) {
 	return path, os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
+func UnsetValue(key string) (string, bool, error) {
+	section, name, err := configKeyTarget(key)
+	if err != nil {
+		return "", false, err
+	}
+
+	path, err := Path()
+	if err != nil {
+		return "", false, err
+	}
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return path, false, nil
+	}
+	if err != nil {
+		return path, false, err
+	}
+
+	lines, removed := removeConfigLine(strings.Split(string(content), "\n"), section, name)
+	if !removed {
+		return path, false, nil
+	}
+	return path, true, os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
+}
+
 func configKeyTarget(key string) (string, string, error) {
 	if strings.HasPrefix(key, "pricing.") {
 		section, name, ok := strings.Cut(strings.TrimPrefix(key, "pricing."), ".")
@@ -449,6 +474,100 @@ func upsertConfigLine(lines []string, targetSection string, targetKey string, fo
 	}
 	lines = append(lines, "["+targetSection+"]", formatted)
 	return lines
+}
+
+func removeConfigLine(lines []string, targetSection string, targetKey string) ([]string, bool) {
+	currentSection := ""
+	sectionStart := -1
+	sectionEnd := len(lines)
+	removed := false
+	next := make([]string, 0, len(lines))
+
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			if sectionStart >= 0 && sectionEnd == len(lines) {
+				sectionEnd = i
+			}
+			currentSection = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			if currentSection == targetSection {
+				sectionStart = len(next)
+			}
+			next = append(next, raw)
+			continue
+		}
+		if currentSection == targetSection {
+			key, _, ok := strings.Cut(line, "=")
+			if ok && strings.TrimSpace(key) == targetKey {
+				removed = true
+				continue
+			}
+		}
+		next = append(next, raw)
+	}
+	if !removed {
+		return lines, false
+	}
+
+	if sectionStart >= 0 && shouldRemoveEmptySection(next, sectionStart, sectionEnd, targetSection) {
+		next = removeSection(next, sectionStart)
+	}
+	return trimTrailingBlankLines(next), true
+}
+
+func shouldRemoveEmptySection(lines []string, sectionStart int, originalSectionEnd int, section string) bool {
+	if !strings.HasPrefix(section, "pricing.") {
+		return false
+	}
+	sectionEnd := originalSectionEnd
+	if sectionEnd > len(lines) {
+		sectionEnd = len(lines)
+	}
+	for i := sectionStart + 1; i < sectionEnd; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "=") {
+			return false
+		}
+	}
+	return true
+}
+
+func removeSection(lines []string, sectionStart int) []string {
+	sectionEnd := len(lines)
+	for i := sectionStart + 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			sectionEnd = i
+			break
+		}
+	}
+	next := append([]string{}, lines[:sectionStart]...)
+	next = append(next, lines[sectionEnd:]...)
+	return trimRepeatedBlankLines(next)
+}
+
+func trimRepeatedBlankLines(lines []string) []string {
+	next := make([]string, 0, len(lines))
+	previousBlank := false
+	for _, line := range lines {
+		blank := strings.TrimSpace(line) == ""
+		if blank && previousBlank {
+			continue
+		}
+		next = append(next, line)
+		previousBlank = blank
+	}
+	return next
+}
+
+func trimTrailingBlankLines(lines []string) []string {
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return append(lines, "")
 }
 
 func insertLine(lines []string, index int, line string) []string {
