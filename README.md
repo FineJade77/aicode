@@ -75,6 +75,7 @@ go run ./cli usage --today
 go run ./cli usage --session <session_id>
 go run ./cli usage --json
 go run ./cli "append README.md 一行新内容"
+go run ./cli "replace README.md old text => new text"
 ```
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。

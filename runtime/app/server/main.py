@@ -20,7 +20,7 @@ from app.models.router import ModelRouter
 from app.project.config import load_project_config
 from app.sessions.store import Session, store
 from app.tools.base import ToolError, ToolResult
-from app.tools.patch import apply_content_patch, create_append_patch
+from app.tools.patch import PatchProposal, apply_content_patch, create_append_patch, create_replace_patch
 from app.tools.review import review_rules_data
 from app.tools.router import ToolRouter
 from app.usage.store import summarize_usage
@@ -203,8 +203,11 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
     await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "in_progress"})
     observations = await run_context_loop(session, request)
     append_request = detect_append_request(request.message)
+    replace_request = detect_replace_request(request.message)
     if append_request is not None:
         await propose_append_patch(session, request, append_request[0], append_request[1])
+    elif replace_request is not None:
+        await propose_replace_patch(session, request, replace_request[0], replace_request[1], replace_request[2])
     await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "completed"})
 
     purpose = model_purpose_for_mode(request.mode)
@@ -719,7 +722,7 @@ def choose_context_tools(request: MessageRequest) -> list[tuple[str, dict[str, A
     message = request.message.strip()
     lowered = message.lower()
 
-    if detect_append_request(message) is not None:
+    if detect_append_request(message) is not None or detect_replace_request(message) is not None:
         return []
 
     shell_command = detect_shell_request(message)
@@ -759,42 +762,43 @@ def detect_shell_request(message: str) -> str | None:
 
 async def propose_append_patch(session: Session, request: MessageRequest, path: str, text: str) -> None:
     if request.mode == "review":
-        await session.events.put(
-            {
-                "type": "tool.denied",
-                "tool": "apply_patch",
-                "error": localized(request.language, "review 模式禁止写入", "review mode forbids writes"),
-                "risk_level": "high",
-                "requires_approval": False,
-            }
-        )
+        await emit_patch_write_denied(session, request)
         return
 
     try:
         project_config = load_project_config(Path(request.workspace))
         proposal = create_append_patch(Path(request.workspace), path, text, protected_paths=project_config.protected_paths)
     except (ToolError, UnicodeDecodeError) as exc:
-        audit.record(
-            "tool.error",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data={"tool": "generate_patch", "error": str(exc), "risk_level": "medium", "requires_approval": True},
-        )
-        await session.events.put(
-            {
-                "type": "tool.error",
-                "tool": "generate_patch",
-                "error": str(exc),
-                "risk_level": "medium",
-                "requires_approval": True,
-            }
-        )
+        await emit_patch_generation_error(session, str(exc))
+        return
+
+    await propose_patch(session, request, proposal, operation="append")
+
+
+async def propose_replace_patch(session: Session, request: MessageRequest, path: str, old_text: str, new_text: str) -> None:
+    if request.mode == "review":
+        await emit_patch_write_denied(session, request)
+        return
+
+    try:
+        project_config = load_project_config(Path(request.workspace))
+        proposal = create_replace_patch(Path(request.workspace), path, old_text, new_text, protected_paths=project_config.protected_paths)
+    except (ToolError, UnicodeDecodeError) as exc:
+        await emit_patch_generation_error(session, str(exc))
+        return
+
+    await propose_patch(session, request, proposal, operation="replace")
+
+
+async def propose_patch(session: Session, request: MessageRequest, proposal: PatchProposal, operation: str) -> None:
+    if request.mode == "review":
+        await emit_patch_write_denied(session, request)
         return
 
     approval = session.create_approval(
         "patch",
         {
-            "operation": "append",
+            "operation": operation,
             "path": proposal.path,
             "new_content": proposal.new_content,
         },
@@ -806,6 +810,7 @@ async def propose_append_patch(session: Session, request: MessageRequest, path: 
         data={
             "approval_id": approval.approval_id,
             "kind": "patch",
+            "operation": operation,
             "files": [proposal.path],
             "patch_hash": stable_hash(proposal.diff),
         },
@@ -894,6 +899,36 @@ async def propose_append_patch(session: Session, request: MessageRequest, path: 
     )
 
 
+async def emit_patch_write_denied(session: Session, request: MessageRequest) -> None:
+    await session.events.put(
+        {
+            "type": "tool.denied",
+            "tool": "apply_patch",
+            "error": localized(request.language, "review 模式禁止写入", "review mode forbids writes"),
+            "risk_level": "high",
+            "requires_approval": False,
+        }
+    )
+
+
+async def emit_patch_generation_error(session: Session, error: str) -> None:
+    audit.record(
+        "tool.error",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={"tool": "generate_patch", "error": error, "risk_level": "medium", "requires_approval": True},
+    )
+    await session.events.put(
+        {
+            "type": "tool.error",
+            "tool": "generate_patch",
+            "error": error,
+            "risk_level": "medium",
+            "requires_approval": True,
+        }
+    )
+
+
 def detect_append_request(message: str) -> tuple[str, str] | None:
     stripped = message.strip()
     lowered = stripped.lower()
@@ -905,6 +940,35 @@ def detect_append_request(message: str) -> tuple[str, str] | None:
             if path and text:
                 return path, text
     return None
+
+
+def detect_replace_request(message: str) -> tuple[str, str, str] | None:
+    stripped = message.strip()
+    lowered = stripped.lower()
+    prefixes = ["replace ", "替换 "]
+    for prefix in prefixes:
+        if lowered.startswith(prefix) or stripped.startswith(prefix):
+            body = stripped[len(prefix) :].strip()
+            path, text = split_path_and_text(body)
+            if not path or not text:
+                return None
+            old_text, new_text = split_replace_text(text)
+            if old_text is None or new_text is None:
+                return None
+            return path, old_text, new_text
+    return None
+
+
+def split_replace_text(text: str) -> tuple[str | None, str | None]:
+    for separator in ["=>", "->"]:
+        if separator in text:
+            old_text, new_text = text.split(separator, 1)
+            old_text = old_text.strip()
+            new_text = new_text.strip()
+            if old_text and new_text:
+                return old_text, new_text
+            return None, None
+    return None, None
 
 
 def split_path_and_text(body: str) -> tuple[str | None, str | None]:

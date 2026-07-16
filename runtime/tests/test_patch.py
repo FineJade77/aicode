@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from app.tools.patch import apply_content_patch, create_append_patch
+import pytest
+
+from app.tools.base import ToolError
+from app.tools.patch import apply_content_patch, create_append_patch, create_replace_patch
 
 
 def test_create_append_patch_and_apply(tmp_path: Path) -> None:
@@ -15,3 +18,26 @@ def test_create_append_patch_and_apply(tmp_path: Path) -> None:
     apply_content_patch(tmp_path, proposal.path, proposal.new_content)
 
     assert readme.read_text(encoding="utf-8") == "hello\nworld\n"
+
+
+def test_create_replace_patch_and_apply(tmp_path: Path) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("hello\nold value\n", encoding="utf-8")
+
+    proposal = create_replace_patch(tmp_path, "README.md", "old value", "new value")
+
+    assert proposal.path == "README.md"
+    assert "-old value" in proposal.diff
+    assert "+new value" in proposal.diff
+
+    apply_content_patch(tmp_path, proposal.path, proposal.new_content)
+
+    assert readme.read_text(encoding="utf-8") == "hello\nnew value\n"
+
+
+def test_create_replace_patch_requires_unique_old_text(tmp_path: Path) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("same\nsame\n", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="出现 2 次"):
+        create_replace_patch(tmp_path, "README.md", "same", "new")

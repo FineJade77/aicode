@@ -8,8 +8,9 @@ from app.server.main import (
     MessageRequest,
     audit,
     build_model_messages,
-    detect_shell_request,
     detect_append_request,
+    detect_replace_request,
+    detect_shell_request,
     execute_tool,
     final_summary_text,
     model_purpose_for_mode,
@@ -28,6 +29,12 @@ def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
 def test_detect_append_request() -> None:
     assert detect_append_request("append README.md hello world") == ("README.md", "hello world")
     assert detect_append_request("追加 README.md 你好") == ("README.md", "你好")
+
+
+def test_detect_replace_request() -> None:
+    assert detect_replace_request("replace README.md old value => new value") == ("README.md", "old value", "new value")
+    assert detect_replace_request("替换 README.md 旧值 -> 新值") == ("README.md", "旧值", "新值")
+    assert detect_replace_request("replace README.md missing separator") is None
 
 
 def test_detect_shell_request() -> None:
