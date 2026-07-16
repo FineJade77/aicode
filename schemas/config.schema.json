@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/config.schema.json",
+  "title": "aicode Project Config",
+  "type": "object",
+  "properties": {
+    "projectName": {
+      "type": "string"
+    },
+    "defaultLanguage": {
+      "type": "string",
+      "enum": ["zh-CN", "en-US"]
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "protectedPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "workspaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "mode"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["read_only"]
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

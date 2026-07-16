@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/tools.schema.json",
+  "title": "aicode Tool Call",
+  "type": "object",
+  "required": ["name", "args", "risk_level", "requires_approval"],
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "args": {
+      "type": "object"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "requires_approval": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

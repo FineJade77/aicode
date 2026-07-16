@@ -1,0 +1,15 @@
+{
+  "projectName": "aicode",
+  "defaultLanguage": "zh-CN",
+  "commands": {
+    "test": "auto",
+    "lint": "auto",
+    "build": "auto"
+  },
+  "protectedPaths": [
+    ".env",
+    "secrets/**",
+    "infra/prod/**"
+  ],
+  "workspaces": []
+}
