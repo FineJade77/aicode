@@ -12,6 +12,7 @@ import (
 	"github.com/aicode-dev/aicode/cli/internal/client"
 	"github.com/aicode-dev/aicode/cli/internal/config"
 	"github.com/aicode-dev/aicode/cli/internal/daemon"
+	"github.com/aicode-dev/aicode/cli/internal/projectconfig"
 	"github.com/aicode-dev/aicode/cli/internal/renderer"
 	"github.com/aicode-dev/aicode/cli/internal/workspace"
 )
@@ -89,6 +90,8 @@ func printHelp() {
   aicode config init
   aicode config show
   aicode config set ui.language en-US
+  aicode config review disable large_diff
+  aicode config review enable large_diff
   aicode daemon start
   aicode daemon stop
   aicode daemon status`)
@@ -128,7 +131,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|set>")
+		return fmt.Errorf("用法: aicode config <init|show|set|review>")
 	}
 
 	switch args[0] {
@@ -156,9 +159,50 @@ func runConfigCommand(args []string) error {
 		}
 		fmt.Printf("已更新 %s = %s (%s)\n", args[1], args[2], path)
 		return nil
+	case "review":
+		return runConfigReviewCommand(args[1:])
 	default:
 		return fmt.Errorf("未知 config 命令: %s", args[0])
 	}
+}
+
+func runConfigReviewCommand(args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id>")
+	}
+
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+
+	action := args[0]
+	rule := args[1]
+	var disabled bool
+	switch action {
+	case "disable":
+		disabled = true
+	case "enable":
+		disabled = false
+	default:
+		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id>")
+	}
+
+	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled)
+	if err != nil {
+		return err
+	}
+	state := "启用"
+	if disabled {
+		state = "禁用"
+	}
+	fmt.Printf("已%s review 规则 %s (%s)\n", state, rule, path)
+	if len(rules) == 0 {
+		fmt.Println("当前 disabledRules: []")
+		return nil
+	}
+	fmt.Printf("当前 disabledRules: %s\n", strings.Join(rules, ", "))
+	return nil
 }
 
 func runResume(cfg config.Config, args []string) error {

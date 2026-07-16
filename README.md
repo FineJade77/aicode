@@ -122,6 +122,8 @@ go run ./cli resume <session_id>
 
 ```bash
 go run ./cli config init
+go run ./cli config review disable large_diff
+go run ./cli config review enable large_diff
 ```
 
 切换为英文交互：
@@ -149,6 +151,13 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 - `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
 - `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
 - `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。
+
+可以用 CLI 直接启用或禁用 review 规则：
+
+```bash
+go run ./cli config review disable large_diff
+go run ./cli config review enable large_diff
+```
 
 示例：
 
