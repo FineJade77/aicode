@@ -133,6 +133,63 @@ def test_review_final_groups_findings_for_stub() -> None:
     assert "- 运行 `python3 -m pytest`。" in summary
 
 
+def test_patch_final_reports_applied_and_verification_passed_for_stub() -> None:
+    request = MessageRequest(message="replace sample.txt old => new", mode="default", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [
+            {
+                "tool": "apply_patch",
+                "success": True,
+                "status": "applied",
+                "operation": "replace",
+                "files": ["sample.txt"],
+                "verification": {"status": "passed", "command": "python3 -m pytest"},
+            }
+        ],
+        "Runtime 骨架已连接。",
+        "stub",
+    )
+
+    assert "Patch 结果" in summary
+    assert "已执行 `replace`，文件: sample.txt。" in summary
+    assert "验证通过: `python3 -m pytest`。" in summary
+
+
+def test_patch_final_reports_verification_skipped_for_stub() -> None:
+    request = MessageRequest(message="create TODO.md hi", mode="default", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [
+            {
+                "tool": "apply_patch",
+                "success": True,
+                "status": "applied",
+                "operation": "create",
+                "files": ["TODO.md"],
+                "verification": {"status": "skipped", "reason": "no test command detected"},
+            }
+        ],
+        "Runtime 骨架已连接。",
+        "stub",
+    )
+
+    assert "已执行 `create`，文件: TODO.md。" in summary
+    assert "验证跳过: no test command detected。" in summary
+
+
+def test_patch_final_reports_rejected_for_stub() -> None:
+    request = MessageRequest(message="replace sample.txt old => new", mode="default", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [{"tool": "apply_patch", "success": False, "status": "rejected", "operation": "replace", "files": ["sample.txt"]}],
+        "Runtime 骨架已连接。",
+        "stub",
+    )
+
+    assert "用户拒绝应用 patch，文件: sample.txt。" in summary
+
+
 @pytest.mark.asyncio
 async def test_review_rules_endpoint_uses_workspace_config(tmp_path: Path) -> None:
     config_dir = tmp_path / ".aicode"
@@ -215,7 +272,7 @@ async def test_post_patch_verification_skips_when_no_test_command(tmp_path: Path
     result = await run_post_patch_verification(session, request)
     skipped = await asyncio.wait_for(session.events.get(), timeout=1)
 
-    assert result is None
+    assert result["status"] == "skipped"
     assert skipped["type"] == "verification.skipped"
 
 
@@ -235,8 +292,8 @@ async def test_post_patch_verification_runs_detected_tests(tmp_path: Path) -> No
     tool_output = await asyncio.wait_for(session.events.get(), timeout=5)
     completed = await asyncio.wait_for(session.events.get(), timeout=1)
 
-    assert result is not None
-    assert result.success
+    assert result["status"] == "passed"
+    assert result["command"] == "python3 -m pytest"
     assert started["type"] == "verification.started"
     assert tool_started["type"] == "tool.started"
     assert tool_output["type"] == "tool.output"

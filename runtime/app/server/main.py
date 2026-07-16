@@ -206,12 +206,15 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
     append_request = detect_append_request(request.message)
     replace_request = detect_replace_request(request.message)
     create_request = detect_create_request(request.message)
+    patch_outcome = None
     if append_request is not None:
-        await propose_append_patch(session, request, append_request[0], append_request[1])
+        patch_outcome = await propose_append_patch(session, request, append_request[0], append_request[1])
     elif replace_request is not None:
-        await propose_replace_patch(session, request, replace_request[0], replace_request[1], replace_request[2])
+        patch_outcome = await propose_replace_patch(session, request, replace_request[0], replace_request[1], replace_request[2])
     elif create_request is not None:
-        await propose_create_patch(session, request, create_request[0], create_request[1])
+        patch_outcome = await propose_create_patch(session, request, create_request[0], create_request[1])
+    if patch_outcome is not None:
+        observations.append(patch_outcome)
     await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "completed"})
 
     purpose = model_purpose_for_mode(request.mode)
@@ -587,12 +590,75 @@ def final_summary_text(request: MessageRequest, observations: list[dict[str, Any
         return prefix + "\n\n" + format_review_fallback_summary(request.language, observations)
 
     if provider == "stub" or not cleaned:
+        patch = find_observation(observations, "apply_patch")
+        if patch is not None:
+            return format_patch_fallback_summary(request.language, patch)
         return localized(
             request.language,
             "Agent 工具循环已连通。Runtime 已通过结构化步骤读取工作区、检查 git 状态，并支持写入前 inline diff 确认。",
             "Agent tool loop is connected. The runtime used structured steps to inspect the workspace, check git status, and supports inline diff approval before writes.",
         )
     return cleaned
+
+
+def format_patch_fallback_summary(language: str, patch: dict[str, Any]) -> str:
+    status = str(patch.get("status") or "unknown")
+    operation = str(patch.get("operation") or "patch")
+    files = patch.get("files") if isinstance(patch.get("files"), list) else []
+    file_text = ", ".join(str(item) for item in files) if files else "unknown"
+    verification = patch.get("verification") if isinstance(patch.get("verification"), dict) else {}
+    verification_status = str(verification.get("status") or "")
+    command = str(verification.get("command") or "")
+    reason = str(patch.get("reason") or verification.get("reason") or "")
+
+    if language.startswith("en"):
+        lines = ["Patch Result"]
+        if status == "applied":
+            lines.append(f"- Applied `{operation}` to: {file_text}.")
+            lines.append(format_verification_line_en(verification_status, command, reason))
+        elif status == "rejected":
+            lines.append(f"- Patch was rejected by the user: {file_text}.")
+        elif status == "timeout":
+            lines.append(f"- Patch approval timed out: {file_text}.")
+        elif status == "denied":
+            lines.append(f"- Patch was denied by policy: {reason}.")
+        else:
+            lines.append(f"- Patch did not apply: {reason or status}.")
+        return "\n".join(lines)
+
+    lines = ["Patch 结果"]
+    if status == "applied":
+        lines.append(f"- 已执行 `{operation}`，文件: {file_text}。")
+        lines.append(format_verification_line_zh(verification_status, command, reason))
+    elif status == "rejected":
+        lines.append(f"- 用户拒绝应用 patch，文件: {file_text}。")
+    elif status == "timeout":
+        lines.append(f"- patch 等待确认超时，文件: {file_text}。")
+    elif status == "denied":
+        lines.append(f"- 策略拒绝写入: {reason}。")
+    else:
+        lines.append(f"- patch 未应用: {reason or status}。")
+    return "\n".join(lines)
+
+
+def format_verification_line_zh(status: str, command: str, reason: str) -> str:
+    if status == "passed":
+        return f"- 验证通过: `{command}`。"
+    if status == "failed":
+        return f"- 验证失败: `{command}`。"
+    if status == "skipped":
+        return f"- 验证跳过: {reason or '未发现可自动运行的测试命令'}。"
+    return "- 验证未运行。"
+
+
+def format_verification_line_en(status: str, command: str, reason: str) -> str:
+    if status == "passed":
+        return f"- Verification passed: `{command}`."
+    if status == "failed":
+        return f"- Verification failed: `{command}`."
+    if status == "skipped":
+        return f"- Verification skipped: {reason or 'no test command detected'}."
+    return "- Verification did not run."
 
 
 def review_observation_text(observations: list[dict[str, Any]]) -> str:
@@ -764,55 +830,55 @@ def detect_shell_request(message: str) -> str | None:
     return None
 
 
-async def propose_append_patch(session: Session, request: MessageRequest, path: str, text: str) -> None:
+async def propose_append_patch(session: Session, request: MessageRequest, path: str, text: str) -> dict[str, Any]:
     if request.mode == "review":
         await emit_patch_write_denied(session, request)
-        return
+        return patch_outcome("denied", "append", [], reason=localized(request.language, "review 模式禁止写入", "review mode forbids writes"))
 
     try:
         project_config = load_project_config(Path(request.workspace))
         proposal = create_append_patch(Path(request.workspace), path, text, protected_paths=project_config.protected_paths)
     except (ToolError, UnicodeDecodeError) as exc:
         await emit_patch_generation_error(session, str(exc))
-        return
+        return patch_outcome("error", "append", [], reason=str(exc))
 
-    await propose_patch(session, request, proposal, operation="append")
+    return await propose_patch(session, request, proposal, operation="append")
 
 
-async def propose_replace_patch(session: Session, request: MessageRequest, path: str, old_text: str, new_text: str) -> None:
+async def propose_replace_patch(session: Session, request: MessageRequest, path: str, old_text: str, new_text: str) -> dict[str, Any]:
     if request.mode == "review":
         await emit_patch_write_denied(session, request)
-        return
+        return patch_outcome("denied", "replace", [], reason=localized(request.language, "review 模式禁止写入", "review mode forbids writes"))
 
     try:
         project_config = load_project_config(Path(request.workspace))
         proposal = create_replace_patch(Path(request.workspace), path, old_text, new_text, protected_paths=project_config.protected_paths)
     except (ToolError, UnicodeDecodeError) as exc:
         await emit_patch_generation_error(session, str(exc))
-        return
+        return patch_outcome("error", "replace", [], reason=str(exc))
 
-    await propose_patch(session, request, proposal, operation="replace")
+    return await propose_patch(session, request, proposal, operation="replace")
 
 
-async def propose_create_patch(session: Session, request: MessageRequest, path: str, content: str) -> None:
+async def propose_create_patch(session: Session, request: MessageRequest, path: str, content: str) -> dict[str, Any]:
     if request.mode == "review":
         await emit_patch_write_denied(session, request)
-        return
+        return patch_outcome("denied", "create", [], reason=localized(request.language, "review 模式禁止写入", "review mode forbids writes"))
 
     try:
         project_config = load_project_config(Path(request.workspace))
         proposal = create_file_patch(Path(request.workspace), path, content, protected_paths=project_config.protected_paths)
     except (ToolError, UnicodeDecodeError) as exc:
         await emit_patch_generation_error(session, str(exc))
-        return
+        return patch_outcome("error", "create", [], reason=str(exc))
 
-    await propose_patch(session, request, proposal, operation="create")
+    return await propose_patch(session, request, proposal, operation="create")
 
 
-async def propose_patch(session: Session, request: MessageRequest, proposal: PatchProposal, operation: str) -> None:
+async def propose_patch(session: Session, request: MessageRequest, proposal: PatchProposal, operation: str) -> dict[str, Any]:
     if request.mode == "review":
         await emit_patch_write_denied(session, request)
-        return
+        return patch_outcome("denied", operation, [proposal.path], reason=localized(request.language, "review 模式禁止写入", "review mode forbids writes"))
 
     approval = session.create_approval(
         "patch",
@@ -871,7 +937,7 @@ async def propose_patch(session: Session, request: MessageRequest, proposal: Pat
                 "reason": localized(request.language, "等待确认超时", "approval timed out"),
             }
         )
-        return
+        return patch_outcome("timeout", operation, [proposal.path], approval_id=approval.approval_id, reason="approval timed out")
     if not accepted:
         audit.record(
             "patch.rejected",
@@ -886,7 +952,7 @@ async def propose_patch(session: Session, request: MessageRequest, proposal: Pat
                 "reason": localized(request.language, "用户拒绝修改", "user rejected the patch"),
             }
         )
-        return
+        return patch_outcome("rejected", operation, [proposal.path], approval_id=approval.approval_id, reason="user rejected the patch")
 
     try:
         project_config = load_project_config(Path(request.workspace))
@@ -907,7 +973,7 @@ async def propose_patch(session: Session, request: MessageRequest, proposal: Pat
                 "requires_approval": True,
             }
         )
-        return
+        return patch_outcome("error", operation, [proposal.path], approval_id=approval.approval_id, reason=str(exc))
 
     audit.record(
         "patch.applied",
@@ -922,10 +988,11 @@ async def propose_patch(session: Session, request: MessageRequest, proposal: Pat
             "files": [proposal.path],
         }
     )
-    await run_post_patch_verification(session, request)
+    verification = await run_post_patch_verification(session, request)
+    return patch_outcome("applied", operation, [proposal.path], approval_id=approval.approval_id, verification=verification)
 
 
-async def run_post_patch_verification(session: Session, request: MessageRequest) -> ToolResult | None:
+async def run_post_patch_verification(session: Session, request: MessageRequest) -> dict[str, Any]:
     command = detect_test_command(Path(request.workspace))
     if command is None:
         await session.events.put(
@@ -934,7 +1001,7 @@ async def run_post_patch_verification(session: Session, request: MessageRequest)
                 "reason": localized(request.language, "未发现可自动运行的测试命令", "no test command detected"),
             }
         )
-        return None
+        return {"status": "skipped", "reason": "no test command detected"}
 
     await session.events.put(
         {
@@ -963,7 +1030,34 @@ async def run_post_patch_verification(session: Session, request: MessageRequest)
             "risk_level": result.risk_level,
         }
     )
-    return result
+    return {
+        "status": "passed" if result.success else "failed",
+        "command": command,
+        "risk_level": result.risk_level,
+        "requires_approval": result.requires_approval,
+        "text": truncate_for_model(result.text or result.error, limit=4_000),
+    }
+
+
+def patch_outcome(
+    status: str,
+    operation: str,
+    files: list[str],
+    *,
+    approval_id: str = "",
+    reason: str = "",
+    verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "tool": "apply_patch",
+        "success": status == "applied",
+        "status": status,
+        "operation": operation,
+        "files": files,
+        "approval_id": approval_id,
+        "reason": reason,
+        "verification": verification or {},
+    }
 
 
 async def emit_patch_write_denied(session: Session, request: MessageRequest) -> None:
