@@ -31,6 +31,12 @@ RISKY_CODE_PATTERNS = [
     (re.compile(r"subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True"), "subprocess shell=True 需要额外审查命令注入风险。", "risky_shell_true"),
     (re.compile(r"child_process\.exec\s*\("), "child_process.exec 会通过 shell 执行命令，请确认输入不可被用户控制。", "risky_child_exec"),
     (re.compile(r"verify\s*=\s*False"), "TLS 校验被关闭，请确认只用于测试环境。", "risky_tls_verify"),
+    (re.compile(r"\.innerHTML\s*="), "直接写 innerHTML 可能引入 XSS，请优先使用安全渲染或显式净化。", "risky_inner_html"),
+    (re.compile(r"\bdangerouslySetInnerHTML\b"), "React dangerouslySetInnerHTML 需要确认输入已净化。", "risky_dangerously_set_inner_html"),
+    (re.compile(r"\byaml\.load\s*\((?![^)]*(SafeLoader|safe_load))"), "yaml.load 默认可能构造任意对象，请使用 yaml.safe_load 或 SafeLoader。", "risky_yaml_load"),
+    (re.compile(r"\bpickle\.(load|loads)\s*\("), "pickle 反序列化不可信输入会执行任意代码，请改用安全格式。", "risky_pickle"),
+    (re.compile(r"\bInsecureSkipVerify\s*:\s*true\b"), "Go TLS InsecureSkipVerify 会跳过证书校验，请确认只用于测试环境。", "risky_go_insecure_tls"),
+    (re.compile(r"\bchmod\s+777\b|os\.Chmod\([^,]+,\s*0?777\)"), "chmod 777 会授予过宽权限，请使用最小权限。", "risky_chmod_777"),
 ]
 
 DEBUG_PATTERNS = [
@@ -137,6 +143,42 @@ REVIEW_RULES = [
         severity="medium",
         title="关闭 TLS 校验",
         description="TLS 校验被关闭，需要确认只用于测试环境。",
+    ),
+    ReviewRule(
+        rule_id="risky_inner_html",
+        severity="medium",
+        title="直接写 innerHTML",
+        description="直接写 innerHTML 可能引入 XSS，需要确认内容已净化。",
+    ),
+    ReviewRule(
+        rule_id="risky_dangerously_set_inner_html",
+        severity="medium",
+        title="使用 dangerouslySetInnerHTML",
+        description="React dangerouslySetInnerHTML 需要确认输入已净化。",
+    ),
+    ReviewRule(
+        rule_id="risky_yaml_load",
+        severity="medium",
+        title="不安全 YAML 加载",
+        description="yaml.load 默认可能构造任意对象，请使用 yaml.safe_load 或 SafeLoader。",
+    ),
+    ReviewRule(
+        rule_id="risky_pickle",
+        severity="medium",
+        title="不安全 pickle 反序列化",
+        description="pickle 反序列化不可信输入会执行任意代码。",
+    ),
+    ReviewRule(
+        rule_id="risky_go_insecure_tls",
+        severity="medium",
+        title="Go TLS 跳过证书校验",
+        description="InsecureSkipVerify 会跳过证书校验，需要确认只用于测试环境。",
+    ),
+    ReviewRule(
+        rule_id="risky_chmod_777",
+        severity="medium",
+        title="过宽文件权限",
+        description="chmod 777 会授予过宽权限，请使用最小权限。",
     ),
     ReviewRule(
         rule_id="large_diff",

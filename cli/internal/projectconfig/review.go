@@ -11,18 +11,24 @@ import (
 )
 
 var knownReviewRules = map[string]bool{
-	"sensitive_path":    true,
-	"secret_added":      true,
-	"deleted_test":      true,
-	"risky_eval":        true,
-	"risky_exec":        true,
-	"risky_os_system":   true,
-	"risky_shell_true":  true,
-	"risky_child_exec":  true,
-	"risky_tls_verify":  true,
-	"large_diff":        true,
-	"task_marker_added": true,
-	"debug_output":      true,
+	"sensitive_path":                   true,
+	"secret_added":                     true,
+	"deleted_test":                     true,
+	"risky_eval":                       true,
+	"risky_exec":                       true,
+	"risky_os_system":                  true,
+	"risky_shell_true":                 true,
+	"risky_child_exec":                 true,
+	"risky_tls_verify":                 true,
+	"risky_inner_html":                 true,
+	"risky_dangerously_set_inner_html": true,
+	"risky_yaml_load":                  true,
+	"risky_pickle":                     true,
+	"risky_go_insecure_tls":            true,
+	"risky_chmod_777":                  true,
+	"large_diff":                       true,
+	"task_marker_added":                true,
+	"debug_output":                     true,
 }
 
 func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool) (string, []string, error) {

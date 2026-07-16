@@ -118,13 +118,13 @@ func TestSetReviewRuleDisabledRejectsUnknownRule(t *testing.T) {
 func TestKnownReviewRuleIDs(t *testing.T) {
 	rules := KnownReviewRuleIDs()
 
-	if len(rules) != 12 {
+	if len(rules) != 18 {
 		t.Fatalf("rules = %#v", rules)
 	}
 	if rules[0] != "debug_output" {
 		t.Fatalf("rules not sorted: %#v", rules)
 	}
-	if !contains(rules, "large_diff") || !contains(rules, "secret_added") {
+	if !contains(rules, "large_diff") || !contains(rules, "secret_added") || !contains(rules, "risky_inner_html") {
 		t.Fatalf("missing expected rules: %#v", rules)
 	}
 }

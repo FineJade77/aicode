@@ -44,6 +44,59 @@ def test_review_detects_risky_code_and_debug_output() -> None:
     assert "risky_eval" in rules
 
 
+def test_review_detects_frontend_xss_patterns() -> None:
+    diff = """diff --git a/app/view.tsx b/app/view.tsx
+--- a/app/view.tsx
++++ b/app/view.tsx
+@@ -1 +1,3 @@
+ export function View(props) {
++  node.innerHTML = props.html
++  return <div dangerouslySetInnerHTML={{__html: props.html}} />
+ }
+"""
+
+    report = review_diff_text(diff)
+    rules = {finding.rule for finding in report.findings}
+
+    assert "risky_inner_html" in rules
+    assert "risky_dangerously_set_inner_html" in rules
+
+
+def test_review_detects_python_deserialization_patterns() -> None:
+    diff = """diff --git a/app/config.py b/app/config.py
+--- a/app/config.py
++++ b/app/config.py
+@@ -1 +1,3 @@
+ def load_config(raw):
++    data = yaml.load(raw)
++    return pickle.loads(raw)
+"""
+
+    report = review_diff_text(diff)
+    rules = {finding.rule for finding in report.findings}
+
+    assert "risky_yaml_load" in rules
+    assert "risky_pickle" in rules
+
+
+def test_review_detects_go_tls_and_permission_patterns() -> None:
+    diff = """diff --git a/server/main.go b/server/main.go
+--- a/server/main.go
++++ b/server/main.go
+@@ -1 +1,3 @@
+ func main() {
++    cfg := &tls.Config{InsecureSkipVerify: true}
++    os.Chmod(path, 0777)
+ }
+"""
+
+    report = review_diff_text(diff)
+    rules = {finding.rule for finding in report.findings}
+
+    assert "risky_go_insecure_tls" in rules
+    assert "risky_chmod_777" in rules
+
+
 def test_review_formats_clean_diff() -> None:
     diff = """diff --git a/README.md b/README.md
 --- a/README.md
