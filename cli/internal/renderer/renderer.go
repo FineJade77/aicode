@@ -287,6 +287,15 @@ func RenderEvent(event map[string]any) {
 		}
 	case "plan.updated":
 		fmt.Printf("计划更新: %s -> %s\n", stringValue(event["item_id"]), stringValue(event["status"]))
+	case "agent.step":
+		action := stringValue(event["action"])
+		if action == "tool" {
+			fmt.Printf("Agent step %v: %s (%s)\n", event["index"], stringValue(event["tool"]), stringValue(event["source"]))
+		} else {
+			fmt.Printf("Agent step %v: finish (%s)\n", event["index"], stringValue(event["source"]))
+		}
+	case "agent.loop.max_steps":
+		fmt.Println(stringValue(event["message"]))
 	case "tool.started":
 		fmt.Printf("工具: %s\n", stringValue(event["tool"]))
 	case "tool.output":

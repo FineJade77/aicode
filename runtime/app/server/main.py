@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.agent.steps import AgentStep, allowed_tool_names, build_planner_messages, choose_rule_step, observation_seen, parse_agent_step, step_key
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import settings
 from app.events.sse import encode_sse
@@ -192,29 +193,19 @@ def require_session(session_id: str) -> Session:
 
 
 async def run_agent(session: Session, request: MessageRequest) -> None:
-    observations: list[dict[str, Any]] = []
     plan_items = [
-        {"id": "scan", "text": localized(request.language, "扫描当前工作区", "Scan current workspace"), "status": "pending"},
-        {"id": "context", "text": localized(request.language, "调用真实工具收集上下文", "Gather context with real tools"), "status": "pending"},
+        {"id": "loop", "text": localized(request.language, "执行 Agent 工具循环", "Run agent tool loop"), "status": "pending"},
         {"id": "summary", "text": localized(request.language, "输出阶段性结果", "Return phase summary"), "status": "pending"},
     ]
     await session.events.put({"type": "plan.created", "items": plan_items})
 
     await asyncio.sleep(0.05)
-    await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "in_progress"})
-    observations.append(observe_tool("list_files", await execute_tool(session, request, "list_files", {"path": ".", "max_depth": 1, "limit": 40})))
-    observations.append(observe_tool("detect_project", await execute_tool(session, request, "detect_project", {})))
-    observations.append(observe_tool("git_status", await execute_tool(session, request, "git_status", {})))
-    await session.events.put({"type": "plan.updated", "item_id": "scan", "status": "completed"})
-
-    await asyncio.sleep(0.05)
-    await session.events.put({"type": "plan.updated", "item_id": "context", "status": "in_progress"})
-    for tool_name, args in choose_context_tools(request):
-        observations.append(observe_tool(tool_name, await execute_tool(session, request, tool_name, args)))
+    await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "in_progress"})
+    observations = await run_context_loop(session, request)
     append_request = detect_append_request(request.message)
     if append_request is not None:
         await propose_append_patch(session, request, append_request[0], append_request[1])
-    await session.events.put({"type": "plan.updated", "item_id": "context", "status": "completed"})
+    await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "completed"})
 
     purpose = model_purpose_for_mode(request.mode)
     response = await model_router.complete(
@@ -224,6 +215,92 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
             max_tokens=900 if purpose == "reviewer" else 500,
         )
     )
+    await record_model_usage(session, response, purpose)
+    await session.events.put({"type": "plan.updated", "item_id": "summary", "status": "completed"})
+    final_summary = final_summary_text(request, observations, response.text, response.provider)
+    audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode, "purpose": purpose})
+    await session.events.put(
+        {
+            "type": "final",
+            "summary": final_summary,
+        }
+    )
+
+
+async def run_context_loop(session: Session, request: MessageRequest, max_steps: int = 8) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    context_tools = choose_context_tools(request)
+
+    for index in range(1, max_steps + 1):
+        step = choose_rule_step(request.message, request.mode, observations, context_tools)
+        if step.action == "finish":
+            model_step = await choose_model_step(session, request, observations)
+            if model_step is not None and should_use_model_step(model_step, observations):
+                step = model_step
+
+        await emit_agent_step(session, step, index)
+        if step.action == "finish":
+            break
+
+        result = await execute_tool(session, request, step.tool, step.args)
+        observations.append(observe_tool(step.tool, step.args, result))
+    else:
+        await session.events.put(
+            {
+                "type": "agent.loop.max_steps",
+                "max_steps": max_steps,
+                "message": localized(request.language, "Agent 工具循环达到步数上限。", "Agent tool loop reached the step limit."),
+            }
+        )
+
+    return observations
+
+
+async def choose_model_step(session: Session, request: MessageRequest, observations: list[dict[str, Any]]) -> AgentStep | None:
+    if not planner_model_available():
+        return None
+
+    response = await model_router.complete(
+        ModelRequest(
+            purpose="planner",
+            messages=build_planner_messages(
+                language=request.language,
+                message=request.message,
+                mode=request.mode,
+                workspace=request.workspace,
+                observations=observations,
+            ),
+            temperature=0,
+            max_tokens=260,
+        )
+    )
+    await record_model_usage(session, response, "planner")
+    return parse_agent_step(response.text, allowed_tool_names(request.mode))
+
+
+def planner_model_available() -> bool:
+    is_configured = getattr(model_router.primary, "is_configured", None)
+    return bool(is_configured()) if callable(is_configured) else True
+
+
+def should_use_model_step(step: AgentStep, observations: list[dict[str, Any]]) -> bool:
+    if step.action == "finish":
+        return True
+    return not observation_seen(observations, step.tool, step.args)
+
+
+async def emit_agent_step(session: Session, step: AgentStep, index: int) -> None:
+    payload = step.to_dict()
+    audit.record(
+        "agent.step",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={"index": index, **payload},
+    )
+    await session.events.put({"type": "agent.step", "index": index, **payload})
+
+
+async def record_model_usage(session: Session, response, purpose: str) -> None:
     audit.record(
         "usage.recorded",
         session_id=session.session_id,
@@ -246,15 +323,6 @@ async def run_agent(session: Session, request: MessageRequest) -> None:
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "estimated_cost": response.estimated_cost,
-        }
-    )
-    await session.events.put({"type": "plan.updated", "item_id": "summary", "status": "completed"})
-    final_summary = final_summary_text(request, observations, response.text, response.provider)
-    audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode, "purpose": purpose})
-    await session.events.put(
-        {
-            "type": "final",
-            "summary": final_summary,
         }
     )
 
@@ -334,9 +402,11 @@ async def execute_tool(session: Session, request: MessageRequest, name: str, arg
     return result
 
 
-def observe_tool(name: str, result: ToolResult) -> dict[str, Any]:
+def observe_tool(name: str, args: dict[str, Any], result: ToolResult) -> dict[str, Any]:
     return {
         "tool": name,
+        "args": args,
+        "step_key": step_key(name, args),
         "success": result.success,
         "risk_level": result.risk_level,
         "requires_approval": result.requires_approval,
@@ -409,8 +479,8 @@ def final_summary_text(request: MessageRequest, observations: list[dict[str, Any
     if provider == "stub" or not cleaned:
         return localized(
             request.language,
-            "Phase 1 工具系统已连通。Runtime 已通过结构化工具读取工作区、检查 git 状态，并支持写入前 inline diff 确认。",
-            "Phase 1 tool system is connected. The runtime used structured tools to inspect the workspace, check git status, and supports inline diff approval before writes.",
+            "Agent 工具循环已连通。Runtime 已通过结构化步骤读取工作区、检查 git 状态，并支持写入前 inline diff 确认。",
+            "Agent tool loop is connected. The runtime used structured steps to inspect the workspace, check git status, and supports inline diff approval before writes.",
         )
     return cleaned
 

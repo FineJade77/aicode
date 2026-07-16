@@ -14,6 +14,7 @@
 
 - CLI 自动启动/停止 Runtime daemon
 - HTTP + SSE 事件流
+- Agent 工具循环：规则 planner 保底，模型 planner 在 provider 已配置时参与下一步工具选择
 - 结构化工具系统
 - Policy Engine v1
 - `list_files`
@@ -50,6 +51,7 @@ go run ./cli "解释当前目录"
 ```
 
 CLI 会自动启动 Python Runtime daemon，并通过 SSE 接收事件。
+Runtime 会按计划执行工具循环：先收集工作区、项目和 git 状态，再根据请求选择只读分析、测试或 diff 工具；所有写入仍必须经过 inline diff 确认。
 
 也可以手动启动 Runtime：
 
