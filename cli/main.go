@@ -41,7 +41,7 @@ func run(args []string) error {
 	case "daemon":
 		return runDaemonCommand(cfg, args[1:])
 	case "config":
-		return runConfigCommand(args[1:])
+		return runConfigCommand(cfg, args[1:])
 	case "sessions":
 		return runSimpleGet(cfg, "/v1/sessions")
 	case "usage":
@@ -92,6 +92,7 @@ func printHelp() {
   aicode config set ui.language en-US
   aicode config review disable large_diff
   aicode config review enable large_diff
+  aicode config review list
   aicode config review prune
   aicode daemon start
   aicode daemon stop
@@ -130,7 +131,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 	}
 }
 
-func runConfigCommand(args []string) error {
+func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("用法: aicode config <init|show|set|review>")
 	}
@@ -161,18 +162,21 @@ func runConfigCommand(args []string) error {
 		fmt.Printf("已更新 %s = %s (%s)\n", args[1], args[2], path)
 		return nil
 	case "review":
-		return runConfigReviewCommand(args[1:])
+		return runConfigReviewCommand(cfg, args[1:])
 	default:
 		return fmt.Errorf("未知 config 命令: %s", args[0])
 	}
 }
 
-func runConfigReviewCommand(args []string) error {
+func runConfigReviewCommand(cfg config.Config, args []string) error {
+	if len(args) == 1 && args[0] == "list" {
+		return runConfigReviewList(cfg)
+	}
 	if len(args) == 1 && args[0] == "prune" {
 		return runConfigReviewPrune()
 	}
 	if len(args) != 2 {
-		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review prune")
+		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review list|prune")
 	}
 
 	root, err := workspace.Detect()
@@ -189,7 +193,7 @@ func runConfigReviewCommand(args []string) error {
 	case "enable":
 		disabled = false
 	default:
-		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review prune")
+		return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> 或 aicode config review list|prune")
 	}
 
 	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled)
@@ -206,6 +210,15 @@ func runConfigReviewCommand(args []string) error {
 		return nil
 	}
 	fmt.Printf("当前 disabledRules: %s\n", strings.Join(rules, ", "))
+	return nil
+}
+
+func runConfigReviewList(cfg config.Config) error {
+	value, err := fetchReviewRules(cfg)
+	if err != nil {
+		return err
+	}
+	renderer.PrintReviewRulesTable(value)
 	return nil
 }
 
@@ -256,11 +269,28 @@ func runUsage(cfg config.Config, args []string) error {
 }
 
 func runReviewRules(cfg config.Config) error {
-	root, err := workspace.Detect()
+	value, err := fetchReviewRules(cfg)
 	if err != nil {
 		return err
 	}
-	return runSimpleGet(cfg, "/v1/review/rules?workspace="+url.QueryEscape(root.Path))
+	renderer.PrintJSON(value)
+	return nil
+}
+
+func fetchReviewRules(cfg config.Config) (any, error) {
+	root, err := workspace.Detect()
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureDaemon(cfg); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	api := client.New(cfg.Runtime.URL)
+	return api.GetJSON(ctx, "/v1/review/rules?workspace="+url.QueryEscape(root.Path))
 }
 
 func runSimpleGet(cfg config.Config, path string) error {

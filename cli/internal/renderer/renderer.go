@@ -1,9 +1,11 @@
 package renderer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"text/tabwriter"
 )
 
 func PrintJSON(value any) {
@@ -13,6 +15,57 @@ func PrintJSON(value any) {
 		return
 	}
 	fmt.Println(string(encoded))
+}
+
+func PrintReviewRulesTable(value any) {
+	fmt.Print(ReviewRulesTable(value))
+}
+
+func ReviewRulesTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Review 配置\n")
+	if config, ok := root["effective_config"].(map[string]any); ok {
+		out.WriteString(fmt.Sprintf("disabledRules: %s\n", joinStringList(config["disabled_rules"])))
+		out.WriteString(fmt.Sprintf("largeDiffThreshold: %v\n", config["large_diff_threshold"]))
+		out.WriteString(fmt.Sprintf("maxFindings: %v\n", config["max_findings"]))
+	}
+
+	if warnings, ok := root["config_warnings"].([]any); ok && len(warnings) > 0 {
+		out.WriteString("\nWarnings\n")
+		for _, item := range warnings {
+			warning, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			out.WriteString(fmt.Sprintf("- %s: %s\n", stringValue(warning["rule"]), stringValue(warning["message"])))
+		}
+	}
+
+	out.WriteString("\nReview Rules\n")
+	var table bytes.Buffer
+	writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "STATE\tSEVERITY\tRULE\tTITLE")
+	if rules, ok := root["rules"].([]any); ok {
+		for _, item := range rules {
+			rule, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			state := "disabled"
+			if boolValue(rule["enabled"]) {
+				state = "enabled"
+			}
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", state, stringValue(rule["severity"]), stringValue(rule["id"]), stringValue(rule["title"]))
+		}
+	}
+	writer.Flush()
+	out.WriteString(table.String())
+	return out.String()
 }
 
 func RenderEvent(event map[string]any) {
@@ -68,6 +121,25 @@ func usageLine(event map[string]any) string {
 		purpose = "unknown"
 	}
 	return fmt.Sprintf("用量: purpose=%s model=%s input=%v output=%v", purpose, stringValue(event["model"]), event["input_tokens"], event["output_tokens"])
+}
+
+func joinStringList(value any) string {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, stringValue(item))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func boolValue(value any) bool {
+	if v, ok := value.(bool); ok {
+		return v
+	}
+	return false
 }
 
 func stringField(m map[string]any, key string) string {
