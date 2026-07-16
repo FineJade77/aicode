@@ -50,7 +50,7 @@ func run(args []string) error {
 	case "usage":
 		return runUsage(cfg, args[1:])
 	case "models":
-		return runSimpleGet(cfg, "/v1/models/routes")
+		return runModels(cfg, args[1:])
 	case "review-rules":
 		return runReviewRules(cfg)
 	case "resume":
@@ -89,10 +89,10 @@ func printHelp() {
   aicode test
   aicode sessions
   aicode resume --last
-  aicode usage
-  aicode usage --today
-  aicode usage --session <session_id>
-  aicode models
+  aicode usage [--json]
+  aicode usage --today [--json]
+  aicode usage --session <session_id> [--json]
+  aicode models [--json]
   aicode config init
   aicode config show
   aicode config list
@@ -358,16 +358,62 @@ func runResume(cfg config.Config, args []string) error {
 }
 
 func runUsage(cfg config.Config, args []string) error {
-	if len(args) == 0 {
-		return runSimpleGet(cfg, "/v1/usage")
+	path, jsonOutput, err := usagePath(args)
+	if err != nil {
+		return err
 	}
-	if len(args) == 1 && args[0] == "--today" {
-		return runSimpleGet(cfg, "/v1/usage?today=true")
+	value, err := fetchRuntimeJSON(cfg, path)
+	if err != nil {
+		return err
 	}
-	if len(args) == 2 && args[0] == "--session" {
-		return runSimpleGet(cfg, "/v1/usage/sessions/"+args[1])
+	if jsonOutput {
+		renderer.PrintJSON(value)
+		return nil
 	}
-	return fmt.Errorf("用法: aicode usage [--today|--session <session_id>]")
+	renderer.PrintUsageSummary(value)
+	return nil
+}
+
+func usagePath(args []string) (string, bool, error) {
+	jsonOutput := false
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOutput = true
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	if len(filtered) == 0 {
+		return "/v1/usage", jsonOutput, nil
+	}
+	if len(filtered) == 1 && filtered[0] == "--today" {
+		return "/v1/usage?today=true", jsonOutput, nil
+	}
+	if len(filtered) == 2 && filtered[0] == "--session" {
+		return "/v1/usage/sessions/" + filtered[1], jsonOutput, nil
+	}
+	return "", false, fmt.Errorf("用法: aicode usage [--today|--session <session_id>] [--json]")
+}
+
+func runModels(cfg config.Config, args []string) error {
+	jsonOutput := false
+	if len(args) == 1 && args[0] == "--json" {
+		jsonOutput = true
+	} else if len(args) != 0 {
+		return fmt.Errorf("用法: aicode models [--json]")
+	}
+
+	value, err := fetchRuntimeJSON(cfg, "/v1/models/routes")
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		renderer.PrintJSON(value)
+		return nil
+	}
+	renderer.PrintModelRoutes(value)
+	return nil
 }
 
 func runReviewRules(cfg config.Config) error {
@@ -429,20 +475,24 @@ func reviewRuleIDs(value any) []string {
 }
 
 func runSimpleGet(cfg config.Config, path string) error {
-	if err := ensureDaemon(cfg); err != nil {
+	value, err := fetchRuntimeJSON(cfg, path)
+	if err != nil {
 		return err
+	}
+	renderer.PrintJSON(value)
+	return nil
+}
+
+func fetchRuntimeJSON(cfg config.Config, path string) (any, error) {
+	if err := ensureDaemon(cfg); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
 	api := client.New(cfg.Runtime.URL)
-	value, err := api.GetJSON(ctx, path)
-	if err != nil {
-		return err
-	}
-	renderer.PrintJSON(value)
-	return nil
+	return api.GetJSON(ctx, path)
 }
 
 func runAgent(cfg config.Config, mode string, prompt string) error {

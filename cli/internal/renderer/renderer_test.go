@@ -58,6 +58,98 @@ func TestReviewRulesMarkdown(t *testing.T) {
 	assertContains(t, doc, "| enabled | high | `secret_added` | 新增内容匹配凭证 |")
 }
 
+func TestModelRoutesTable(t *testing.T) {
+	table := ModelRoutesTable(map[string]any{
+		"provider": map[string]any{
+			"primary":            "openai_compatible",
+			"primary_configured": false,
+			"fallback":           "stub",
+		},
+		"routes": map[string]any{
+			"reviewer":   "gpt-5",
+			"summarizer": "gpt-5-mini",
+		},
+		"openai_compatible": map[string]any{
+			"base_url":        "https://api.example.com/v1",
+			"api_key_env":     "OPENAI_API_KEY",
+			"timeout_seconds": float64(12.5),
+		},
+		"pricing": map[string]any{
+			"currency": "USD",
+			"unit":     "per_1m_tokens",
+			"models": []any{
+				map[string]any{
+					"provider":      "openai_compatible",
+					"model":         "gpt-5",
+					"input_per_1m":  float64(1.25),
+					"output_per_1m": float64(10),
+				},
+			},
+		},
+	})
+
+	assertContains(t, table, "Model Routes")
+	assertContains(t, table, "primary: openai_compatible (configured: false)")
+	assertContains(t, table, "reviewer")
+	assertContains(t, table, "gpt-5")
+	assertContains(t, table, "OpenAI-compatible")
+	assertContains(t, table, "base_url: https://api.example.com/v1")
+	assertContains(t, table, "Pricing (USD / per_1m_tokens)")
+	assertContains(t, table, "openai_compatible")
+}
+
+func TestUsageSummaryTable(t *testing.T) {
+	table := UsageSummaryTable(map[string]any{
+		"record_count":        float64(2),
+		"total_input_tokens":  float64(30),
+		"total_output_tokens": float64(15),
+		"total_tokens":        float64(45),
+		"estimated_cost":      float64(0.03),
+		"audit_path":          "/tmp/audit.jsonl",
+		"filters": map[string]any{
+			"session_id": "sess_1",
+			"date":       "2026-07-16",
+		},
+		"by_purpose": map[string]any{
+			"summarizer": map[string]any{
+				"record_count":   float64(1),
+				"input_tokens":   float64(10),
+				"output_tokens":  float64(5),
+				"total_tokens":   float64(15),
+				"estimated_cost": float64(0.01),
+			},
+		},
+		"by_model": map[string]any{
+			"stub": map[string]any{
+				"record_count":   float64(1),
+				"input_tokens":   float64(10),
+				"output_tokens":  float64(5),
+				"total_tokens":   float64(15),
+				"estimated_cost": float64(0.01),
+			},
+		},
+		"by_provider": map[string]any{
+			"stub": map[string]any{
+				"record_count":   float64(1),
+				"input_tokens":   float64(10),
+				"output_tokens":  float64(5),
+				"total_tokens":   float64(15),
+				"estimated_cost": float64(0.01),
+			},
+		},
+	})
+
+	assertContains(t, table, "Usage Summary")
+	assertContains(t, table, "records: 2")
+	assertContains(t, table, "estimated_cost: $0.03")
+	assertContains(t, table, "session_id: sess_1")
+	assertContains(t, table, "By Purpose")
+	assertContains(t, table, "summarizer")
+	assertContains(t, table, "$0.01")
+	assertContains(t, table, "By Model")
+	assertContains(t, table, "By Provider")
+}
+
 func reviewRulesFixture() map[string]any {
 	return map[string]any{
 		"effective_config": map[string]any{

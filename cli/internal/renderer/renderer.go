@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"text/tabwriter"
 )
@@ -23,6 +24,96 @@ func PrintReviewRulesTable(value any) {
 
 func PrintReviewRulesMarkdown(value any) {
 	fmt.Print(ReviewRulesMarkdown(value))
+}
+
+func PrintModelRoutes(value any) {
+	fmt.Print(ModelRoutesTable(value))
+}
+
+func PrintUsageSummary(value any) {
+	fmt.Print(UsageSummaryTable(value))
+}
+
+func ModelRoutesTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Model Routes\n")
+	if provider, ok := root["provider"].(map[string]any); ok {
+		out.WriteString(fmt.Sprintf("primary: %s (configured: %v)\n", stringValue(provider["primary"]), provider["primary_configured"]))
+		out.WriteString(fmt.Sprintf("fallback: %s\n", stringValue(provider["fallback"])))
+	}
+
+	out.WriteString("\nRoutes\n")
+	writeKeyValueTable(&out, root["routes"], "ROUTE", "MODEL")
+
+	if openai, ok := root["openai_compatible"].(map[string]any); ok {
+		out.WriteString("\nOpenAI-compatible\n")
+		out.WriteString(fmt.Sprintf("base_url: %s\n", stringValue(openai["base_url"])))
+		out.WriteString(fmt.Sprintf("api_key_env: %s\n", stringValue(openai["api_key_env"])))
+		out.WriteString(fmt.Sprintf("timeout_seconds: %v\n", openai["timeout_seconds"]))
+	}
+
+	if pricing, ok := root["pricing"].(map[string]any); ok {
+		out.WriteString(fmt.Sprintf("\nPricing (%s / %s)\n", stringValue(pricing["currency"]), stringValue(pricing["unit"])))
+		var table bytes.Buffer
+		writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(writer, "PROVIDER\tMODEL\tINPUT/1M\tOUTPUT/1M")
+		if models, ok := pricing["models"].([]any); ok {
+			for _, item := range models {
+				row, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				fmt.Fprintf(
+					writer,
+					"%s\t%s\t%v\t%v\n",
+					stringValue(row["provider"]),
+					stringValue(row["model"]),
+					row["input_per_1m"],
+					row["output_per_1m"],
+				)
+			}
+		}
+		writer.Flush()
+		out.WriteString(table.String())
+	}
+
+	return out.String()
+}
+
+func UsageSummaryTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Usage Summary\n")
+	out.WriteString(fmt.Sprintf("records: %v\n", root["record_count"]))
+	out.WriteString(fmt.Sprintf("input_tokens: %v\n", root["total_input_tokens"]))
+	out.WriteString(fmt.Sprintf("output_tokens: %v\n", root["total_output_tokens"]))
+	out.WriteString(fmt.Sprintf("total_tokens: %v\n", root["total_tokens"]))
+	out.WriteString(fmt.Sprintf("estimated_cost: $%s\n", stringValue(root["estimated_cost"])))
+	if filters, ok := root["filters"].(map[string]any); ok {
+		if sessionID := stringValue(filters["session_id"]); sessionID != "" {
+			out.WriteString(fmt.Sprintf("session_id: %s\n", sessionID))
+		}
+		if date := stringValue(filters["date"]); date != "" {
+			out.WriteString(fmt.Sprintf("date: %s\n", date))
+		}
+	}
+	if auditPath := stringValue(root["audit_path"]); auditPath != "" {
+		out.WriteString(fmt.Sprintf("audit_path: %s\n", auditPath))
+	}
+
+	writeUsageGroup(&out, "By Purpose", root["by_purpose"])
+	writeUsageGroup(&out, "By Model", root["by_model"])
+	writeUsageGroup(&out, "By Provider", root["by_provider"])
+	return out.String()
 }
 
 func ReviewRulesTable(value any) string {
@@ -121,6 +212,62 @@ func ReviewRulesMarkdown(value any) string {
 		}
 	}
 	return out.String()
+}
+
+func writeKeyValueTable(out *strings.Builder, value any, keyHeader string, valueHeader string) {
+	items, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var table bytes.Buffer
+	writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(writer, "%s\t%s\n", keyHeader, valueHeader)
+	for _, key := range keys {
+		fmt.Fprintf(writer, "%s\t%s\n", key, stringValue(items[key]))
+	}
+	writer.Flush()
+	out.WriteString(table.String())
+}
+
+func writeUsageGroup(out *strings.Builder, title string, value any) {
+	group, ok := value.(map[string]any)
+	if !ok || len(group) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(group))
+	for key := range group {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out.WriteString("\n" + title + "\n")
+	var table bytes.Buffer
+	writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "KEY\tRECORDS\tINPUT\tOUTPUT\tTOTAL\tCOST")
+	for _, key := range keys {
+		row, ok := group[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(
+			writer,
+			"%s\t%v\t%v\t%v\t%v\t$%s\n",
+			key,
+			row["record_count"],
+			row["input_tokens"],
+			row["output_tokens"],
+			row["total_tokens"],
+			stringValue(row["estimated_cost"]),
+		)
+	}
+	writer.Flush()
+	out.WriteString(table.String())
 }
 
 func RenderEvent(event map[string]any) {

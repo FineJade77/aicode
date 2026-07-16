@@ -70,6 +70,7 @@ go run ./cli test
 go run ./cli usage
 go run ./cli usage --today
 go run ./cli usage --session <session_id>
+go run ./cli usage --json
 go run ./cli "append README.md 一行新内容"
 ```
 
@@ -217,6 +218,7 @@ CLI 的用量事件会显示本次模型调用目的，例如 `purpose=reviewer`
 
 ```bash
 go run ./cli models
+go run ./cli models --json
 ```
 
 查看 CLI 本地生效配置：
@@ -261,6 +263,24 @@ export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25
 
 ```bash
 export AICODE_OPENAI_API_KEY="..."
+```
+
+## 用量统计
+
+`aicode usage` 默认输出可读表格，包含总 token、估算成本，以及按 purpose/model/provider 的分组汇总：
+
+```bash
+go run ./cli usage
+go run ./cli usage --today
+go run ./cli usage --session <session_id>
+```
+
+需要脚本处理时可切换为原始 JSON：
+
+```bash
+go run ./cli usage --json
+go run ./cli usage --today --json
+go run ./cli usage --session <session_id> --json
 ```
 
 ## 验证
