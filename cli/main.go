@@ -110,6 +110,10 @@ func printHelp() {
   aicode config review list
   aicode config review docs
   aicode config review prune
+  aicode config test set python3 -m pytest
+  aicode config test auto
+  aicode config test show
+  aicode config test unset
   aicode config workspace add api ../api
   aicode config workspace list
   aicode config workspace remove api
@@ -152,7 +156,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|review|workspace>")
+		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|review|test|workspace>")
 	}
 
 	switch args[0] {
@@ -211,6 +215,8 @@ func runConfigCommand(cfg config.Config, args []string) error {
 		return nil
 	case "review":
 		return runConfigReviewCommand(cfg, args[1:])
+	case "test":
+		return runConfigTestCommand(args[1:])
 	case "workspace":
 		return runConfigWorkspaceCommand(args[1:])
 	default:
@@ -383,6 +389,77 @@ func runConfigReviewPrune(cfg config.Config) error {
 
 func configReviewUsage() error {
 	return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> | set <largeDiffThreshold|maxFindings> <value> | unset <largeDiffThreshold|maxFindings> | list | docs | prune")
+}
+
+func runConfigTestCommand(args []string) error {
+	if len(args) == 1 && (args[0] == "show" || args[0] == "get") {
+		return runConfigTestShow()
+	}
+	if len(args) == 1 && args[0] == "auto" {
+		return runConfigTestSet("auto")
+	}
+	if len(args) >= 2 && args[0] == "set" {
+		return runConfigTestSet(strings.Join(args[1:], " "))
+	}
+	if len(args) == 1 && args[0] == "unset" {
+		return runConfigTestUnset()
+	}
+	return configTestUsage()
+}
+
+func runConfigTestShow() error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, command, configured, err := projectconfig.GetTestCommand(root.Path)
+	if err != nil {
+		return err
+	}
+	if !configured {
+		fmt.Printf("commands.test 未配置，将自动探测 (%s)\n", path)
+		return nil
+	}
+	fmt.Printf("commands.test = %s (%s)\n", command, path)
+	return nil
+}
+
+func runConfigTestSet(command string) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, saved, err := projectconfig.SetTestCommand(root.Path, command)
+	if err != nil {
+		return err
+	}
+	if saved == "auto" {
+		fmt.Printf("已设置 commands.test = auto，Runtime 将自动探测测试命令 (%s)\n", path)
+		return nil
+	}
+	fmt.Printf("已设置 commands.test = %s (%s)\n", saved, path)
+	return nil
+}
+
+func runConfigTestUnset() error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, removed, err := projectconfig.UnsetTestCommand(root.Path)
+	if err != nil {
+		return err
+	}
+	if removed {
+		fmt.Printf("已移除 commands.test，Runtime 将自动探测测试命令 (%s)\n", path)
+		return nil
+	}
+	fmt.Printf("commands.test 未在项目配置中显式设置 (%s)\n", path)
+	return nil
+}
+
+func configTestUsage() error {
+	return fmt.Errorf("用法: aicode config test set <command...> | auto | show | unset")
 }
 
 func runConfigWorkspaceCommand(args []string) error {

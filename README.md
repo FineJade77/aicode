@@ -149,6 +149,10 @@ go run ./cli config review unset largeDiffThreshold
 go run ./cli config review list
 go run ./cli config review docs
 go run ./cli config review prune
+go run ./cli config test set python3 -m pytest
+go run ./cli config test auto
+go run ./cli config test show
+go run ./cli config test unset
 go run ./cli config workspace add api ../api
 go run ./cli config workspace list
 go run ./cli config workspace remove api
@@ -194,6 +198,15 @@ go run ./cli config review unset largeDiffThreshold
 go run ./cli config review list
 go run ./cli config review docs
 go run ./cli config review prune
+```
+
+可以用 CLI 管理项目测试命令覆盖：
+
+```bash
+go run ./cli config test set python3 -m pytest tests/unit
+go run ./cli config test auto
+go run ./cli config test show
+go run ./cli config test unset
 ```
 
 也可以用 CLI 管理额外只读 workspace：
