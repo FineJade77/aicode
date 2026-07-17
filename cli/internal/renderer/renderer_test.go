@@ -53,6 +53,17 @@ func TestRenderEventPrintsVerificationDenied(t *testing.T) {
 	assertContains(t, output, "验证未运行: 禁止执行高风险命令: rm")
 }
 
+func TestRenderEventPrintsVerificationAnalysis(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type": "verification.analysis",
+		"analysis": map[string]any{
+			"summary": "1 failed, 2 passed in 0.12s",
+		},
+	})
+
+	assertContains(t, output, "验证分析: 1 failed, 2 passed in 0.12s")
+}
+
 func TestReviewRulesTable(t *testing.T) {
 	table := ReviewRulesTable(reviewRulesFixture())
 

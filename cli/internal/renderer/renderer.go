@@ -327,6 +327,10 @@ func RenderEvent(event map[string]any) {
 		fmt.Printf("验证跳过: %s\n", stringValue(event["reason"]))
 	case "verification.denied":
 		fmt.Printf("验证未运行: %s\n", stringValue(event["reason"]))
+	case "verification.analysis":
+		if line := verificationAnalysisLine(event); line != "" {
+			fmt.Println(line)
+		}
 	case "verification.completed":
 		status := "通过"
 		if !boolValue(event["success"]) {
@@ -342,6 +346,37 @@ func RenderEvent(event map[string]any) {
 			PrintJSON(event)
 		}
 	}
+}
+
+func verificationAnalysisLine(event map[string]any) string {
+	analysis, ok := event["analysis"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	summary := stringValue(analysis["summary"])
+	if summary != "" {
+		return "验证分析: " + summary
+	}
+	failures, ok := analysis["failures"].([]any)
+	if !ok || len(failures) == 0 {
+		return ""
+	}
+	first, ok := failures[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name := stringValue(first["name"])
+	message := stringValue(first["message"])
+	if name != "" && message != "" {
+		return fmt.Sprintf("验证分析: %s: %s", name, message)
+	}
+	if name != "" {
+		return "验证分析: " + name
+	}
+	if message != "" {
+		return "验证分析: " + message
+	}
+	return ""
 }
 
 func usageLine(event map[string]any) string {

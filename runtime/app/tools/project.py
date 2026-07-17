@@ -6,6 +6,7 @@ from app.policy.engine import PolicyEngine
 from app.project.detect import detect_project
 from app.tools.base import ToolContext, ToolResult
 from app.tools.command import run_command
+from app.tools.test_analysis import analyze_test_output
 
 
 class DetectProjectTool:
@@ -45,12 +46,19 @@ class RunTestsTool:
         parts = shlex.split(command)
         proc = await run_command(parts, cwd=context.workspace, timeout=timeout)
         output = proc.combined_output
+        analysis = analyze_test_output(command, output, proc.returncode) if proc.returncode != 0 else {}
 
         return ToolResult(
             success=proc.returncode == 0,
             text=output or "测试命令无输出",
             error="" if proc.returncode == 0 else output or f"测试命令退出码: {proc.returncode}",
-            data={"project": info.to_dict(), "command": parts, "returncode": proc.returncode, "timed_out": proc.timed_out},
+            data={
+                "project": info.to_dict(),
+                "command": parts,
+                "returncode": proc.returncode,
+                "timed_out": proc.timed_out,
+                "analysis": analysis,
+            },
             risk_level=decision.risk_level,
             requires_approval=decision.requires_approval,
         )

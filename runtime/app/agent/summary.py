@@ -74,12 +74,13 @@ def format_patch_fallback_summary(language: str, patch: dict[str, Any]) -> str:
     verification_status = str(verification.get("status") or "")
     command = str(verification.get("command") or "")
     reason = str(patch.get("reason") or verification.get("reason") or "")
+    analysis = verification.get("analysis") if isinstance(verification.get("analysis"), dict) else {}
 
     if language.startswith("en"):
         lines = ["Patch Result"]
         if status == "applied":
             lines.append(f"- Applied `{operation}` to: {file_text}.")
-            lines.append(format_verification_line_en(verification_status, command, reason))
+            lines.append(format_verification_line_en(verification_status, command, reason, analysis))
         elif status == "rejected":
             lines.append(f"- Patch was rejected by the user: {file_text}.")
         elif status == "timeout":
@@ -93,7 +94,7 @@ def format_patch_fallback_summary(language: str, patch: dict[str, Any]) -> str:
     lines = ["Patch 结果"]
     if status == "applied":
         lines.append(f"- 已执行 `{operation}`，文件: {file_text}。")
-        lines.append(format_verification_line_zh(verification_status, command, reason))
+        lines.append(format_verification_line_zh(verification_status, command, reason, analysis))
     elif status == "rejected":
         lines.append(f"- 用户拒绝应用 patch，文件: {file_text}。")
     elif status == "timeout":
@@ -105,11 +106,13 @@ def format_patch_fallback_summary(language: str, patch: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_verification_line_zh(status: str, command: str, reason: str) -> str:
+def format_verification_line_zh(status: str, command: str, reason: str, analysis: dict[str, Any] | None = None) -> str:
     if status == "passed":
         return f"- 验证通过: `{command}`。"
     if status == "failed":
-        return f"- 验证失败: `{command}`。"
+        summary = verification_analysis_summary(analysis)
+        suffix = f" 失败摘要: {summary}" if summary else ""
+        return f"- 验证失败: `{command}`。{suffix}"
     if status == "skipped":
         return f"- 验证跳过: {reason or '未发现可自动运行的测试命令'}。"
     if status == "denied":
@@ -117,16 +120,35 @@ def format_verification_line_zh(status: str, command: str, reason: str) -> str:
     return "- 验证未运行。"
 
 
-def format_verification_line_en(status: str, command: str, reason: str) -> str:
+def format_verification_line_en(status: str, command: str, reason: str, analysis: dict[str, Any] | None = None) -> str:
     if status == "passed":
         return f"- Verification passed: `{command}`."
     if status == "failed":
-        return f"- Verification failed: `{command}`."
+        summary = verification_analysis_summary(analysis)
+        suffix = f" Summary: {summary}" if summary else ""
+        return f"- Verification failed: `{command}`.{suffix}"
     if status == "skipped":
         return f"- Verification skipped: {reason or 'no test command detected'}."
     if status == "denied":
         return f"- Verification did not run: {reason or 'verification command was denied by policy'}."
     return "- Verification did not run."
+
+
+def verification_analysis_summary(analysis: dict[str, Any] | None) -> str:
+    if not analysis:
+        return ""
+    summary = str(analysis.get("summary") or "").strip()
+    if summary:
+        return summary
+    failures = analysis.get("failures") if isinstance(analysis.get("failures"), list) else []
+    if not failures:
+        return ""
+    first = failures[0] if isinstance(failures[0], dict) else {}
+    name = str(first.get("name") or first.get("path") or "").strip()
+    message = str(first.get("message") or "").strip()
+    if name and message:
+        return f"{name}: {message}"
+    return name or message
 
 
 def review_observation_text(observations: list[dict[str, Any]]) -> str:

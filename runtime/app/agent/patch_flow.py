@@ -339,6 +339,21 @@ async def run_post_patch_verification(session: Session, request: AgentRequest, r
         }
     )
     result = await execute_tool(session, request, "run_tests", {"timeout": 120}, runtime)
+    analysis = result.data.get("analysis") if isinstance(result.data.get("analysis"), dict) else {}
+    if not result.success and analysis:
+        runtime.audit.record(
+            "verification.analysis",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"command": command, "analysis": analysis},
+        )
+        await session.events.put(
+            {
+                "type": "verification.analysis",
+                "command": command,
+                "analysis": analysis,
+            }
+        )
     runtime.audit.record(
         "verification.completed",
         session_id=session.session_id,
@@ -348,6 +363,7 @@ async def run_post_patch_verification(session: Session, request: AgentRequest, r
             "success": result.success,
             "risk_level": result.risk_level,
             "requires_approval": result.requires_approval,
+            "analysis": analysis,
         },
     )
     await session.events.put(
@@ -363,6 +379,7 @@ async def run_post_patch_verification(session: Session, request: AgentRequest, r
         "command": command,
         "risk_level": result.risk_level,
         "requires_approval": result.requires_approval,
+        "analysis": analysis,
         "text": truncate_for_model(result.text or result.error, limit=4_000),
     }
 

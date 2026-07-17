@@ -272,6 +272,31 @@ def test_patch_final_reports_verification_denied_for_stub() -> None:
     assert "验证未运行: 禁止执行高风险命令: rm。" in summary
 
 
+def test_patch_final_reports_verification_failure_analysis_for_stub() -> None:
+    request = MessageRequest(message="replace sample.txt old => new", mode="default", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [
+            {
+                "tool": "apply_patch",
+                "success": True,
+                "status": "applied",
+                "operation": "replace",
+                "files": ["sample.txt"],
+                "verification": {
+                    "status": "failed",
+                    "command": "python3 -m pytest",
+                    "analysis": {"summary": "1 failed, 2 passed in 0.12s", "failures": []},
+                },
+            }
+        ],
+        "Runtime 骨架已连接。",
+        "stub",
+    )
+
+    assert "验证失败: `python3 -m pytest`。 失败摘要: 1 failed, 2 passed in 0.12s" in summary
+
+
 def test_patch_final_reports_rejected_for_stub() -> None:
     request = MessageRequest(message="replace sample.txt old => new", mode="default", workspace="/repo", language="zh-CN")
     summary = final_summary_text(
@@ -393,6 +418,32 @@ async def test_post_patch_verification_runs_detected_tests(tmp_path: Path) -> No
     assert tool_output["type"] == "tool.output"
     assert completed["type"] == "verification.completed"
     assert completed["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_post_patch_verification_emits_failure_analysis(tmp_path: Path) -> None:
+    audit.path = tmp_path / "audit.jsonl"
+    (tmp_path / "pytest.ini").write_text("[pytest]\ntestpaths = tests\n", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_fail.py").write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="replace x", mode="default", workspace=str(tmp_path), language="zh-CN")
+
+    result = await run_post_patch_verification(session, request)
+    events = []
+    while not session.events.empty():
+        events.append(await session.events.get())
+
+    analysis = next(event for event in events if event["type"] == "verification.analysis")
+    completed = next(event for event in events if event["type"] == "verification.completed")
+
+    assert result["status"] == "failed"
+    assert result["analysis"]["framework"] == "pytest"
+    assert result["analysis"]["failure_count"] >= 1
+    assert "failed" in result["analysis"]["summary"]
+    assert analysis["analysis"]["framework"] == "pytest"
+    assert completed["success"] is False
 
 
 @pytest.mark.asyncio
