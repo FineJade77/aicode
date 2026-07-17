@@ -325,39 +325,42 @@ func RenderEvent(event map[string]any) {
 	case "tool.error":
 		fmt.Printf("工具失败: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "approval.requested":
-		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
+		if stringValue(event["kind"]) == "patch" {
+			fmt.Println(patchStatusLine("等待确认", event, ""))
+		} else {
+			fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
+		}
 	case "patch.preview":
+		if line := patchPreviewLine(event); line != "" {
+			fmt.Println(line)
+		}
 		fmt.Println(stringValue(event["diff"]))
 	case "patch.applied":
-		fmt.Println("Patch 已应用。")
+		fmt.Println(patchStatusLine("已应用", event, ""))
 	case "patch.rejected":
-		fmt.Printf("Patch 已拒绝: %s\n", stringValue(event["reason"]))
+		fmt.Println(patchStatusLine("已拒绝", event, stringValue(event["reason"])))
 	case "patch.stale":
-		if message := stringValue(event["message"]); message != "" {
-			fmt.Println(message)
-		} else {
-			fmt.Printf("Patch 已过期: %s\n", stringValue(event["reason"]))
-		}
+		fmt.Println(patchStatusLine("已过期", event, patchStaleDetail(event)))
 	case "patch.rebuild.started":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Println(patchStatusLine("重新生成 diff", event, ""))
 	case "verification.started":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Println(verificationStatusLine("运行", stringValue(event["command"])))
 	case "verification.skipped":
-		fmt.Printf("验证跳过: %s\n", stringValue(event["reason"]))
+		fmt.Println(verificationStatusLine("跳过", stringValue(event["reason"])))
 	case "verification.denied":
-		fmt.Printf("验证未运行: %s\n", stringValue(event["reason"]))
+		fmt.Println(verificationStatusLine("未运行", stringValue(event["reason"])))
 	case "verification.analysis":
 		if line := verificationAnalysisLine(event); line != "" {
 			fmt.Println(line)
 		}
 	case "verification.repair.started":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Println(verificationStatusLine("失败后生成修复 patch", ""))
 	case "verification.completed":
 		status := "通过"
 		if !boolValue(event["success"]) {
 			status = "失败"
 		}
-		fmt.Printf("验证%s: %s\n", status, stringValue(event["command"]))
+		fmt.Println(verificationStatusLine(status, stringValue(event["command"])))
 	case "usage.recorded":
 		fmt.Println(usageLine(event))
 	case "final":
@@ -490,6 +493,48 @@ func contextKindLabel(kind string) string {
 	}
 }
 
+func patchPreviewLine(event map[string]any) string {
+	diff := strings.TrimSpace(stringValue(event["diff"]))
+	if diff == "" {
+		return ""
+	}
+	return patchStatusLine("diff 预览", event, "")
+}
+
+func patchStatusLine(status string, event map[string]any, detail string) string {
+	line := "Patch: " + status
+	if files := filesLabel(event["files"]); files != "" {
+		line += " " + files
+	}
+	detail = strings.TrimSpace(detail)
+	if detail != "" {
+		line += " - " + detail
+	}
+	return line
+}
+
+func patchStaleDetail(event map[string]any) string {
+	reason := strings.TrimSpace(stringValue(event["reason"]))
+	if reason == "" {
+		reason = strings.TrimSpace(stringValue(event["message"]))
+	}
+	reason = strings.TrimSpace(strings.TrimPrefix(reason, "patch 已过期:"))
+	reason = strings.TrimSuffix(reason, "，请重新生成 diff")
+	for _, file := range stringList(event["files"]) {
+		reason = strings.TrimSpace(strings.TrimPrefix(reason, file))
+	}
+	return strings.TrimSpace(reason)
+}
+
+func verificationStatusLine(status string, detail string) string {
+	line := "验证: " + status
+	detail = strings.TrimSpace(detail)
+	if detail != "" {
+		line += " - " + detail
+	}
+	return line
+}
+
 func verificationAnalysisLine(event map[string]any) string {
 	analysis, ok := event["analysis"].(map[string]any)
 	if !ok {
@@ -497,7 +542,7 @@ func verificationAnalysisLine(event map[string]any) string {
 	}
 	summary := stringValue(analysis["summary"])
 	if summary != "" {
-		return "验证分析: " + summary
+		return verificationStatusLine("分析", summary)
 	}
 	failures, ok := analysis["failures"].([]any)
 	if !ok || len(failures) == 0 {
@@ -510,15 +555,26 @@ func verificationAnalysisLine(event map[string]any) string {
 	name := stringValue(first["name"])
 	message := stringValue(first["message"])
 	if name != "" && message != "" {
-		return fmt.Sprintf("验证分析: %s: %s", name, message)
+		return verificationStatusLine("分析", fmt.Sprintf("%s: %s", name, message))
 	}
 	if name != "" {
-		return "验证分析: " + name
+		return verificationStatusLine("分析", name)
 	}
 	if message != "" {
-		return "验证分析: " + message
+		return verificationStatusLine("分析", message)
 	}
 	return ""
+}
+
+func filesLabel(value any) string {
+	files := stringList(value)
+	if len(files) == 0 {
+		return ""
+	}
+	if len(files) == 1 {
+		return files[0]
+	}
+	return strings.Join(files, ", ")
 }
 
 func usageLine(event map[string]any) string {
@@ -571,6 +627,24 @@ func sliceValue(value any) []any {
 		return v
 	}
 	return []any{}
+}
+
+func stringList(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []any:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			text := strings.TrimSpace(stringValue(item))
+			if text != "" {
+				items = append(items, text)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
 }
 
 func escapeMarkdownTable(value string) string {

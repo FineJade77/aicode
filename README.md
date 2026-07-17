@@ -88,7 +88,7 @@ go run ./cli "replace README.md old text => new text"
 ```
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。多文件 proposal 会作为一次 diff 一次确认，确认后批量应用；diff 过大时会在确认前拒绝生成。Runtime 会记录生成 diff 时的文件内容基线，确认后应用前再次校验；如果文件已被外部修改、删除或创建，会标记为 stale patch，并在模型可用时自动尝试重建一次 diff，重建 patch 仍然必须再次确认。
-CLI 会在实时事件流中展示上下文状态，包括已读取文件、测试映射、依赖映射、搜索/文件定位命中，以及模型 prompt 前发生的上下文预算压缩。
+CLI 会在实时事件流中展示紧凑 workflow 状态，包括 patch 确认、diff 预览、stale 重建、验证、修复，以及已读取文件、测试映射、依赖映射、搜索/文件定位命中和模型 prompt 前发生的上下文预算压缩。
 Patch 应用成功后，Runtime 会自动探测项目测试命令并交给 Policy Engine；低风险测试会自动运行，没有测试命令时会跳过验证。
 验证失败时，Runtime 会提取失败摘要、失败用例和相关输出，供 coder model 尝试一次最小后续修复；修复 patch 仍然必须再次确认。
 显式 shell 命令会先经过 Policy Engine：低风险测试命令可自动执行，中风险命令会要求 CLI 确认，`rm`、破坏性 git、危险控制符等高风险命令不会执行。

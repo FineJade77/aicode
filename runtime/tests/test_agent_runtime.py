@@ -254,6 +254,8 @@ async def test_run_agent_uses_coder_patch_after_context_and_requires_approval(tm
 
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new value\n"
     assert "coder" in model_router.purposes
+    approval = next(event for event in events if event["type"] == "approval.requested" and event.get("kind") == "patch")
+    assert approval["files"] == ["README.md"]
     assert any(event["type"] == "patch.preview" for event in events)
     assert any(event["type"] == "patch.applied" for event in events)
 

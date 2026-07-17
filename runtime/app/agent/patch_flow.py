@@ -488,6 +488,7 @@ async def propose_patch_entries(
             "approval_id": approval.approval_id,
             "kind": "patch",
             "risk_level": "medium",
+            "files": files,
             "message": patch_approval_message(request.language, files),
         }
     )

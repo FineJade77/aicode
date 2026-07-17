@@ -50,7 +50,7 @@ func TestRenderEventPrintsVerificationDenied(t *testing.T) {
 		"reason": "禁止执行高风险命令: rm",
 	})
 
-	assertContains(t, output, "验证未运行: 禁止执行高风险命令: rm")
+	assertContains(t, output, "验证: 未运行 - 禁止执行高风险命令: rm")
 }
 
 func TestRenderEventPrintsVerificationAnalysis(t *testing.T) {
@@ -61,7 +61,7 @@ func TestRenderEventPrintsVerificationAnalysis(t *testing.T) {
 		},
 	})
 
-	assertContains(t, output, "验证分析: 1 failed, 2 passed in 0.12s")
+	assertContains(t, output, "验证: 分析 - 1 failed, 2 passed in 0.12s")
 }
 
 func TestRenderEventPrintsVerificationRepairStarted(t *testing.T) {
@@ -70,26 +70,68 @@ func TestRenderEventPrintsVerificationRepairStarted(t *testing.T) {
 		"message": "验证失败，尝试生成一次后续修复 patch。",
 	})
 
-	assertContains(t, output, "尝试生成一次后续修复 patch")
+	assertContains(t, output, "验证: 失败后生成修复 patch")
+}
+
+func TestRenderEventPrintsPatchApprovalRequested(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":    "approval.requested",
+		"kind":    "patch",
+		"files":   []any{"README.md"},
+		"message": "是否允许修改 README.md？",
+	})
+
+	assertContains(t, output, "Patch: 等待确认 README.md")
+}
+
+func TestRenderEventPrintsPatchPreviewWithHeader(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":  "patch.preview",
+		"files": []any{"README.md"},
+		"diff":  "--- a/README.md\n+++ b/README.md\n",
+	})
+
+	assertContains(t, output, "Patch: diff 预览 README.md")
+	assertContains(t, output, "--- a/README.md")
+}
+
+func TestRenderEventPrintsPatchApplied(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":  "patch.applied",
+		"files": []any{"README.md"},
+	})
+
+	assertContains(t, output, "Patch: 已应用 README.md")
 }
 
 func TestRenderEventPrintsPatchStale(t *testing.T) {
 	output := captureRenderEvent(map[string]any{
 		"type":    "patch.stale",
+		"files":   []any{"README.md"},
 		"message": "Patch 已过期，文件在确认前发生变化；将尝试重新生成 diff。",
 		"reason":  "patch 已过期: README.md 在确认前已被修改，请重新生成 diff",
 	})
 
-	assertContains(t, output, "Patch 已过期")
+	assertContains(t, output, "Patch: 已过期 README.md - 在确认前已被修改")
 }
 
 func TestRenderEventPrintsPatchRebuildStarted(t *testing.T) {
 	output := captureRenderEvent(map[string]any{
-		"type":    "patch.rebuild.started",
-		"message": "Patch 已过期，尝试重新生成一次 diff。",
+		"type":  "patch.rebuild.started",
+		"files": []any{"README.md"},
 	})
 
-	assertContains(t, output, "重新生成一次 diff")
+	assertContains(t, output, "Patch: 重新生成 diff README.md")
+}
+
+func TestRenderEventPrintsVerificationCompleted(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":    "verification.completed",
+		"success": true,
+		"command": "python3 -m pytest",
+	})
+
+	assertContains(t, output, "验证: 通过 - python3 -m pytest")
 }
 
 func TestRenderEventPrintsContextMappingStep(t *testing.T) {
