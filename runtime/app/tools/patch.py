@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,8 @@ class PatchProposal:
     new_content: str = ""
     kind: str = "write"
     target_path: str = ""
+    base_exists: bool = False
+    base_hash: str = ""
 
 
 @dataclass(slots=True)
@@ -24,6 +27,8 @@ class PatchApplication:
     allow_create: bool = False
     delete: bool = False
     target_path: str = ""
+    base_exists: bool | None = None
+    base_hash: str = ""
 
 
 def create_append_patch(
@@ -54,7 +59,7 @@ def create_append_patch(
             tofile=f"b/{rel}",
         )
     )
-    return PatchProposal(path=rel, diff=diff, new_content=new_content)
+    return PatchProposal(path=rel, diff=diff, new_content=new_content, base_exists=True, base_hash=content_hash(original))
 
 
 def create_replace_patch(
@@ -92,7 +97,7 @@ def create_replace_patch(
             tofile=f"b/{rel}",
         )
     )
-    return PatchProposal(path=rel, diff=diff, new_content=new_content)
+    return PatchProposal(path=rel, diff=diff, new_content=new_content, base_exists=True, base_hash=content_hash(original))
 
 
 def create_file_patch(
@@ -120,7 +125,7 @@ def create_file_patch(
             tofile=f"b/{rel}",
         )
     )
-    return PatchProposal(path=rel, diff=diff, new_content=new_content)
+    return PatchProposal(path=rel, diff=diff, new_content=new_content, base_exists=False)
 
 
 def create_content_patch(
@@ -141,17 +146,24 @@ def create_content_patch(
     if not path.parent.exists() or not path.parent.is_dir():
         raise ToolError(f"父目录不存在: {display_path(workspace, path.parent)}")
 
-    original = path.read_text(encoding="utf-8") if path.exists() else ""
+    original_exists = path.exists()
+    original = path.read_text(encoding="utf-8") if original_exists else ""
     rel = display_path(workspace, path)
     diff = "".join(
         difflib.unified_diff(
             original.splitlines(keepends=True),
             new_content.splitlines(keepends=True),
-            fromfile=f"a/{rel}" if path.exists() else "/dev/null",
+            fromfile=f"a/{rel}" if original_exists else "/dev/null",
             tofile=f"b/{rel}",
         )
     )
-    return PatchProposal(path=rel, diff=diff, new_content=new_content)
+    return PatchProposal(
+        path=rel,
+        diff=diff,
+        new_content=new_content,
+        base_exists=original_exists,
+        base_hash=content_hash(original) if original_exists else "",
+    )
 
 
 def create_delete_patch(
@@ -178,7 +190,7 @@ def create_delete_patch(
             tofile="/dev/null",
         )
     )
-    return PatchProposal(path=rel, diff=diff, kind="delete")
+    return PatchProposal(path=rel, diff=diff, kind="delete", base_exists=True, base_hash=content_hash(original))
 
 
 def create_rename_patch(
@@ -205,7 +217,8 @@ def create_rename_patch(
     rel = display_path(workspace, path)
     new_rel = display_path(workspace, new_path)
     diff = f"diff --git a/{rel} b/{new_rel}\nsimilarity index 100%\nrename from {rel}\nrename to {new_rel}\n"
-    return PatchProposal(path=rel, diff=diff, kind="rename", target_path=new_rel)
+    original = path.read_text(encoding="utf-8")
+    return PatchProposal(path=rel, diff=diff, kind="rename", target_path=new_rel, base_exists=True, base_hash=content_hash(original))
 
 
 def apply_content_patch(
@@ -248,6 +261,7 @@ def apply_content_patches(
         if any(touched in original_contents for touched in touched_paths):
             raise ToolError(f"重复修改同一文件: {display_path(workspace, path)}")
         validate_patch_application(workspace, path, target_path, patch)
+        validate_patch_baseline(workspace, path, patch)
         for touched in touched_paths:
             original_contents[touched] = touched.read_text(encoding="utf-8") if touched.exists() else None
         resolved.append((path, target_path, patch))
@@ -286,6 +300,25 @@ def validate_patch_application(workspace: Path, path: Path, target_path: Path | 
         raise ToolError(f"文件不存在: {display_path(workspace, path)}")
     if not path.parent.exists() or not path.parent.is_dir():
         raise ToolError(f"父目录不存在: {display_path(workspace, path.parent)}")
+
+
+def validate_patch_baseline(workspace: Path, path: Path, patch: PatchApplication) -> None:
+    if patch.base_exists is None:
+        return
+    rel = display_path(workspace, path)
+    if not patch.base_exists:
+        if path.exists():
+            raise ToolError(f"patch 已过期: {rel} 在确认前已被创建，请重新生成 diff")
+        return
+    if not path.exists():
+        raise ToolError(f"patch 已过期: {rel} 在确认前已被删除，请重新生成 diff")
+    current = path.read_text(encoding="utf-8")
+    if content_hash(current) != patch.base_hash:
+        raise ToolError(f"patch 已过期: {rel} 在确认前已被修改，请重新生成 diff")
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def rollback_content(workspace: Path, original_contents: dict[Path, str | None]) -> None:

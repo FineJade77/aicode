@@ -44,6 +44,28 @@ def test_create_replace_patch_and_apply(tmp_path: Path) -> None:
     assert readme.read_text(encoding="utf-8") == "hello\nnew value\n"
 
 
+def test_apply_content_patches_rejects_stale_update(tmp_path: Path) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("old\n", encoding="utf-8")
+    proposal = create_replace_patch(tmp_path, "README.md", "old", "new")
+    readme.write_text("external change\n", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="patch 已过期"):
+        apply_content_patches(
+            tmp_path,
+            [
+                PatchApplication(
+                    path=proposal.path,
+                    new_content=proposal.new_content,
+                    base_exists=proposal.base_exists,
+                    base_hash=proposal.base_hash,
+                )
+            ],
+        )
+
+    assert readme.read_text(encoding="utf-8") == "external change\n"
+
+
 def test_create_replace_patch_requires_unique_old_text(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     readme.write_text("same\nsame\n", encoding="utf-8")
@@ -71,6 +93,27 @@ def test_create_file_patch_rejects_existing_file(tmp_path: Path) -> None:
         create_file_patch(tmp_path, "README.md", "new")
 
 
+def test_apply_content_patches_rejects_stale_create(tmp_path: Path) -> None:
+    proposal = create_file_patch(tmp_path, "NEW.md", "hello")
+    (tmp_path / "NEW.md").write_text("external\n", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="patch 已过期"):
+        apply_content_patches(
+            tmp_path,
+            [
+                PatchApplication(
+                    path=proposal.path,
+                    new_content=proposal.new_content,
+                    allow_create=True,
+                    base_exists=proposal.base_exists,
+                    base_hash=proposal.base_hash,
+                )
+            ],
+        )
+
+    assert (tmp_path / "NEW.md").read_text(encoding="utf-8") == "external\n"
+
+
 def test_create_file_patch_requires_existing_parent(tmp_path: Path) -> None:
     with pytest.raises(ToolError, match="父目录不存在"):
         create_file_patch(tmp_path, "missing/NEW.md", "hello")
@@ -92,6 +135,28 @@ def test_create_delete_patch_and_apply(tmp_path: Path) -> None:
     assert not target.exists()
 
 
+def test_apply_content_patches_rejects_stale_delete(tmp_path: Path) -> None:
+    target = tmp_path / "OLD.md"
+    target.write_text("bye\n", encoding="utf-8")
+    proposal = create_delete_patch(tmp_path, "OLD.md")
+    target.write_text("external\n", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="patch 已过期"):
+        apply_content_patches(
+            tmp_path,
+            [
+                PatchApplication(
+                    path=proposal.path,
+                    delete=True,
+                    base_exists=proposal.base_exists,
+                    base_hash=proposal.base_hash,
+                )
+            ],
+        )
+
+    assert target.read_text(encoding="utf-8") == "external\n"
+
+
 def test_create_rename_patch_and_apply(tmp_path: Path) -> None:
     old = tmp_path / "old.py"
     new = tmp_path / "new.py"
@@ -108,6 +173,29 @@ def test_create_rename_patch_and_apply(tmp_path: Path) -> None:
 
     assert not old.exists()
     assert new.read_text(encoding="utf-8") == "print('ok')\n"
+
+
+def test_apply_content_patches_rejects_stale_rename(tmp_path: Path) -> None:
+    old = tmp_path / "old.py"
+    old.write_text("print('ok')\n", encoding="utf-8")
+    proposal = create_rename_patch(tmp_path, "old.py", "new.py")
+    old.write_text("print('changed')\n", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="patch 已过期"):
+        apply_content_patches(
+            tmp_path,
+            [
+                PatchApplication(
+                    path=proposal.path,
+                    target_path=proposal.target_path,
+                    base_exists=proposal.base_exists,
+                    base_hash=proposal.base_hash,
+                )
+            ],
+        )
+
+    assert old.read_text(encoding="utf-8") == "print('changed')\n"
+    assert not (tmp_path / "new.py").exists()
 
 
 def test_apply_content_patches_updates_multiple_files(tmp_path: Path) -> None:

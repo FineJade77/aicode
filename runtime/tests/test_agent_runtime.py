@@ -213,6 +213,35 @@ async def test_run_agent_uses_coder_patch_after_context_and_requires_approval(tm
 
 
 @pytest.mark.asyncio
+async def test_run_agent_rejects_stale_patch_after_approval_wait(tmp_path: Path) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("old value\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="修复 README.md 里的旧文案", mode="default", workspace=str(tmp_path), language="zh-CN")
+    runtime = AgentRuntime(
+        model_router=CoderPatchModelRouter(),
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=5)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            readme.write_text("external value\n", encoding="utf-8")
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=5)
+
+    assert readme.read_text(encoding="utf-8") == "external value\n"
+    assert any(event["type"] == "tool.error" and event.get("tool") == "apply_patch" and "patch 已过期" in event["error"] for event in events)
+    assert not any(event["type"] == "patch.applied" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_run_agent_uses_multi_file_coder_patch_with_single_approval(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("old value\n", encoding="utf-8")
     session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")

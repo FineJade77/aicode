@@ -452,6 +452,8 @@ async def propose_patch_entries(
                 "new_content": entry.proposal.new_content,
                 "kind": entry.proposal.kind,
                 "target_path": entry.proposal.target_path,
+                "base_exists": entry.proposal.base_exists,
+                "base_hash": entry.proposal.base_hash,
             }
             for entry in entries
         ],
@@ -461,6 +463,8 @@ async def propose_patch_entries(
         approval_payload["new_content"] = entries[0].proposal.new_content
         approval_payload["kind"] = entries[0].proposal.kind
         approval_payload["target_path"] = entries[0].proposal.target_path
+        approval_payload["base_exists"] = entries[0].proposal.base_exists
+        approval_payload["base_hash"] = entries[0].proposal.base_hash
     approval = session.create_approval(
         "patch",
         approval_payload,
@@ -538,6 +542,8 @@ async def propose_patch_entries(
                     allow_create=entry.proposal.kind == "write" and entry.operation == "create",
                     delete=entry.proposal.kind == "delete",
                     target_path=entry.proposal.target_path,
+                    base_exists=entry.proposal.base_exists,
+                    base_hash=entry.proposal.base_hash,
                 )
                 for entry in entries
             ],
