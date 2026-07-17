@@ -15,6 +15,7 @@ from app.server.main import (
     detect_replace_request,
     detect_shell_request,
     execute_tool,
+    emit_run_queued,
     final_summary_text,
     model_purpose_for_mode,
     model_routes,
@@ -105,6 +106,21 @@ async def test_process_session_runs_serializes_queued_messages(monkeypatch: pyte
     assert seen == ["first", "second"]
     assert [event["summary"] for event in finals] == ["first", "second"]
     assert [event["run_id"] for event in finals] == [first_run.run_id, second_run.run_id]
+
+
+@pytest.mark.asyncio
+async def test_emit_run_queued_marks_queued_run(tmp_path: Path) -> None:
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="zh-CN")
+    queued = session.enqueue_agent_run(request)
+
+    await emit_run_queued(session, queued, was_running=True, queue_position=2)
+
+    event = await asyncio.wait_for(session.events.get(), timeout=1)
+    assert event["type"] == "run.queued"
+    assert event["run_id"] == queued.run_id
+    assert event["status"] == "queued"
+    assert event["queue_position"] == 2
 
 
 def test_review_mode_uses_reviewer_model_purpose() -> None:

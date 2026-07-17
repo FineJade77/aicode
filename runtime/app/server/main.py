@@ -107,6 +107,7 @@ async def send_message(session_id: str, request: MessageRequest) -> dict[str, st
     queued = session.enqueue_agent_run(effective_request)
     session.events.set_default_run_id(queued.run_id)
     store.append_message(session, effective_request.model_dump())
+    queue_position = session.agent_queue.qsize()
     audit.record(
         "message.received",
         session_id=session.session_id,
@@ -118,8 +119,10 @@ async def send_message(session_id: str, request: MessageRequest) -> dict[str, st
             "message_preview": effective_request.message[:200],
             "run_id": queued.run_id,
             "queued": was_running,
+            "queue_position": queue_position,
         },
     )
+    await emit_run_queued(session, queued, was_running, queue_position)
     ensure_session_runner(session)
     return {"status": "queued" if was_running else "accepted", "run_id": queued.run_id}
 
@@ -253,10 +256,37 @@ async def process_session_runs(session: Session) -> None:
 async def process_session_run(session: Session, queued: QueuedAgentRun) -> None:
     session.events.set_current_run_id(queued.run_id)
     try:
+        await emit_run_started(session, queued)
         await run_agent(session, queued.request)
     finally:
         session.events.set_current_run_id(None)
         session.finish_agent_run()
+
+
+async def emit_run_queued(session: Session, queued: QueuedAgentRun, was_running: bool, queue_position: int) -> None:
+    message = "任务已排队，等待当前会话中的上一条任务完成。"
+    status = "queued"
+    if not was_running:
+        message = "任务已接收，准备开始执行。"
+        status = "accepted"
+    await session.events.put(
+        {
+            "type": "run.queued",
+            "run_id": queued.run_id,
+            "status": status,
+            "queue_position": queue_position,
+            "message": message,
+        }
+    )
+
+
+async def emit_run_started(session: Session, queued: QueuedAgentRun) -> None:
+    await session.events.put(
+        {
+            "type": "run.started",
+            "message": "开始执行当前任务。",
+        }
+    )
 
 
 async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]):

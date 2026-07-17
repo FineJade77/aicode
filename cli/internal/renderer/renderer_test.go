@@ -1,6 +1,8 @@
 package renderer
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -31,6 +33,15 @@ func TestUsageLineDefaultsMissingPurpose(t *testing.T) {
 	if line != want {
 		t.Fatalf("usageLine() = %q, want %q", line, want)
 	}
+}
+
+func TestRenderEventPrintsRunStatus(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":    "run.queued",
+		"message": "任务已排队，等待当前会话中的上一条任务完成。",
+	})
+
+	assertContains(t, output, "任务已排队")
 }
 
 func TestReviewRulesTable(t *testing.T) {
@@ -187,4 +198,15 @@ func assertContains(t *testing.T, value string, needle string) {
 	if !strings.Contains(value, needle) {
 		t.Fatalf("%q does not contain %q", value, needle)
 	}
+}
+
+func captureRenderEvent(event map[string]any) string {
+	oldStdout := os.Stdout
+	reader, writer, _ := os.Pipe()
+	os.Stdout = writer
+	RenderEvent(event)
+	writer.Close()
+	os.Stdout = oldStdout
+	output, _ := io.ReadAll(reader)
+	return string(output)
 }

@@ -276,6 +276,10 @@ func RenderEvent(event map[string]any) {
 	switch eventType {
 	case "session.created":
 		fmt.Printf("工作区: %s\n", stringValue(event["workspace"]))
+	case "run.queued":
+		fmt.Println(stringValue(event["message"]))
+	case "run.started":
+		fmt.Println(stringValue(event["message"]))
 	case "plan.created":
 		fmt.Println("\n计划:")
 		if items, ok := event["items"].([]any); ok {
