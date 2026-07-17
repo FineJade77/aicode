@@ -31,7 +31,8 @@
 - 显式 `shell <command>` / `运行命令 <command>` 支持策略检查；中风险命令需用户确认，高风险命令直接拦截
 - `aicode review` 对当前 git diff 执行只读规则审查，并用 reviewer model 汇总结果
 - `aicode review-rules` 查看 review 规则和项目配置后的生效状态
-- append 写入场景的 inline diff 确认链路
+- 显式 `create` / `append` / `replace` 写入场景的 inline diff 确认链路
+- provider 已配置时，coder model 可提出结构化 patch proposal，并复用 inline diff 确认链路
 - 本地 JSONL 审计日志
 - SQLite session/message 持久化
 
@@ -53,6 +54,7 @@ go run ./cli "解释当前目录"
 
 CLI 会自动启动 Python Runtime daemon，并通过 SSE 接收事件。
 Runtime 会按计划执行工具循环：先收集工作区、项目和 git 状态，再根据请求选择只读分析、测试或 diff 工具；所有写入仍必须经过 inline diff 确认。
+当模型 provider 已配置且任务带有修复、实现、更新、补测试等写作意图时，Runtime 会让 coder model 输出受限 JSON patch proposal；Runtime 再生成 unified diff，等待用户确认后才应用。
 
 也可以手动启动 Runtime：
 

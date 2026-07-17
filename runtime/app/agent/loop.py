@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from app.agent.commands import choose_context_tools, detect_append_request, detect_create_request, detect_replace_request
-from app.agent.patch_flow import propose_append_patch, propose_create_patch, propose_replace_patch
+from app.agent.patch_flow import build_coder_patch_messages, parse_coder_patch, propose_append_patch, propose_coder_patch, propose_create_patch, propose_replace_patch
 from app.agent.steps import AgentStep, allowed_tool_names, build_planner_messages, choose_rule_step, observation_seen, parse_agent_step
 from app.agent.summary import build_model_messages, final_summary_text, model_purpose_for_mode
 from app.agent.tool_flow import execute_tool, observe_tool
@@ -34,6 +34,8 @@ async def run_agent(session: Session, request: AgentRequest, runtime: AgentRunti
         patch_outcome = await propose_replace_patch(session, request, replace_request[0], replace_request[1], replace_request[2], runtime)
     elif create_request is not None:
         patch_outcome = await propose_create_patch(session, request, create_request[0], create_request[1], runtime)
+    elif should_attempt_coder_patch(request, runtime):
+        patch_outcome = await propose_model_patch(session, request, observations, runtime)
     if patch_outcome is not None:
         observations.append(patch_outcome)
     await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "completed"})
@@ -128,7 +130,7 @@ async def run_context_loop(session: Session, request: AgentRequest, runtime: Age
 async def choose_model_step(
     session: Session, request: AgentRequest, observations: list[dict[str, Any]], runtime: AgentRuntime
 ) -> AgentStep | None:
-    if not planner_model_available(runtime):
+    if not primary_model_available(runtime):
         return None
 
     response = await runtime.model_router.complete(
@@ -149,9 +151,54 @@ async def choose_model_step(
     return parse_agent_step(response.text, allowed_tool_names(request.mode))
 
 
-def planner_model_available(runtime: AgentRuntime) -> bool:
+def primary_model_available(runtime: AgentRuntime) -> bool:
     is_configured = getattr(runtime.model_router.primary, "is_configured", None)
     return bool(is_configured()) if callable(is_configured) else True
+
+
+def should_attempt_coder_patch(request: AgentRequest, runtime: AgentRuntime) -> bool:
+    if request.mode == "review":
+        return False
+    if not primary_model_available(runtime):
+        return False
+    message = request.message.lower()
+    write_intents = [
+        "fix",
+        "implement",
+        "change",
+        "update",
+        "add",
+        "write",
+        "修复",
+        "实现",
+        "修改",
+        "更新",
+        "新增",
+        "添加",
+        "补",
+    ]
+    return any(token in message for token in write_intents)
+
+
+async def propose_model_patch(
+    session: Session,
+    request: AgentRequest,
+    observations: list[dict[str, Any]],
+    runtime: AgentRuntime,
+) -> dict[str, Any] | None:
+    response = await runtime.model_router.complete(
+        ModelRequest(
+            purpose="coder",
+            messages=build_coder_patch_messages(request, observations),
+            temperature=0,
+            max_tokens=1800,
+        )
+    )
+    await record_model_usage(session, response, "coder", runtime)
+    patch = parse_coder_patch(response.text)
+    if patch is None:
+        return None
+    return await propose_coder_patch(session, request, patch, runtime)
 
 
 def should_use_model_step(step: AgentStep, observations: list[dict[str, Any]]) -> bool:

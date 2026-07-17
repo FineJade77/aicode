@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.agent.steps import extract_json_object
 from app.agent.tool_flow import execute_tool
 from app.agent.types import AgentRequest, AgentRuntime
 from app.agent.utils import localized, truncate_for_model
@@ -12,6 +15,112 @@ from app.project.detect import detect_test_command
 from app.sessions.store import Session
 from app.tools.base import ToolError
 from app.tools.patch import PatchProposal, apply_content_patch, create_append_patch, create_file_patch, create_replace_patch
+
+
+@dataclass(slots=True)
+class CoderPatch:
+    operation: str
+    path: str
+    old_text: str = ""
+    new_text: str = ""
+    content: str = ""
+    text: str = ""
+    reason: str = ""
+
+
+def build_coder_patch_messages(request: AgentRequest, observations: list[dict[str, Any]]) -> list[dict[str, str]]:
+    language_name = "English" if request.language.startswith("en") else "中文"
+    system = (
+        f"你是 aicode 的 coder。使用{language_name}思考，但只能输出一个 JSON object。"
+        "不要输出 Markdown，不要解释。"
+        "你不能直接修改文件，只能提出一个结构化 patch proposal。"
+        "只允许修改主 workspace 内的文件，不允许跨仓库写入。"
+        "如果上下文不足或不需要修改，输出 {\"action\":\"none\",\"reason\":\"...\"}。"
+        "允许格式之一："
+        "{\"action\":\"patch\",\"operation\":\"replace\",\"path\":\"relative/path\",\"old_text\":\"exact existing text\",\"new_text\":\"replacement text\",\"reason\":\"...\"}；"
+        "{\"action\":\"patch\",\"operation\":\"append\",\"path\":\"relative/path\",\"text\":\"text to append\",\"reason\":\"...\"}；"
+        "{\"action\":\"patch\",\"operation\":\"create\",\"path\":\"relative/path\",\"content\":\"new file content\",\"reason\":\"...\"}。"
+        "replace 的 old_text 必须是文件中完整且唯一存在的原文片段。"
+    )
+    payload = {
+        "user_request": request.message,
+        "mode": request.mode,
+        "workspace": request.workspace,
+        "observations": observations,
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
+def parse_coder_patch(text: str) -> CoderPatch | None:
+    raw = extract_json_object(text)
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    action = str(payload.get("action") or "").strip().lower()
+    if action in {"", "none", "finish", "no_patch"}:
+        return None
+    if action != "patch":
+        return None
+
+    operation = str(payload.get("operation") or "").strip().lower()
+    path = str(payload.get("path") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    if not valid_coder_patch_path(path):
+        return None
+
+    if operation == "replace":
+        old_text = str(payload.get("old_text") or "")
+        if "new_text" not in payload:
+            return None
+        new_text = str(payload.get("new_text") or "")
+        if not old_text:
+            return None
+        return CoderPatch(operation=operation, path=path, old_text=old_text, new_text=new_text, reason=reason)
+
+    if operation == "append":
+        append_text = str(payload.get("text") or payload.get("content") or "")
+        if not append_text:
+            return None
+        return CoderPatch(operation=operation, path=path, text=append_text, reason=reason)
+
+    if operation == "create":
+        content = str(payload.get("content") or "")
+        if not content:
+            return None
+        return CoderPatch(operation=operation, path=path, content=content, reason=reason)
+
+    return None
+
+
+def valid_coder_patch_path(path: str) -> bool:
+    if not path or path.startswith("/") or path.startswith("~"):
+        return False
+    normalized = path.replace("\\", "/")
+    if normalized.startswith("../") or "/../" in normalized or normalized == "..":
+        return False
+    if ":" in normalized.split("/", 1)[0]:
+        return False
+    return True
+
+
+async def propose_coder_patch(session: Session, request: AgentRequest, patch: CoderPatch, runtime: AgentRuntime) -> dict[str, Any]:
+    if patch.operation == "replace":
+        return await propose_replace_patch(session, request, patch.path, patch.old_text, patch.new_text, runtime)
+    if patch.operation == "append":
+        return await propose_append_patch(session, request, patch.path, patch.text, runtime)
+    if patch.operation == "create":
+        return await propose_create_patch(session, request, patch.path, patch.content, runtime)
+    await emit_patch_generation_error(session, f"unsupported coder patch operation: {patch.operation}", runtime)
+    return patch_outcome("error", patch.operation, [patch.path], reason=f"unsupported coder patch operation: {patch.operation}")
 
 
 async def propose_append_patch(session: Session, request: AgentRequest, path: str, text: str, runtime: AgentRuntime) -> dict[str, Any]:
