@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
+from app.project.config import load_project_config
 from app.agent.types import AgentRequest
 
 
 def choose_context_tools(request: AgentRequest) -> list[tuple[str, dict[str, Any]]]:
     message = request.message.strip()
     lowered = message.lower()
+    workspace_names = configured_workspace_names(request.workspace)
+    scoped_target = extract_workspace_scoped_target(message, workspace_names)
+    workspace_name = (scoped_target[0] if scoped_target else None) or extract_workspace_name(message, workspace_names)
 
     if detect_append_request(message) is not None or detect_replace_request(message) is not None or detect_create_request(message) is not None:
         return []
@@ -20,18 +26,29 @@ def choose_context_tools(request: AgentRequest) -> list[tuple[str, dict[str, Any
         return [("review_diff", {})]
 
     if request.mode == "diff" or "diff" in lowered or "变更" in message:
-        return [("git_diff", {})]
+        args: dict[str, Any] = {}
+        if workspace_name:
+            args["workspace"] = workspace_name
+        if scoped_target and scoped_target[1] not in {"", "."}:
+            args["path"] = scoped_target[1]
+        return [("git_diff", args)]
 
     if request.mode == "test" or "运行测试" in message or "run tests" in lowered:
         return [("run_tests", {"timeout": 120})]
 
-    target = extract_target(message)
+    target = scoped_target[1] if scoped_target else extract_target(message)
     if target:
-        return [("read_file", {"path": target, "max_bytes": 30_000})]
+        args = {"path": target, "max_bytes": 30_000}
+        if scoped_target:
+            args["workspace"] = scoped_target[0]
+        return [("read_file", args)]
 
     keyword = extract_keyword(message)
     if keyword:
-        return [("search_text", {"query": keyword, "limit": 40})]
+        args = {"query": keyword, "limit": 40}
+        if workspace_name:
+            args["workspace"] = workspace_name
+        return [("search_text", args)]
 
     return []
 
@@ -120,6 +137,48 @@ def extract_target(message: str) -> str | None:
             if cleaned and not cleaned.startswith("http"):
                 return cleaned
     return None
+
+
+def configured_workspace_names(workspace: str) -> set[str]:
+    config = load_project_config(Path(workspace))
+    return {ref.name for ref in config.workspaces if ref.mode == "read_only"}
+
+
+def extract_workspace_scoped_target(message: str, workspace_names: set[str]) -> tuple[str, str] | None:
+    if not workspace_names:
+        return None
+    for part in reversed(message.split()):
+        cleaned = clean_token(part)
+        if "://" in cleaned:
+            continue
+        workspace_name, separator, target = cleaned.partition(":")
+        if not separator or workspace_name not in workspace_names:
+            continue
+        target = strip_line_suffix(target.strip())
+        if target:
+            return workspace_name, target
+    return None
+
+
+def extract_workspace_name(message: str, workspace_names: set[str]) -> str | None:
+    if not workspace_names:
+        return None
+    for part in message.split():
+        cleaned = clean_token(part)
+        if cleaned in workspace_names:
+            return cleaned
+        for prefix in ["workspace=", "workspace:", "工作区=", "工作区:"]:
+            if cleaned.startswith(prefix) and cleaned[len(prefix) :] in workspace_names:
+                return cleaned[len(prefix) :]
+    return None
+
+
+def clean_token(token: str) -> str:
+    return token.strip(" \t\r\n，。,.()[]{}'\"`")
+
+
+def strip_line_suffix(target: str) -> str:
+    return re.sub(r":\d+$", "", target)
 
 
 def extract_keyword(message: str) -> str | None:

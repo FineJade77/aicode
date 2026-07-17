@@ -232,6 +232,8 @@ go run ./cli review-rules
 
 多仓库 workspace 第一版只做只读分析。工具调用传入 `{"workspace":"api"}` 时，Runtime 会把路径限制在该配置仓库内；patch、shell 和测试命令仍只在主 workspace 内执行。
 
+Agent 也会识别明确的跨仓目标，例如 `api:src/service.py` 会读取 `api` workspace 中的文件，`查看 api diff` 会查看该只读 workspace 的 git diff，`在 api 搜索 login` 会在该 workspace 内搜索。
+
 ## 模型配置
 
 Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发。

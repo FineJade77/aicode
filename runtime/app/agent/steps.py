@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from app.project.config import load_project_config
 
 
 @dataclass(slots=True)
@@ -139,6 +142,7 @@ def build_planner_messages(
         "user_request": message,
         "mode": mode,
         "workspace": workspace,
+        "configured_workspaces": configured_workspace_docs(workspace),
         "allowed_tools": allowed_tool_docs(mode),
         "observations": observations,
     }
@@ -190,6 +194,11 @@ def extract_json_object(text: str) -> str | None:
     if start < 0 or end < start:
         return None
     return candidate[start : end + 1]
+
+
+def configured_workspace_docs(workspace: str) -> list[dict[str, str]]:
+    config = load_project_config(Path(workspace))
+    return [{"name": ref.name, "mode": ref.mode} for ref in config.workspaces]
 
 
 def observation_seen(observations: list[dict[str, Any]], tool: str, args: dict[str, Any]) -> bool:

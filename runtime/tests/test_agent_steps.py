@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from app.agent.steps import allowed_tool_names, build_planner_messages, choose_rule_step, observation_seen, parse_agent_step, step_key
 
 
@@ -74,3 +77,20 @@ def test_build_planner_messages_lists_allowed_tools() -> None:
     assert "JSON object" in messages[0]["content"]
     assert "read_file" in messages[1]["content"]
     assert "解释 README.md" in messages[1]["content"]
+
+
+def test_build_planner_messages_includes_configured_workspaces(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".aicode"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text('{"workspaces":[{"name":"api","path":"../api","mode":"read_only"}]}', encoding="utf-8")
+
+    messages = build_planner_messages(
+        language="zh-CN",
+        message="解释 api:README.md",
+        mode="default",
+        workspace=str(tmp_path),
+        observations=[],
+    )
+    payload = json.loads(messages[1]["content"])
+
+    assert payload["configured_workspaces"] == [{"name": "api", "mode": "read_only"}]
