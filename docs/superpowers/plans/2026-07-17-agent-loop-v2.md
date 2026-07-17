@@ -2557,7 +2557,7 @@ git commit -m "Add model-driven agent loop with gated tools and edit approvals"
 
 **Interfaces:**
 - Consumes: Task 11 `run_turn_safely`；Task 4 router
-- Produces: `POST /v1/sessions/{id}/approve` body 增加 `accept_all: bool = False`，为 True 时先置 `session.auto_accept_edits = True` 再决议；`run_agent` 改为调用 `run_turn_safely`；`AgentRuntime` 构造传入 `policy=PolicyEngine()`；消息入口在 provider 未配置时立即返回 error+final 事件（不再进入 loop）
+- Produces: `POST /v1/sessions/{id}/approve` body 增加 `accept_all: bool = False`，为 True 时先置 `session.auto_accept_edits = True` 再决议；`run_agent` 改为调用 `run_turn_safely`；`AgentRuntime` 构造传入 `policy=PolicyEngine()`；消息入口在 provider 未配置时直接返回 HTTP 400（detail 含配置引导），不进入 loop
 
 - [ ] **Step 1: 写失败测试**
 
