@@ -21,6 +21,7 @@
 | Phase 0 | 1 周 | 建立 Go CLI + Python Runtime 基础骨架 |
 | Phase 1 | 2-3 周 | 完成 coding MVP：读、搜、跑命令、出 diff、确认后写入 |
 | Phase 2 | 2 周 | 完成验证闭环：自动测试、失败分析、session resume、usage |
+| Agent Loop v2 | 2-3 周 | 模型驱动重构：原生 function calling 主循环、流式输出、双 provider、edit_file 确认链路 |
 | Phase 3 | 3 周 | 完成上下文引擎：索引、符号、测试映射、多仓库只读分析 |
 | Phase 4 | 2-3 周 | 完成安全增强：Docker sandbox、审计增强、敏感信息脱敏 |
 | Phase 5 | 2 周 | 打磨 Codex 风格 CLI 体验和开发者效率工具 |
@@ -284,13 +285,50 @@ aicode "运行测试并修复失败"
 - 不做大型索引
 - 不做跨仓库 patch
 
-## 6. Phase 3: 上下文引擎
+## 6. Agent Loop v2: 模型驱动重构（当前进行中）
+
+周期：2-3 周
+
+设计文档：`docs/superpowers/specs/2026-07-17-agent-loop-redesign-design.md`
+
+### 目标
+
+把控制权从规则交还给模型：主循环由模型通过原生 function calling 驱动，loop 保持极简，安全由执行点的统一策略闸门保证。
+
+### 交付物
+
+- 模型驱动主循环：history 为唯一状态并跨消息持久化，多轮修正开箱即用；TurnBudget 步数/成本上限强制收尾
+- 工具集收敛：`read_file` / `search` / `list_files` / `bash` / `edit_file` / `review_diff`
+- `edit_file` 逐次 inline diff 确认 + 会话级 accept-all（protected paths 除外）+ 单文件 stale 检测
+- Provider 重写：OpenAI 兼容（`tools`）+ Anthropic（`tool_use`）双协议，流式输出，httpx 超时重试
+- 模型路由收敛为 `main` / `reviewer` / `summarizer` 三角色
+- history 三层上下文压缩：源头截断、滚动压缩、summarizer 兜底
+- Policy Engine 分级漏洞修复（`sed -i` 免确认写入、`git push` 免确认外发等）
+- 删除：规则 planner、关键词意图检测、JSON patch proposal 协议、`append`/`replace`/`create`/`shell` 直写命令、无模型 stub 降级
+
+### 验收标准
+
+运行 `aicode "修复 pytest 失败"` 应满足：模型自主搜索、读取、运行测试、提出 edit；每次写入展示 diff 并确认；应用后在同一循环内验证并继续修复。
+
+多轮会话："不对，改成 X" 能基于上一轮上下文继续修改。
+
+review 模式仍为硬只读；未配置 provider 时明确报错并提示配置方式；全部写入走 approval，audit/usage/SSE 事件完整。
+
+### 不做
+
+- API 本地 token 认证、事件落盘异步化（独立修补项，不混入本次重构）
+- `related_files` 工具、tree-sitter 索引（Phase 3 重新评估）
+- Docker sandbox、IDE/Web UI
+
+## 7. Phase 3: 上下文引擎
 
 周期：3 周
 
 ### 目标
 
 提升中型仓库可用性，减少用户手动提供上下文的需求。
+
+定位调整（Agent Loop v2 之后）：上下文探索主要由模型驱动 loop 承担，索引与 tree-sitter 符号解析降级为可选加速层，优先级重新评估；source/test mapping 和 import/dependency graph 不再内置于 loop 步骤，如实测有需要，以 `related_files` 只读工具形态提供给模型选择性调用。
 
 ### 交付物
 
@@ -361,7 +399,7 @@ aicode "修复认证模块的边界条件并补测试"
 - 不做跨仓库 patch
 - 不做企业远端服务
 
-## 7. Phase 4: 安全增强
+## 8. Phase 4: 安全增强
 
 周期：2-3 周
 
@@ -433,7 +471,7 @@ aicode "删除这些废弃文件"
 - 不做 SSO
 - 不做云端执行
 
-## 8. Phase 5: CLI 体验打磨
+## 9. Phase 5: CLI 体验打磨
 
 周期：2 周
 
@@ -496,7 +534,9 @@ aicode commit-message
 - 不修改文件
 - 不执行写入命令
 
-## 9. P0 / P1 / P2 功能分级
+## 10. P0 / P1 / P2 功能分级
+
+说明：本分级制定早于 Agent Loop v2。其中 patch generation / apply patch 在 v2 中由 `edit_file` 确认链路实现，model router 收敛为三角色，tree-sitter index 与多仓库增强的优先级以第 6、7 节为准。
 
 ### P0
 
@@ -541,7 +581,7 @@ aicode commit-message
 - commit message
 - PR description
 
-## 10. 风险清单
+## 11. 风险清单
 
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
@@ -553,7 +593,7 @@ aicode commit-message
 | Docker sandbox 复杂 | 影响进度 | 放到 Phase 4，不阻塞 MVP |
 | 中英文输出混乱 | 体验不稳定 | 用户可见文案统一走 language setting |
 
-## 11. Definition of Done
+## 12. Definition of Done
 
 每个功能完成时必须满足：
 
@@ -566,7 +606,7 @@ aicode commit-message
 - 涉及模型调用时必须记录 token usage
 - 文档或配置示例同步更新
 
-## 12. 第一批开发任务建议
+## 13. 第一批开发任务建议
 
 建议按以下顺序开工：
 

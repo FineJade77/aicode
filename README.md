@@ -2,7 +2,7 @@
 
 `aicode` 是一个本地优先、CLI-first、默认中文交互的 Coding Agent。
 
-当前仓库处于 Phase 1 工具系统起步阶段：
+当前仓库已完成 Phase 1/2 的主要能力，正在进行 Agent Loop v2 模型驱动重构（设计见 `docs/superpowers/specs/2026-07-17-agent-loop-redesign-design.md`）：
 
 - Go CLI: `cli/`
 - Python Runtime: `runtime/`
@@ -36,6 +36,20 @@
 - provider 已配置时，coder model 可提出结构化单文件或多文件 patch proposal，并复用 inline diff 确认链路
 - 本地 JSONL 审计日志
 - SQLite session/message 持久化
+
+## Agent Loop v2（进行中）
+
+已确认的重构方向：主循环改为模型通过原生 function calling 驱动，loop 保持极简，安全由执行点的统一策略闸门保证。要点：
+
+- 工具集收敛为 `read_file` / `search` / `list_files` / `bash` / `edit_file` / `review_diff`，模型自主决定探索和修改路径
+- 写入统一走 `edit_file`：逐次展示 inline diff 确认，支持会话级"全部允许"降噪（protected paths 除外），单文件 stale 检测
+- Provider 重写：OpenAI 兼容（`tools`）+ Anthropic（`tool_use`）双协议，原生 tool calling，流式输出
+- 模型路由收敛为 `main` / `reviewer` / `summarizer` 三角色
+- 对话 history 作为唯一状态并跨消息持久化，支持多轮修正
+- 删除：规则 planner、关键词意图检测、JSON patch proposal 协议、`append`/`replace`/`create`/`shell` 直写命令、无模型 stub 降级（未配置 provider 将直接报错）
+- 保留：SSE 事件流、session 持久化、approval/audit 链路、Policy Engine（修复分级漏洞）、protected paths、多仓库只读分析
+
+以下"本地运行"等章节描述的是当前 v1 行为，v2 落地后会同步更新。
 
 ## 本地运行
 
@@ -86,6 +100,8 @@ go run ./cli "create TODO.md 第一条任务"
 go run ./cli "append README.md 一行新内容"
 go run ./cli "replace README.md old text => new text"
 ```
+
+（`create`/`append`/`replace` 直写命令将在 v2 中移除，改为自然语言描述 + `edit_file` 确认链路。）
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。多文件 proposal 会作为一次 diff 一次确认，确认后批量应用；diff 过大时会在确认前拒绝生成。Runtime 会记录生成 diff 时的文件内容基线，确认后应用前再次校验；如果文件已被外部修改、删除或创建，会标记为 stale patch，并在模型可用时自动尝试重建一次 diff，重建 patch 仍然必须再次确认。
 CLI 会在实时事件流中展示紧凑 workflow 状态，包括 patch 确认、diff 预览、stale 重建、验证、修复，以及已读取文件、测试映射、依赖映射、搜索/文件定位命中和模型 prompt 前发生的上下文预算压缩。
@@ -283,7 +299,7 @@ Agent 也会识别明确的跨仓目标，例如 `api:src/service.py` 会读取 
 
 ## 模型配置
 
-Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发。
+Runtime 已接入 OpenAI-compatible provider 和 Model Router。没有 API key 时会自动回退到 stub provider，方便本地开发（v2 中将移除 stub 回退：未配置 provider 会直接报错并提示配置方式；路由角色也将由 planner/coder/reviewer/summarizer 收敛为 main/reviewer/summarizer）。
 
 `aicode review` 会走 `reviewer` 模型路由；没有 API key 时仍会输出确定性规则审查结果。
 CLI 的用量事件会显示本次模型调用目的，例如 `purpose=reviewer` 或 `purpose=summarizer`。
