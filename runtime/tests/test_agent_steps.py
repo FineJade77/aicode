@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 
 from app.agent.steps import (
+    DependencyProjectContext,
     allowed_tool_names,
     build_planner_messages,
     choose_rule_step,
+    dependency_context_from_observations,
     observation_seen,
     parse_agent_step,
     related_dependency_queries,
@@ -185,6 +187,95 @@ def test_choose_rule_step_locates_python_dependency_after_source_read() -> None:
     assert step.args == {"query": "src/utils.py", "limit": 20}
 
 
+def test_choose_rule_step_reads_project_config_before_alias_dependency() -> None:
+    observations = bootstrap_observations()
+    observations[1]["data"] = {"files": {"tsconfig_json": True}}
+    source_args = {"path": "src/App.tsx", "max_bytes": 30_000}
+    test_args = {"query": "App.test.tsx", "limit": 20}
+    spec_args = {"query": "App.spec.tsx", "limit": 20}
+    observations.extend(
+        [
+            {
+                "tool": "read_file",
+                "args": source_args,
+                "step_key": step_key("read_file", source_args),
+                "success": True,
+                "text": "# src/App.tsx\nimport Button from '@/components/Button'\n",
+                "data": {"workspace": "main", "path": "src/App.tsx"},
+            },
+            {
+                "tool": "find_files",
+                "args": test_args,
+                "step_key": step_key("find_files", test_args),
+                "success": True,
+                "data": {"workspace": "main", "files": []},
+            },
+            {
+                "tool": "find_files",
+                "args": spec_args,
+                "step_key": step_key("find_files", spec_args),
+                "success": True,
+                "data": {"workspace": "main", "files": []},
+            },
+        ]
+    )
+
+    step = choose_rule_step("修复 src/App.tsx", "default", observations, [])
+
+    assert step.tool == "read_file"
+    assert step.args == {"path": "tsconfig.json", "max_bytes": 20_000}
+    assert step.context == {"kind": "project_config", "source_path": "src/App.tsx", "config_path": "tsconfig.json"}
+
+
+def test_choose_rule_step_uses_tsconfig_paths_for_dependency_query() -> None:
+    observations = bootstrap_observations()
+    observations[1]["data"] = {"files": {"tsconfig_json": True}}
+    source_args = {"path": "src/App.tsx", "max_bytes": 30_000}
+    test_args = {"query": "App.test.tsx", "limit": 20}
+    spec_args = {"query": "App.spec.tsx", "limit": 20}
+    config_args = {"path": "tsconfig.json", "max_bytes": 20_000}
+    observations.extend(
+        [
+            {
+                "tool": "read_file",
+                "args": source_args,
+                "step_key": step_key("read_file", source_args),
+                "success": True,
+                "text": "# src/App.tsx\nimport Button from '@/components/Button'\n",
+                "data": {"workspace": "main", "path": "src/App.tsx"},
+            },
+            {
+                "tool": "find_files",
+                "args": test_args,
+                "step_key": step_key("find_files", test_args),
+                "success": True,
+                "data": {"workspace": "main", "files": []},
+            },
+            {
+                "tool": "find_files",
+                "args": spec_args,
+                "step_key": step_key("find_files", spec_args),
+                "success": True,
+                "data": {"workspace": "main", "files": []},
+            },
+            {
+                "tool": "read_file",
+                "args": config_args,
+                "step_key": step_key("read_file", config_args),
+                "success": True,
+                "text": '# tsconfig.json\n{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}\n',
+                "data": {"workspace": "main", "path": "tsconfig.json"},
+            },
+        ]
+    )
+
+    step = choose_rule_step("修复 src/App.tsx", "default", observations, [])
+
+    assert step.tool == "find_files"
+    assert step.args == {"query": "src/components/Button", "limit": 20}
+    assert step.context == {"kind": "dependency_mapping", "source_path": "src/App.tsx", "query": "src/components/Button"}
+
+
 def test_related_dependency_queries_cover_first_batch_languages() -> None:
     assert related_dependency_queries("src/service.py", "from .utils import helper\nimport os\n") == ["src/utils.py", "utils.py"]
     assert related_dependency_queries("src/app/service.py", "from ..shared import helper\n") == ["src/shared.py", "shared.py"]
@@ -194,6 +285,52 @@ def test_related_dependency_queries_cover_first_batch_languages() -> None:
         "src/components/Button.ts",
         "src/components/Button.tsx",
     ]
+
+
+def test_related_dependency_queries_use_project_config() -> None:
+    context = DependencyProjectContext(
+        go_module="github.com/acme/project",
+        python_roots=["src"],
+        ts_base_url=".",
+        ts_paths=[("@/*", ["src/*"])],
+    )
+
+    assert related_dependency_queries("pkg/service.go", 'import "github.com/acme/project/pkg/mathutil"\n', context) == [
+        "pkg/mathutil",
+        "mathutil",
+    ]
+    assert related_dependency_queries("src/app.py", "from myapp.utils import helper\n", context) == [
+        "src/myapp/utils.py",
+        "myapp/utils.py",
+        "utils.py",
+    ]
+    assert related_dependency_queries("src/App.tsx", "import Button from '@/components/Button'\n", context) == [
+        "src/components/Button",
+        "src/components/Button.ts",
+        "src/components/Button.tsx",
+    ]
+
+
+def test_dependency_context_from_observations_parses_project_configs() -> None:
+    observations = [
+        {
+            "tool": "read_file",
+            "success": True,
+            "text": "# go.mod\nmodule github.com/acme/project\n",
+            "data": {"workspace": "main", "path": "go.mod"},
+        },
+        {
+            "tool": "read_file",
+            "success": True,
+            "text": '# pyproject.toml\n[tool.setuptools.package-dir]\n"" = "src"\n',
+            "data": {"workspace": "main", "path": "pyproject.toml"},
+        },
+    ]
+
+    context = dependency_context_from_observations(observations)
+
+    assert context.go_module == "github.com/acme/project"
+    assert context.python_roots == ["src"]
 
 
 def test_related_test_queries_cover_first_batch_languages() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from app.agent.commands import choose_context_tools, detect_append_request, detect_create_request, detect_replace_request
@@ -44,10 +45,12 @@ async def run_agent(session: Session, request: AgentRequest, runtime: AgentRunti
     await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "completed"})
 
     purpose = model_purpose_for_mode(request.mode)
+    messages = build_model_messages(request, observations)
+    await emit_context_budget_event(session, purpose, messages)
     response = await runtime.model_router.complete(
         ModelRequest(
             purpose=purpose,
-            messages=build_model_messages(request, observations),
+            messages=messages,
             max_tokens=900 if purpose == "reviewer" else 500,
         )
     )
@@ -116,8 +119,8 @@ async def run_context_loop(session: Session, request: AgentRequest, runtime: Age
         if step.action == "finish":
             break
 
-        result = await execute_tool(session, request, step.tool, step.args, runtime)
-        observations.append(observe_tool(step.tool, step.args, result))
+        result = await execute_tool(session, request, step.tool, step.args, runtime, context=step.context)
+        observations.append(observe_tool(step.tool, step.args, result, context=step.context))
     else:
         await session.events.put(
             {
@@ -136,16 +139,18 @@ async def choose_model_step(
     if not primary_model_available(runtime):
         return None
 
+    messages = build_planner_messages(
+        language=request.language,
+        message=request.message,
+        mode=request.mode,
+        workspace=request.workspace,
+        observations=observations,
+    )
+    await emit_context_budget_event(session, "planner", messages)
     response = await runtime.model_router.complete(
         ModelRequest(
             purpose="planner",
-            messages=build_planner_messages(
-                language=request.language,
-                message=request.message,
-                mode=request.mode,
-                workspace=request.workspace,
-                observations=observations,
-            ),
+            messages=messages,
             temperature=0,
             max_tokens=260,
         )
@@ -189,10 +194,12 @@ async def propose_model_patch(
     observations: list[dict[str, Any]],
     runtime: AgentRuntime,
 ) -> dict[str, Any] | None:
+    messages = build_coder_patch_messages(request, observations)
+    await emit_context_budget_event(session, "coder", messages)
     response = await runtime.model_router.complete(
         ModelRequest(
             purpose="coder",
-            messages=build_coder_patch_messages(request, observations),
+            messages=messages,
             temperature=0,
             max_tokens=1800,
         )
@@ -279,5 +286,24 @@ async def record_model_usage(session: Session, response: Any, purpose: str, runt
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "estimated_cost": response.estimated_cost,
+        }
+    )
+
+
+async def emit_context_budget_event(session: Session, purpose: str, messages: list[dict[str, str]]) -> None:
+    if len(messages) < 2:
+        return
+    try:
+        payload = json.loads(messages[1].get("content") or "{}")
+    except json.JSONDecodeError:
+        return
+    context_budget = payload.get("context_budget")
+    if not isinstance(context_budget, dict) or not context_budget.get("compacted"):
+        return
+    await session.events.put(
+        {
+            "type": "context.budget",
+            "purpose": purpose,
+            **context_budget,
         }
     )

@@ -24,6 +24,18 @@ def test_budgeted_observations_compacts_large_read_file_text() -> None:
     assert compacted[0]["text"].endswith("TAIL")
     assert "[CONTEXT COMPACTED:" in compacted[0]["text"]
     assert compacted[0]["context_compacted"]["text"]["original_chars"] == len(text)
+    assert stats["compacted_observations"] == [
+        {
+            "tool": "read_file",
+            "path": "src/app.py",
+            "query": "",
+            "workspace": "main",
+            "text_original_chars": len(text),
+            "text_kept_chars": len(compacted[0]["text"]),
+            "data_original_chars": None,
+            "data_kept_chars": None,
+        }
+    ]
 
 
 def test_budgeted_observations_enforces_total_budget() -> None:

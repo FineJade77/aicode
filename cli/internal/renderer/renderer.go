@@ -292,6 +292,10 @@ func RenderEvent(event map[string]any) {
 	case "plan.updated":
 		fmt.Printf("计划更新: %s -> %s\n", stringValue(event["item_id"]), stringValue(event["status"]))
 	case "agent.step":
+		if line := contextStepLine(event); line != "" {
+			fmt.Println(line)
+			break
+		}
 		action := stringValue(event["action"])
 		if action == "tool" {
 			fmt.Printf("Agent step %v: %s (%s)\n", event["index"], stringValue(event["tool"]), stringValue(event["source"]))
@@ -303,9 +307,16 @@ func RenderEvent(event map[string]any) {
 	case "tool.started":
 		fmt.Printf("工具: %s\n", stringValue(event["tool"]))
 	case "tool.output":
+		if line := contextOutputLine(event); line != "" {
+			fmt.Println(line)
+		}
 		text := strings.TrimSpace(stringValue(event["text"]))
 		if text != "" {
 			fmt.Println(text)
+		}
+	case "context.budget":
+		if line := contextBudgetLine(event); line != "" {
+			fmt.Print(line)
 		}
 	case "tool.denied":
 		fmt.Printf("工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
@@ -347,6 +358,127 @@ func RenderEvent(event map[string]any) {
 		if eventType != "" {
 			PrintJSON(event)
 		}
+	}
+}
+
+func contextStepLine(event map[string]any) string {
+	if stringValue(event["action"]) != "tool" {
+		return ""
+	}
+	context := mapValue(event["context"])
+	kind := stringValue(context["kind"])
+	if kind == "" {
+		return ""
+	}
+	sourcePath := stringValue(context["source_path"])
+	query := stringValue(context["query"])
+	switch kind {
+	case "test_mapping":
+		return fmt.Sprintf("上下文: 定位相关测试 %s -> %s", sourcePath, query)
+	case "dependency_mapping":
+		return fmt.Sprintf("上下文: 定位依赖 %s -> %s", sourcePath, query)
+	case "search_result":
+		if query != "" {
+			return fmt.Sprintf("上下文: 读取搜索命中候选 query=%s", query)
+		}
+	case "file_lookup":
+		if query != "" {
+			return fmt.Sprintf("上下文: 读取文件定位候选 query=%s", query)
+		}
+	}
+	return ""
+}
+
+func contextOutputLine(event map[string]any) string {
+	tool := stringValue(event["tool"])
+	data := mapValue(event["data"])
+	context := mapValue(event["context"])
+	kind := stringValue(context["kind"])
+	sourcePath := stringValue(context["source_path"])
+
+	switch tool {
+	case "read_file":
+		path := stringValue(data["path"])
+		if path == "" {
+			return ""
+		}
+		line := fmt.Sprintf("上下文: 已读取 %s", path)
+		if label := contextKindLabel(kind); label != "" && sourcePath != "" {
+			line += fmt.Sprintf(" (%s: %s)", label, sourcePath)
+		}
+		if boolValue(data["truncated"]) {
+			line += "，工具输出已截断"
+		}
+		return line
+	case "find_files":
+		if kind == "" {
+			return ""
+		}
+		label := contextKindLabel(kind)
+		if label == "" {
+			return ""
+		}
+		query := stringValue(data["query"])
+		count := len(sliceValue(data["files"]))
+		if sourcePath != "" && query != "" {
+			return fmt.Sprintf("上下文: %s %s -> %s，命中 %d 个候选", label, sourcePath, query, count)
+		}
+		if query != "" {
+			return fmt.Sprintf("上下文: %s query=%s，命中 %d 个候选", label, query, count)
+		}
+	}
+	return ""
+}
+
+func contextBudgetLine(event map[string]any) string {
+	if !boolValue(event["compacted"]) {
+		return ""
+	}
+	var out strings.Builder
+	purpose := stringValue(event["purpose"])
+	if purpose == "" {
+		purpose = "model"
+	}
+	out.WriteString(fmt.Sprintf(
+		"上下文预算: %s 压缩 %v 条观测，当前约 %v/%v chars\n",
+		purpose,
+		event["per_observation_compactions"],
+		event["estimated_observation_chars"],
+		event["total_budget_chars"],
+	))
+	for _, item := range sliceValue(event["compacted_observations"]) {
+		row := mapValue(item)
+		tool := stringValue(row["tool"])
+		target := stringValue(row["path"])
+		if target == "" {
+			target = stringValue(row["query"])
+		}
+		if target == "" {
+			target = "unknown"
+		}
+		before := row["text_original_chars"]
+		after := row["text_kept_chars"]
+		if before == nil {
+			before = row["data_original_chars"]
+			after = row["data_kept_chars"]
+		}
+		out.WriteString(fmt.Sprintf("  - %s %s: %v -> %v chars\n", tool, target, before, after))
+	}
+	return out.String()
+}
+
+func contextKindLabel(kind string) string {
+	switch kind {
+	case "test_mapping":
+		return "测试映射"
+	case "dependency_mapping":
+		return "依赖映射"
+	case "search_result":
+		return "搜索命中"
+	case "file_lookup":
+		return "文件定位"
+	default:
+		return ""
 	}
 }
 
@@ -417,6 +549,20 @@ func boolValue(value any) bool {
 		return v
 	}
 	return false
+}
+
+func mapValue(value any) map[string]any {
+	if v, ok := value.(map[string]any); ok {
+		return v
+	}
+	return map[string]any{}
+}
+
+func sliceValue(value any) []any {
+	if v, ok := value.([]any); ok {
+		return v
+	}
+	return []any{}
 }
 
 func escapeMarkdownTable(value string) string {

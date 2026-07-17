@@ -10,7 +10,14 @@ from app.sessions.store import Session
 from app.tools.base import ToolResult
 
 
-async def execute_tool(session: Session, request: AgentRequest, name: str, args: dict[str, Any], runtime: AgentRuntime) -> ToolResult:
+async def execute_tool(
+    session: Session,
+    request: AgentRequest,
+    name: str,
+    args: dict[str, Any],
+    runtime: AgentRuntime,
+    context: dict[str, Any] | None = None,
+) -> ToolResult:
     decision = runtime.tools.evaluate(name, args, mode=request.mode)
     runtime.audit.record(
         "tool.started",
@@ -44,7 +51,7 @@ async def execute_tool(session: Session, request: AgentRequest, name: str, args:
     else:
         result = await runtime.tools.run(name, args, workspace=request.workspace, mode=request.mode, language=request.language)
 
-    return await emit_tool_result(session, name, result, runtime)
+    return await emit_tool_result(session, name, result, runtime, context=context)
 
 
 async def request_tool_approval(
@@ -96,8 +103,24 @@ async def request_tool_approval(
     return await session.wait_for_approval(approval.approval_id), approval.approval_id
 
 
-async def emit_tool_result(session: Session, name: str, result: ToolResult, runtime: AgentRuntime) -> ToolResult:
+async def emit_tool_result(
+    session: Session,
+    name: str,
+    result: ToolResult,
+    runtime: AgentRuntime,
+    context: dict[str, Any] | None = None,
+) -> ToolResult:
     if result.success:
+        event: dict[str, Any] = {
+            "type": "tool.output",
+            "tool": name,
+            "text": result.text,
+            "data": result.data,
+            "risk_level": result.risk_level,
+            "requires_approval": result.requires_approval,
+        }
+        if context:
+            event["context"] = context
         runtime.audit.record(
             "tool.completed",
             session_id=session.session_id,
@@ -108,18 +131,10 @@ async def emit_tool_result(session: Session, name: str, result: ToolResult, runt
                 "requires_approval": result.requires_approval,
                 "output_hash": stable_hash(result.text),
                 "data": result.data,
+                "context": context or {},
             },
         )
-        await session.events.put(
-            {
-                "type": "tool.output",
-                "tool": name,
-                "text": result.text,
-                "data": result.data,
-                "risk_level": result.risk_level,
-                "requires_approval": result.requires_approval,
-            }
-        )
+        await session.events.put(event)
         return result
 
     event_type = "tool.denied" if result.requires_approval or result.risk_level == "high" else "tool.error"
@@ -190,8 +205,8 @@ async def emit_tool_rejected(
     return result
 
 
-def observe_tool(name: str, args: dict[str, Any], result: ToolResult) -> dict[str, Any]:
-    return {
+def observe_tool(name: str, args: dict[str, Any], result: ToolResult, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    observation = {
         "tool": name,
         "args": args,
         "step_key": step_key(name, args),
@@ -201,3 +216,6 @@ def observe_tool(name: str, args: dict[str, Any], result: ToolResult) -> dict[st
         "text": truncate_for_model(result.text or result.error),
         "data": compact_tool_data(result.data),
     }
+    if context:
+        observation["context"] = context
+    return observation

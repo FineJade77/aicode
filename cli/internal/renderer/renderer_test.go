@@ -73,6 +73,62 @@ func TestRenderEventPrintsVerificationRepairStarted(t *testing.T) {
 	assertContains(t, output, "尝试生成一次后续修复 patch")
 }
 
+func TestRenderEventPrintsContextMappingStep(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":   "agent.step",
+		"action": "tool",
+		"tool":   "find_files",
+		"context": map[string]any{
+			"kind":        "dependency_mapping",
+			"source_path": "src/service.py",
+			"query":       "src/utils.py",
+		},
+	})
+
+	assertContains(t, output, "上下文: 定位依赖 src/service.py -> src/utils.py")
+}
+
+func TestRenderEventPrintsReadFileContextStatus(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type": "tool.output",
+		"tool": "read_file",
+		"text": "# src/utils.py\ncontent",
+		"data": map[string]any{
+			"path":      "src/utils.py",
+			"truncated": true,
+		},
+		"context": map[string]any{
+			"kind":        "dependency_mapping",
+			"source_path": "src/service.py",
+		},
+	})
+
+	assertContains(t, output, "上下文: 已读取 src/utils.py (依赖映射: src/service.py)，工具输出已截断")
+	assertContains(t, output, "# src/utils.py")
+}
+
+func TestRenderEventPrintsContextBudget(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":                        "context.budget",
+		"purpose":                     "coder",
+		"compacted":                   true,
+		"per_observation_compactions": float64(1),
+		"estimated_observation_chars": float64(1000),
+		"total_budget_chars":          float64(52000),
+		"compacted_observations": []any{
+			map[string]any{
+				"tool":                "read_file",
+				"path":                "src/big.py",
+				"text_original_chars": float64(30000),
+				"text_kept_chars":     float64(18000),
+			},
+		},
+	})
+
+	assertContains(t, output, "上下文预算: coder 压缩 1 条观测")
+	assertContains(t, output, "read_file src/big.py: 30000 -> 18000 chars")
+}
+
 func TestReviewRulesTable(t *testing.T) {
 	table := ReviewRulesTable(reviewRulesFixture())
 

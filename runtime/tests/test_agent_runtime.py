@@ -112,6 +112,25 @@ class DependencyAwareCoderPatchModelRouter:
         return ModelResponse(text="", model="test-summary", provider="stub")
 
 
+class TsConfigAwareCoderPatchModelRouter:
+    primary = ConfiguredPrimary()
+
+    def __init__(self) -> None:
+        self.coder_messages = []
+
+    async def complete(self, request):
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            self.coder_messages = request.messages
+            return ModelResponse(
+                text='{"action":"patch","operation":"replace","path":"src/App.tsx","old_text":"return <Button label=\\"bad\\" />","new_text":"return <Button label=\\"ok\\" />","reason":"fix label"}',
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="", model="test-summary", provider="stub")
+
+
 class HardenedPatchModelRouter:
     primary = ConfiguredPrimary()
 
@@ -384,11 +403,82 @@ async def test_run_agent_reads_dependency_context_before_coder_patch(tmp_path: P
         for event in events
     )
     assert any(
+        event["type"] == "tool.output"
+        and event.get("tool") == "find_files"
+        and event.get("context", {}).get("kind") == "dependency_mapping"
+        and event.get("context", {}).get("source_path") == "src/service.py"
+        for event in events
+    )
+    assert any(
         event["type"] == "tool.output" and event.get("tool") == "read_file" and event["data"]["path"] == "src/utils.py"
+        for event in events
+    )
+    assert any(
+        event["type"] == "tool.output"
+        and event.get("tool") == "read_file"
+        and event["data"]["path"] == "src/utils.py"
+        and event.get("context", {}).get("kind") == "dependency_mapping"
         for event in events
     )
     assert "src/utils.py" in model_router.coder_messages[1]["content"]
     assert "def helper" in model_router.coder_messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_uses_tsconfig_paths_for_dependency_context(tmp_path: Path) -> None:
+    src_dir = tmp_path / "src"
+    components_dir = src_dir / "components"
+    components_dir.mkdir(parents=True)
+    (tmp_path / "tsconfig.json").write_text(
+        '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}\n',
+        encoding="utf-8",
+    )
+    (src_dir / "App.tsx").write_text(
+        "import Button from '@/components/Button'\n\nexport function App() {\n  return <Button label=\"bad\" />\n}\n",
+        encoding="utf-8",
+    )
+    (components_dir / "Button.tsx").write_text(
+        "export default function Button(props: { label: string }) {\n  return <button>{props.label}</button>\n}\n",
+        encoding="utf-8",
+    )
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="修复 src/App.tsx 的 label", mode="default", workspace=str(tmp_path), language="zh-CN")
+    model_router = TsConfigAwareCoderPatchModelRouter()
+    runtime = AgentRuntime(
+        model_router=model_router,
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / ".aicode" / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=10)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=10)
+
+    assert 'return <Button label="ok" />' in (src_dir / "App.tsx").read_text(encoding="utf-8")
+    assert any(
+        event["type"] == "tool.output" and event.get("tool") == "read_file" and event["data"]["path"] == "tsconfig.json"
+        for event in events
+    )
+    assert any(
+        event["type"] == "tool.output"
+        and event.get("tool") == "find_files"
+        and event["data"]["query"] == "src/components/Button"
+        and event.get("context", {}).get("kind") == "dependency_mapping"
+        for event in events
+    )
+    assert any(
+        event["type"] == "tool.output" and event.get("tool") == "read_file" and event["data"]["path"] == "src/components/Button.tsx"
+        for event in events
+    )
+    assert "src/components/Button.tsx" in model_router.coder_messages[1]["content"]
+    assert "props.label" in model_router.coder_messages[1]["content"]
 
 
 @pytest.mark.asyncio

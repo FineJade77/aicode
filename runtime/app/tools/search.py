@@ -61,7 +61,11 @@ async def run_rg(context: ToolContext, workspace_root: Path, workspace_name: str
     filtered_lines = filter_protected_rg_lines(context, workspace_root, workspace_name, proc.stdout.splitlines())
     lines = filtered_lines[:limit]
     text = "\n".join(lines) if lines else "未找到匹配"
-    return ToolResult(success=True, text=text, data={"matches": lines, "workspace": workspace_name or "main", "truncated": len(filtered_lines) > limit})
+    return ToolResult(
+        success=True,
+        text=text,
+        data={"matches": lines, "query": query, "workspace": workspace_name or "main", "truncated": len(filtered_lines) > limit},
+    )
 
 
 def filter_protected_rg_lines(context: ToolContext, workspace_root: Path, workspace_name: str, lines: list[str]) -> list[str]:
@@ -97,7 +101,11 @@ def run_python_search(context: ToolContext, workspace_root: Path, workspace_name
         except UnicodeDecodeError:
             continue
     text = "\n".join(matches) if matches else "未找到匹配"
-    return ToolResult(success=True, text=text, data={"matches": matches, "workspace": workspace_name or "main", "truncated": len(matches) >= limit})
+    return ToolResult(
+        success=True,
+        text=text,
+        data={"matches": matches, "query": query, "workspace": workspace_name or "main", "truncated": len(matches) >= limit},
+    )
 
 
 def format_search_line(workspace_name: str, workspace_root: Path, path: Path, line: str) -> str:

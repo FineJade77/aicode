@@ -100,6 +100,7 @@ def budgeted_observations_for_model(observations: list[dict[str, Any]], purpose:
         "compacted": per_observation_compactions > 0 or total_budget_compactions > 0 or before_chars > budget.total_chars,
         "per_observation_compactions": per_observation_compactions,
         "total_budget_compactions": total_budget_compactions,
+        "compacted_observations": compacted_observation_summaries(compacted),
     }
     return compacted, stats
 
@@ -220,6 +221,31 @@ def compression_priority(observation: dict[str, Any]) -> int:
     if tool in HIGH_PRIORITY_TOOLS:
         return 2
     return 1
+
+
+def compacted_observation_summaries(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for observation in observations:
+        compacted = observation.get("context_compacted")
+        if not isinstance(compacted, dict):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        args = observation.get("args") if isinstance(observation.get("args"), dict) else {}
+        text_meta = compacted.get("text") if isinstance(compacted.get("text"), dict) else {}
+        data_meta = compacted.get("data") if isinstance(compacted.get("data"), dict) else {}
+        summaries.append(
+            {
+                "tool": str(observation.get("tool") or ""),
+                "path": str(data.get("path") or args.get("path") or ""),
+                "query": str(data.get("query") or args.get("query") or ""),
+                "workspace": str(data.get("workspace") or args.get("workspace") or "main"),
+                "text_original_chars": text_meta.get("original_chars"),
+                "text_kept_chars": text_meta.get("kept_chars"),
+                "data_original_chars": data_meta.get("original_chars"),
+                "data_kept_chars": data_meta.get("kept_chars"),
+            }
+        )
+    return summaries
 
 
 def encoded_chars(value: Any) -> int:

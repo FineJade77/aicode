@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import configparser
 import json
 import posixpath
 import re
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -18,6 +20,7 @@ class AgentStep:
     args: dict[str, Any] = field(default_factory=dict)
     reason: str = ""
     source: str = "rules"
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -29,7 +32,17 @@ class AgentStep:
             payload["tool"] = self.tool
             payload["args"] = self.args
             payload["step_key"] = step_key(self.tool, self.args)
+        if self.context:
+            payload["context"] = self.context
         return payload
+
+
+@dataclass(slots=True)
+class DependencyProjectContext:
+    go_module: str = ""
+    python_roots: list[str] = field(default_factory=list)
+    ts_base_url: str = ""
+    ts_paths: list[tuple[str, list[str]]] = field(default_factory=list)
 
 
 TOOL_DOCS: list[dict[str, Any]] = [
@@ -188,6 +201,13 @@ def choose_dynamic_context_step(observations: list[dict[str, Any]], allowed: set
         test_step = choose_related_test_search_step(observations)
         if test_step is not None:
             return test_step
+
+    if "read_file" in allowed and count_tool_observations(observations, "read_file") < MAX_DYNAMIC_CONTEXT_READS:
+        config_step = choose_project_config_read_step(observations)
+        if config_step is not None:
+            return config_step
+
+    if "find_files" in allowed:
         dependency_step = choose_related_dependency_search_step(observations)
         if dependency_step is not None:
             return dependency_step
@@ -210,12 +230,14 @@ def choose_context_candidate_read_step(observations: list[dict[str, Any]], prefe
                 args["workspace"] = candidate["workspace"]
             if read_file_seen(observations, args):
                 continue
+            context = context_for_candidate(observation)
             return AgentStep(
                 action="tool",
                 tool="read_file",
                 args=args,
                 reason=f"read located context file {candidate['path']}",
                 source="rules",
+                context=context,
             )
     return None
 
@@ -238,21 +260,49 @@ def choose_related_test_search_step(observations: list[dict[str, Any]]) -> Agent
                     args=args,
                     reason=f"locate related test file for {path}",
                     source="rules",
+                    context={"kind": "test_mapping", "source_path": path, "query": query},
                 )
     return None
 
 
-def choose_related_dependency_search_step(observations: list[dict[str, Any]]) -> AgentStep | None:
+def choose_project_config_read_step(observations: list[dict[str, Any]]) -> AgentStep | None:
     for observation in observations:
         if observation.get("tool") != "read_file" or not observation.get("success"):
             continue
         data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
         workspace = str(data.get("workspace") or "main")
         path = strip_workspace_prefix(str(data.get("path") or ""), workspace)
-        if is_test_path(path):
+        if is_test_path(path) or is_project_config_path(path):
+            continue
+        for config_path in project_config_paths_for_source(path, observations):
+            args: dict[str, Any] = {"path": config_path, "max_bytes": 20_000}
+            if workspace != "main":
+                args["workspace"] = workspace
+            if read_file_seen(observations, args):
+                continue
+            return AgentStep(
+                action="tool",
+                tool="read_file",
+                args=args,
+                reason=f"read project config for {path}",
+                source="rules",
+                context={"kind": "project_config", "source_path": path, "config_path": config_path},
+            )
+    return None
+
+
+def choose_related_dependency_search_step(observations: list[dict[str, Any]]) -> AgentStep | None:
+    project_context = dependency_context_from_observations(observations)
+    for observation in observations:
+        if observation.get("tool") != "read_file" or not observation.get("success"):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        workspace = str(data.get("workspace") or "main")
+        path = strip_workspace_prefix(str(data.get("path") or ""), workspace)
+        if is_test_path(path) or is_project_config_path(path):
             continue
         text = read_file_text_from_observation(observation)
-        for query in related_dependency_queries(path, text):
+        for query in related_dependency_queries(path, text, project_context):
             args: dict[str, Any] = {"query": query, "limit": 20}
             if workspace != "main":
                 args["workspace"] = workspace
@@ -263,8 +313,35 @@ def choose_related_dependency_search_step(observations: list[dict[str, Any]]) ->
                     args=args,
                     reason=f"locate dependency context for {path}",
                     source="rules",
+                    context={"kind": "dependency_mapping", "source_path": path, "query": query},
                 )
     return None
+
+
+def project_config_paths_for_source(path: str, observations: list[dict[str, Any]]) -> list[str]:
+    files = detected_project_files(observations)
+    suffix = PurePosixPath(path).suffix.lower()
+    candidates: list[str] = []
+    if suffix in {".ts", ".tsx", ".js", ".jsx"} and files.get("tsconfig_json"):
+        candidates.append("tsconfig.json")
+    if suffix == ".go" and files.get("go_mod"):
+        candidates.append("go.mod")
+    if suffix == ".py":
+        if files.get("pyproject_toml"):
+            candidates.append("pyproject.toml")
+        if files.get("setup_cfg"):
+            candidates.append("setup.cfg")
+    return candidates
+
+
+def detected_project_files(observations: list[dict[str, Any]]) -> dict[str, bool]:
+    for observation in observations:
+        if observation.get("tool") != "detect_project" or not observation.get("success"):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        files = data.get("files") if isinstance(data.get("files"), dict) else {}
+        return {str(key): bool(value) for key, value in files.items()}
+    return {}
 
 
 def count_tool_observations(observations: list[dict[str, Any]], tool: str) -> int:
@@ -283,6 +360,19 @@ def context_file_candidates(observation: dict[str, Any]) -> list[dict[str, str]]
         matches = data.get("matches") if isinstance(data.get("matches"), list) else []
         return normalize_candidate_files([search_match_path(str(match), workspace) for match in matches], workspace)
     return []
+
+
+def context_for_candidate(observation: dict[str, Any]) -> dict[str, Any]:
+    context = observation.get("context") if isinstance(observation.get("context"), dict) else {}
+    if context:
+        return dict(context)
+    if observation.get("tool") == "search_text":
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        return {"kind": "search_result", "query": str(data.get("query") or "")}
+    if observation.get("tool") == "find_files":
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        return {"kind": "file_lookup", "query": str(data.get("query") or "")}
+    return {}
 
 
 def normalize_candidate_files(raw_files: list[Any], workspace: str) -> list[dict[str, str]]:
@@ -357,19 +447,24 @@ def related_test_queries(path: str) -> list[str]:
     return queries[:MAX_RELATED_TEST_QUERIES]
 
 
-def related_dependency_queries(path: str, text: str) -> list[str]:
+def related_dependency_queries(
+    path: str,
+    text: str,
+    project_context: DependencyProjectContext | None = None,
+) -> list[str]:
+    project_context = project_context or DependencyProjectContext()
     path = normalize_context_path(path)
     suffix = PurePosixPath(path).suffix.lower()
     if suffix == ".py":
-        return python_dependency_queries(path, text)
+        return python_dependency_queries(path, text, project_context)
     if suffix == ".go":
-        return go_dependency_queries(text)
+        return go_dependency_queries(text, project_context)
     if suffix in {".ts", ".tsx", ".js", ".jsx"}:
-        return js_dependency_queries(path, text)
+        return js_dependency_queries(path, text, project_context)
     return []
 
 
-def python_dependency_queries(path: str, text: str) -> list[str]:
+def python_dependency_queries(path: str, text: str, project_context: DependencyProjectContext) -> list[str]:
     queries: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -379,7 +474,7 @@ def python_dependency_queries(path: str, text: str) -> list[str]:
         if from_match:
             module = from_match.group(1)
             imported = from_match.group(2)
-            queries.extend(python_module_queries(path, module))
+            queries.extend(python_module_queries(path, module, project_context))
             if module == ".":
                 queries.extend(f"{name}.py" for name in imported_python_names(imported))
             continue
@@ -388,11 +483,11 @@ def python_dependency_queries(path: str, text: str) -> list[str]:
             imports = import_match.group(1).split(",")
             for item in imports:
                 module = item.strip().split(" as ", 1)[0].strip()
-                queries.extend(python_module_queries(path, module))
+                queries.extend(python_module_queries(path, module, project_context))
     return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
 
 
-def python_module_queries(path: str, module: str) -> list[str]:
+def python_module_queries(path: str, module: str, project_context: DependencyProjectContext) -> list[str]:
     module = module.strip()
     if not module:
         return []
@@ -410,7 +505,9 @@ def python_module_queries(path: str, module: str) -> list[str]:
     if root in PYTHON_COMMON_EXTERNAL_MODULES:
         return []
     module_path = module.replace(".", "/")
-    return [f"{module_path}.py", f"{PurePosixPath(module_path).name}.py"]
+    queries = [f"{root_path}/{module_path}.py" for root_path in project_context.python_roots]
+    queries.extend([f"{module_path}.py", f"{PurePosixPath(module_path).name}.py"])
+    return queries
 
 
 def imported_python_names(raw: str) -> list[str]:
@@ -422,10 +519,14 @@ def imported_python_names(raw: str) -> list[str]:
     return names
 
 
-def go_dependency_queries(text: str) -> list[str]:
+def go_dependency_queries(text: str, project_context: DependencyProjectContext) -> list[str]:
     queries: list[str] = []
     for module in re.findall(r'"([^"]+)"', text):
         if module in GO_COMMON_EXTERNAL_MODULES:
+            continue
+        if project_context.go_module and module.startswith(project_context.go_module + "/"):
+            local_path = module.removeprefix(project_context.go_module + "/")
+            queries.extend([local_path, PurePosixPath(local_path).name])
             continue
         if "/" not in module and "." not in module:
             continue
@@ -436,7 +537,7 @@ def go_dependency_queries(text: str) -> list[str]:
     return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
 
 
-def js_dependency_queries(path: str, text: str) -> list[str]:
+def js_dependency_queries(path: str, text: str, project_context: DependencyProjectContext) -> list[str]:
     queries: list[str] = []
     patterns = [
         r"\bimport\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)['\"]",
@@ -445,11 +546,11 @@ def js_dependency_queries(path: str, text: str) -> list[str]:
     ]
     for pattern in patterns:
         for module in re.findall(pattern, text):
-            queries.extend(js_module_queries(path, module))
+            queries.extend(js_module_queries(path, module, project_context))
     return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
 
 
-def js_module_queries(path: str, module: str) -> list[str]:
+def js_module_queries(path: str, module: str, project_context: DependencyProjectContext) -> list[str]:
     module = module.strip()
     if not module:
         return []
@@ -457,6 +558,9 @@ def js_module_queries(path: str, module: str) -> list[str]:
         base_dir = PurePosixPath(path).parent
         resolved = normalize_context_path(posixpath.normpath(str(base_dir / module)))
         return [resolved, *js_extension_queries(resolved), PurePosixPath(resolved).name]
+    alias_queries = tsconfig_path_queries(module, project_context)
+    if alias_queries:
+        return alias_queries
     if module.startswith("@/"):
         normalized = normalize_context_path(module[2:])
         return [normalized, *js_extension_queries(normalized), PurePosixPath(normalized).name]
@@ -467,6 +571,32 @@ def js_module_queries(path: str, module: str) -> list[str]:
         normalized = normalize_context_path(module)
         return [normalized, *js_extension_queries(normalized), PurePosixPath(normalized).name]
     return []
+
+
+def tsconfig_path_queries(module: str, project_context: DependencyProjectContext) -> list[str]:
+    queries: list[str] = []
+    for alias, targets in project_context.ts_paths:
+        matched, wildcard = match_ts_path_alias(module, alias)
+        if not matched:
+            continue
+        for target in targets:
+            resolved = target.replace("*", wildcard)
+            if not resolved.startswith(".") and project_context.ts_base_url:
+                resolved = normalize_context_path(posixpath.join(project_context.ts_base_url, resolved))
+            else:
+                resolved = normalize_context_path(posixpath.normpath(resolved))
+            queries.extend([resolved, *js_extension_queries(resolved), PurePosixPath(resolved).name])
+    return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
+
+
+def match_ts_path_alias(module: str, alias: str) -> tuple[bool, str]:
+    if "*" not in alias:
+        return module == alias, ""
+    prefix, _, suffix = alias.partition("*")
+    if not module.startswith(prefix) or (suffix and not module.endswith(suffix)):
+        return False, ""
+    end = len(module) - len(suffix) if suffix else len(module)
+    return True, module[len(prefix) : end]
 
 
 def js_extension_queries(path: str) -> list[str]:
@@ -497,6 +627,128 @@ def read_file_text_from_observation(observation: dict[str, Any]) -> str:
     if lines and lines[0].startswith("# "):
         return "\n".join(lines[1:])
     return text
+
+
+def dependency_context_from_observations(observations: list[dict[str, Any]]) -> DependencyProjectContext:
+    context = DependencyProjectContext()
+    for observation in observations:
+        if observation.get("tool") != "read_file" or not observation.get("success"):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        path = normalize_context_path(strip_workspace_prefix(str(data.get("path") or ""), str(data.get("workspace") or "main")))
+        text = read_file_text_from_observation(observation)
+        if path == "go.mod":
+            context.go_module = parse_go_module(text) or context.go_module
+        elif path == "tsconfig.json":
+            base_url, paths = parse_tsconfig_paths(text)
+            context.ts_base_url = base_url
+            context.ts_paths = paths
+        elif path == "pyproject.toml":
+            context.python_roots = unique_queries([*context.python_roots, *parse_pyproject_python_roots(text)], 10)
+        elif path == "setup.cfg":
+            context.python_roots = unique_queries([*context.python_roots, *parse_setup_cfg_python_roots(text)], 10)
+    return context
+
+
+def parse_go_module(text: str) -> str:
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("module "):
+            return line.removeprefix("module ").strip()
+    return ""
+
+
+def parse_tsconfig_paths(text: str) -> tuple[str, list[tuple[str, list[str]]]]:
+    try:
+        payload = json.loads(strip_json_comments(text))
+    except json.JSONDecodeError:
+        return "", []
+    compiler_options = payload.get("compilerOptions") if isinstance(payload, dict) else {}
+    if not isinstance(compiler_options, dict):
+        return "", []
+    base_url = normalize_context_path(str(compiler_options.get("baseUrl") or ""))
+    raw_paths = compiler_options.get("paths")
+    paths: list[tuple[str, list[str]]] = []
+    if isinstance(raw_paths, dict):
+        for alias, targets in raw_paths.items():
+            if isinstance(targets, list):
+                cleaned = [normalize_context_path(str(target)) for target in targets if str(target).strip()]
+                if cleaned:
+                    paths.append((str(alias), cleaned))
+    return base_url, paths
+
+
+def strip_json_comments(text: str) -> str:
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("//"):
+            continue
+        lines.append(raw)
+    return "\n".join(lines)
+
+
+def parse_pyproject_python_roots(text: str) -> list[str]:
+    try:
+        payload = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+    roots: list[str] = []
+    tool = payload.get("tool") if isinstance(payload, dict) else {}
+    if not isinstance(tool, dict):
+        return []
+    setuptools = tool.get("setuptools") if isinstance(tool.get("setuptools"), dict) else {}
+    package_dir = setuptools.get("package-dir") or setuptools.get("package_dir") if isinstance(setuptools, dict) else None
+    if isinstance(package_dir, dict):
+        root = package_dir.get("")
+        if isinstance(root, str):
+            roots.append(root)
+    packages = setuptools.get("packages") if isinstance(setuptools, dict) else {}
+    find = packages.get("find") if isinstance(packages, dict) and isinstance(packages.get("find"), dict) else {}
+    where = find.get("where") if isinstance(find, dict) else None
+    roots.extend(string_or_list_values(where))
+    pytest_options = tool.get("pytest", {}).get("ini_options") if isinstance(tool.get("pytest"), dict) else None
+    if isinstance(pytest_options, dict):
+        roots.extend(string_or_list_values(pytest_options.get("pythonpath")))
+    return unique_queries([normalize_context_path(root) for root in roots], 10)
+
+
+def parse_setup_cfg_python_roots(text: str) -> list[str]:
+    parser = configparser.ConfigParser()
+    try:
+        parser.read_string(text)
+    except configparser.Error:
+        return []
+    roots: list[str] = []
+    if parser.has_option("options", "package_dir"):
+        roots.extend(setup_cfg_package_dir_roots(parser.get("options", "package_dir")))
+    if parser.has_option("options.packages.find", "where"):
+        roots.extend(string_or_list_values(parser.get("options.packages.find", "where")))
+    return unique_queries([normalize_context_path(root) for root in roots], 10)
+
+
+def setup_cfg_package_dir_roots(raw: str) -> list[str]:
+    roots: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("="):
+            roots.append(stripped.removeprefix("=").strip())
+        elif "=" in stripped:
+            _key, value = stripped.split("=", 1)
+            roots.append(value.strip())
+    return roots
+
+
+def string_or_list_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in re.split(r"[,\n]", value) if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def is_project_config_path(path: str) -> bool:
+    return normalize_context_path(path) in {"go.mod", "tsconfig.json", "pyproject.toml", "setup.cfg"}
 
 
 def is_test_path(path: str) -> bool:
