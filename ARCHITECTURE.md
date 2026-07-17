@@ -366,6 +366,7 @@ class ToolCall:
 第一版工具：
 
 - `list_files`
+- `find_files`
 - `read_file`
 - `search_text`
 - `git_status`

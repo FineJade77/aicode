@@ -101,7 +101,7 @@ async def emit_agent_failure(session: Session, request: AgentRequest, exc: Excep
     )
 
 
-async def run_context_loop(session: Session, request: AgentRequest, runtime: AgentRuntime, max_steps: int = 8) -> list[dict[str, Any]]:
+async def run_context_loop(session: Session, request: AgentRequest, runtime: AgentRuntime, max_steps: int = 10) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     context_tools = choose_context_tools(request)
 

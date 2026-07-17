@@ -7,7 +7,7 @@ from typing import Any
 from app.policy.engine import PolicyDecision, PolicyEngine
 from app.project.config import load_project_config
 from app.tools.base import ToolContext, ToolError, ToolResult
-from app.tools.file import ListFilesTool, ReadFileTool
+from app.tools.file import FindFilesTool, ListFilesTool, ReadFileTool
 from app.tools.git import GitDiffTool, GitShowTool, GitStatusTool
 from app.tools.project import DetectProjectTool, RunTestsTool
 from app.tools.review import ReviewDiffTool
@@ -22,6 +22,7 @@ class ToolRouter:
             tool.name: tool
             for tool in [
                 ListFilesTool(),
+                FindFilesTool(),
                 ReadFileTool(),
                 SearchTextTool(),
                 DetectProjectTool(),

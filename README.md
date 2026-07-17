@@ -18,6 +18,7 @@
 - 结构化工具系统
 - Policy Engine v1
 - `list_files`
+- `find_files`
 - `read_file`
 - `search_text`
 - `git_status`
@@ -54,6 +55,7 @@ go run ./cli "解释当前目录"
 
 CLI 会自动启动 Python Runtime daemon，并通过 SSE 接收事件。
 Runtime 会按计划执行工具循环：先收集工作区、项目和 git 状态，再根据请求选择只读分析、测试或 diff 工具；所有写入仍必须经过 inline diff 确认。
+当请求只包含函数名、关键词或不确定位置的文件名时，Runtime 会先搜索/定位候选文件，并自动读取前几个相关文件作为 coder 上下文。
 当模型 provider 已配置且任务带有修复、实现、更新、补测试等写作意图时，Runtime 会让 coder model 输出受限 JSON patch proposal；单次 proposal 可包含多个文件操作，Runtime 会合并生成 unified diff，等待用户确认后才应用。
 如果 patch 应用后的自动验证失败，Runtime 会基于失败分析最多生成一次后续修复 patch；后续修复同样只展示 diff，不会绕过用户确认。
 
@@ -188,7 +190,7 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 
 - `protectedPaths`: 文件读取、搜索、列表和 patch 写入都会跳过或拦截这些路径。
 - `commands.test`: 设置为具体命令时，`aicode test` 会优先使用该命令；设置为 `auto` 时自动探测。
-- `workspaces`: 声明额外只读仓库，供 `list_files`、`read_file`、`search_text`、`git_status`、`git_diff`、`git_show` 分析使用。
+- `workspaces`: 声明额外只读仓库，供 `list_files`、`find_files`、`read_file`、`search_text`、`git_status`、`git_diff`、`git_show` 分析使用。
 - `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
 - `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
 - `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。

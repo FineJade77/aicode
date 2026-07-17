@@ -52,6 +52,55 @@ def test_choose_rule_step_runs_bootstrap_then_context() -> None:
     assert finish.action == "finish"
 
 
+def test_choose_rule_step_reads_search_result_file() -> None:
+    observations = bootstrap_observations()
+    search_args = {"query": "login", "limit": 40}
+    observations.append(
+        {
+            "tool": "search_text",
+            "args": search_args,
+            "step_key": step_key("search_text", search_args),
+            "success": True,
+            "data": {"workspace": "main", "matches": ["src/auth.py:12:def login():", "src/auth.py:20:return token"]},
+        }
+    )
+
+    step = choose_rule_step("修复 login", "default", observations, [("search_text", search_args)])
+
+    assert step.tool == "read_file"
+    assert step.args == {"path": "src/auth.py", "max_bytes": 24_000}
+
+
+def test_choose_rule_step_reads_find_files_result_from_workspace() -> None:
+    observations = bootstrap_observations()
+    find_args = {"workspace": "api", "query": "service.py", "limit": 20}
+    observations.append(
+        {
+            "tool": "find_files",
+            "args": find_args,
+            "step_key": step_key("find_files", find_args),
+            "success": True,
+            "data": {"workspace": "api", "files": ["api:src/service.py"]},
+        }
+    )
+
+    step = choose_rule_step("解释 api service", "default", observations, [("find_files", find_args)])
+
+    assert step.tool == "read_file"
+    assert step.args == {"path": "src/service.py", "max_bytes": 24_000, "workspace": "api"}
+
+
+def bootstrap_observations() -> list[dict]:
+    observations = []
+    for tool, args in [
+        ("list_files", {"path": ".", "max_depth": 1, "limit": 40}),
+        ("detect_project", {}),
+        ("git_status", {}),
+    ]:
+        observations.append({"tool": tool, "args": args, "step_key": step_key(tool, args), "success": True, "data": {}})
+    return observations
+
+
 def test_review_mode_allowed_tools_are_read_only() -> None:
     assert "review_diff" in allowed_tool_names("review")
     assert "run_tests" not in allowed_tool_names("review")

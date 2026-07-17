@@ -18,6 +18,19 @@ async def test_list_files_reads_workspace(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_find_files_locates_matching_file(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "user_service.py").write_text("class UserService:\n    pass\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET=1\n", encoding="utf-8")
+
+    result = await ToolRouter().run("find_files", {"query": "service", "limit": 10}, str(tmp_path), "default", "zh-CN")
+
+    assert result.success
+    assert result.data["files"] == ["src/user_service.py"]
+    assert ".env" not in result.text
+
+
+@pytest.mark.asyncio
 async def test_read_file_blocks_path_escape(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")

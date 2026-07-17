@@ -121,6 +121,7 @@ Runtime Agent：
 内置工具：
 
 - `list_files`
+- `find_files`
 - `read_file`
 - `search_text`
 - `git_status`
@@ -576,7 +577,7 @@ aicode commit-message
 5. 实现 session create 和 SSE event stream。
 6. 实现配置文件加载，默认 `ui.language = "zh-CN"`。
 7. 实现 OpenAI-compatible provider stub。
-8. 实现 `list_files`、`read_file`、`search_text`。
+8. 实现 `list_files`、`find_files`、`read_file`、`search_text`。
 9. 实现 Policy Engine v1。
 10. 实现 patch preview 和 approval flow。
 11. 实现 apply patch after approval。

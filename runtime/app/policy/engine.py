@@ -18,6 +18,7 @@ class PolicyEngine:
 
     read_tools = {
         "detect_project",
+        "find_files",
         "list_files",
         "read_file",
         "search_text",

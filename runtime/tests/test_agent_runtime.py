@@ -72,6 +72,25 @@ class MultiFileCoderPatchModelRouter:
         return ModelResponse(text="", model="test-summary", provider="stub")
 
 
+class ContextAwareCoderPatchModelRouter:
+    primary = ConfiguredPrimary()
+
+    def __init__(self) -> None:
+        self.coder_messages = []
+
+    async def complete(self, request):
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            self.coder_messages = request.messages
+            return ModelResponse(
+                text='{"action":"patch","operation":"replace","path":"src/calc.py","old_text":"return a - b","new_text":"return a + b","reason":"fix add"}',
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="", model="test-summary", provider="stub")
+
+
 class RepairingCoderModelRouter:
     primary = ConfiguredPrimary()
 
@@ -185,6 +204,37 @@ async def test_run_agent_uses_multi_file_coder_patch_with_single_approval(tmp_pa
     assert previews[0]["files"] == ["README.md", "TODO.md"]
     assert "--- a/README.md" in previews[0]["diff"]
     assert "--- /dev/null" in previews[0]["diff"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_reads_located_context_before_coder_patch(tmp_path: Path) -> None:
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="修复 add 函数", mode="default", workspace=str(tmp_path), language="zh-CN")
+    model_router = ContextAwareCoderPatchModelRouter()
+    runtime = AgentRuntime(
+        model_router=model_router,
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=10)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=10)
+
+    assert (tmp_path / "src" / "calc.py").read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
+    assert any(event["type"] == "tool.output" and event.get("tool") == "search_text" for event in events)
+    assert any(event["type"] == "tool.output" and event.get("tool") == "read_file" and event["data"]["path"] == "src/calc.py" for event in events)
+    assert "def add" in model_router.coder_messages[1]["content"]
 
 
 @pytest.mark.asyncio

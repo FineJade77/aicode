@@ -37,6 +37,12 @@ TOOL_DOCS: list[dict[str, Any]] = [
         "args": {"path": ".", "workspace": "optional configured workspace name", "max_depth": 1, "limit": 40},
     },
     {
+        "name": "find_files",
+        "read_only": True,
+        "description": "Find files by path or filename query in the main workspace or a configured read-only workspace.",
+        "args": {"query": "filename or glob", "path": ".", "workspace": "optional configured workspace name", "limit": 20},
+    },
+    {
         "name": "detect_project",
         "read_only": True,
         "description": "Detect languages, package manager, and test command.",
@@ -93,6 +99,7 @@ TOOL_DOCS: list[dict[str, Any]] = [
 ]
 
 READ_ONLY_TOOLS = {tool["name"] for tool in TOOL_DOCS if tool["read_only"]}
+MAX_DYNAMIC_CONTEXT_READS = 3
 
 
 def allowed_tool_names(mode: str) -> set[str]:
@@ -119,7 +126,81 @@ def choose_rule_step(message: str, mode: str, observations: list[dict[str, Any]]
             continue
         if not observation_seen(observations, tool, args):
             return AgentStep(action="tool", tool=tool, args=args, reason=f"collect context with {tool}", source="rules")
+    dynamic_step = choose_dynamic_context_step(observations, allowed)
+    if dynamic_step is not None:
+        return dynamic_step
     return AgentStep(action="finish", reason="required context is collected", source="rules")
+
+
+def choose_dynamic_context_step(observations: list[dict[str, Any]], allowed: set[str]) -> AgentStep | None:
+    if "read_file" not in allowed:
+        return None
+    if count_tool_observations(observations, "read_file") >= MAX_DYNAMIC_CONTEXT_READS:
+        return None
+
+    for observation in observations:
+        for candidate in context_file_candidates(observation):
+            args: dict[str, Any] = {"path": candidate["path"], "max_bytes": 24_000}
+            if candidate["workspace"] != "main":
+                args["workspace"] = candidate["workspace"]
+            if not observation_seen(observations, "read_file", args):
+                return AgentStep(
+                    action="tool",
+                    tool="read_file",
+                    args=args,
+                    reason=f"read located context file {candidate['path']}",
+                    source="rules",
+                )
+    return None
+
+
+def count_tool_observations(observations: list[dict[str, Any]], tool: str) -> int:
+    return sum(1 for observation in observations if observation.get("tool") == tool)
+
+
+def context_file_candidates(observation: dict[str, Any]) -> list[dict[str, str]]:
+    if not observation.get("success"):
+        return []
+    data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+    workspace = str(data.get("workspace") or "main")
+    if observation.get("tool") == "find_files":
+        files = data.get("files") if isinstance(data.get("files"), list) else []
+        return normalize_candidate_files(files, workspace)
+    if observation.get("tool") == "search_text":
+        matches = data.get("matches") if isinstance(data.get("matches"), list) else []
+        return normalize_candidate_files([search_match_path(str(match), workspace) for match in matches], workspace)
+    return []
+
+
+def normalize_candidate_files(raw_files: list[Any], workspace: str) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_files:
+        path = strip_workspace_prefix(str(raw or "").strip(), workspace)
+        if not path:
+            continue
+        key = (workspace, path)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"workspace": workspace, "path": path})
+        if len(candidates) >= MAX_DYNAMIC_CONTEXT_READS:
+            break
+    return candidates
+
+
+def search_match_path(match: str, workspace: str) -> str:
+    match = strip_workspace_prefix(match, workspace)
+    path, _, _rest = match.partition(":")
+    return path
+
+
+def strip_workspace_prefix(value: str, workspace: str) -> str:
+    if workspace != "main":
+        prefix = f"{workspace}:"
+        if value.startswith(prefix):
+            return value[len(prefix) :]
+    return value
 
 
 def build_planner_messages(
