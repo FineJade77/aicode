@@ -15,6 +15,13 @@ class PatchProposal:
     new_content: str
 
 
+@dataclass(slots=True)
+class PatchApplication:
+    path: str
+    new_content: str
+    allow_create: bool = False
+
+
 def create_append_patch(
     workspace: Path,
     raw_path: str,
@@ -129,3 +136,44 @@ def apply_content_patch(
     if not path.parent.exists() or not path.parent.is_dir():
         raise ToolError(f"父目录不存在: {display_path(workspace, path.parent)}")
     path.write_text(new_content, encoding="utf-8")
+
+
+def apply_content_patches(
+    workspace: Path,
+    patches: list[PatchApplication],
+    protected_paths: list[str] | None = None,
+) -> None:
+    protected_paths = protected_paths or default_protected_paths()
+    resolved: list[tuple[Path, PatchApplication]] = []
+    original_contents: dict[Path, str | None] = {}
+
+    for patch in patches:
+        path = resolve_workspace_path(workspace, patch.path)
+        reject_protected_path(workspace, path, protected_paths)
+        if path in original_contents:
+            raise ToolError(f"重复修改同一文件: {display_path(workspace, path)}")
+        if path.exists() and not path.is_file():
+            raise ToolError(f"不是文件: {display_path(workspace, path)}")
+        if not path.exists() and not patch.allow_create:
+            raise ToolError(f"文件不存在: {display_path(workspace, path)}")
+        if not path.parent.exists() or not path.parent.is_dir():
+            raise ToolError(f"父目录不存在: {display_path(workspace, path.parent)}")
+        original_contents[path] = path.read_text(encoding="utf-8") if path.exists() else None
+        resolved.append((path, patch))
+
+    written: list[Path] = []
+    try:
+        for path, patch in resolved:
+            path.write_text(patch.new_content, encoding="utf-8")
+            written.append(path)
+    except Exception as exc:
+        rollback_paths = written if path in written else [*written, path]
+        for rollback_path in reversed(rollback_paths):
+            original = original_contents.get(rollback_path)
+            if original is None:
+                rollback_path.unlink(missing_ok=True)
+            else:
+                rollback_path.write_text(original, encoding="utf-8")
+        if isinstance(exc, ToolError):
+            raise
+        raise ToolError(str(exc)) from exc

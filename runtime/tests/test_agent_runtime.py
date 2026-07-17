@@ -48,6 +48,30 @@ class CoderPatchModelRouter:
         return ModelResponse(text="done", model="test-summary", provider="test")
 
 
+class MultiFileCoderPatchModelRouter:
+    primary = ConfiguredPrimary()
+
+    def __init__(self) -> None:
+        self.purposes: list[str] = []
+
+    async def complete(self, request):
+        self.purposes.append(request.purpose)
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            return ModelResponse(
+                text=(
+                    '{"action":"patch","operations":['
+                    '{"operation":"replace","path":"README.md","old_text":"old value","new_text":"new value"},'
+                    '{"operation":"create","path":"TODO.md","content":"first task"}'
+                    '],"reason":"update multiple files"}'
+                ),
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="", model="test-summary", provider="stub")
+
+
 class RepairingCoderModelRouter:
     primary = ConfiguredPrimary()
 
@@ -124,6 +148,43 @@ async def test_run_agent_uses_coder_patch_after_context_and_requires_approval(tm
     assert "coder" in model_router.purposes
     assert any(event["type"] == "patch.preview" for event in events)
     assert any(event["type"] == "patch.applied" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_uses_multi_file_coder_patch_with_single_approval(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("old value\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="更新 README 并创建 TODO", mode="default", workspace=str(tmp_path), language="zh-CN")
+    model_router = MultiFileCoderPatchModelRouter()
+    runtime = AgentRuntime(
+        model_router=model_router,
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    approval_count = 0
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=5)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            approval_count += 1
+            assert (tmp_path / "README.md").read_text(encoding="utf-8") == "old value\n"
+            assert not (tmp_path / "TODO.md").exists()
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=5)
+
+    assert approval_count == 1
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new value\n"
+    assert (tmp_path / "TODO.md").read_text(encoding="utf-8") == "first task\n"
+    previews = [event for event in events if event["type"] == "patch.preview"]
+    assert len(previews) == 1
+    assert previews[0]["files"] == ["README.md", "TODO.md"]
+    assert "--- a/README.md" in previews[0]["diff"]
+    assert "--- /dev/null" in previews[0]["diff"]
 
 
 @pytest.mark.asyncio

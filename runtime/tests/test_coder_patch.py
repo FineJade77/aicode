@@ -17,6 +17,40 @@ def test_parse_coder_patch_accepts_replace_json() -> None:
     assert patch.new_text == "new"
 
 
+def test_parse_coder_patch_accepts_operations_json() -> None:
+    patch = parse_coder_patch(
+        """{
+  "action": "patch",
+  "operations": [
+    {"operation": "replace", "path": "README.md", "old_text": "old", "new_text": "new"},
+    {"operation": "create", "path": "TODO.md", "content": "todo"}
+  ],
+  "reason": "update docs"
+}"""
+    )
+
+    assert patch is not None
+    assert len(patch.operations) == 2
+    assert patch.operations[0].operation == "replace"
+    assert patch.operations[0].path == "README.md"
+    assert patch.operations[1].operation == "create"
+    assert patch.operations[1].path == "TODO.md"
+
+
+def test_parse_coder_patch_rejects_duplicate_operation_paths() -> None:
+    patch = parse_coder_patch(
+        """{
+  "action": "patch",
+  "operations": [
+    {"operation": "replace", "path": "README.md", "old_text": "old", "new_text": "new"},
+    {"operation": "append", "path": "./README.md", "text": "more"}
+  ]
+}"""
+    )
+
+    assert patch is None
+
+
 def test_parse_coder_patch_rejects_cross_workspace_path() -> None:
     patch = parse_coder_patch(
         '{"action":"patch","operation":"replace","path":"api:src/service.py","old_text":"old","new_text":"new"}'
