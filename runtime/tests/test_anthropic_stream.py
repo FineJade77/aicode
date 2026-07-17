@@ -1,0 +1,55 @@
+import httpx
+import pytest
+
+from app.config.settings import AnthropicSettings
+from app.models.anthropic import AnthropicProvider, to_anthropic_messages
+from app.models.provider import CompletionRequest
+
+
+def sse(event: str, data: str) -> str:
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+STREAM_BODY = (
+    sse("message_start", '{"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":9}}}')
+    + sse("content_block_start", '{"type":"content_block_start","index":0,"content_block":{"type":"text"}}')
+    + sse("content_block_delta", '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好的"}}')
+    + sse("content_block_stop", '{"type":"content_block_stop","index":0}')
+    + sse("content_block_start", '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"bash"}}')
+    + sse("content_block_delta", '{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\":"}}')
+    + sse("content_block_delta", '{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" \\"ls\\"}"}}')
+    + sse("content_block_stop", '{"type":"content_block_stop","index":1}')
+    + sse("message_delta", '{"type":"message_delta","usage":{"output_tokens":7}}')
+    + sse("message_stop", '{"type":"message_stop"}')
+).encode()
+
+
+@pytest.mark.asyncio
+async def test_stream_parses_anthropic_events(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=STREAM_BODY))))
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    events = [event async for event in provider.stream_complete(request)]
+    assert [e.type for e in events] == ["text_delta", "tool_call", "done"]
+    assert events[0].text == "好的"
+    assert events[1].tool_call.id == "tu_1"
+    assert events[1].tool_call.arguments == {"command": "ls"}
+    assert events[2].usage.input_tokens == 9
+    assert events[2].usage.output_tokens == 7
+    assert events[2].model == "claude-x"
+
+
+def test_message_mapping_tool_roundtrip():
+    messages = [
+        {"role": "user", "content": "u"},
+        {"role": "assistant", "content": "a", "tool_calls": [{"id": "tu_1", "name": "bash", "arguments": {"command": "ls"}}]},
+        {"role": "tool", "tool_call_id": "tu_1", "content": "out"},
+        {"role": "user", "content": "next"},
+    ]
+    mapped = to_anthropic_messages(messages)
+    assert mapped[1]["content"][0] == {"type": "text", "text": "a"}
+    assert mapped[1]["content"][1]["type"] == "tool_use"
+    assert mapped[2]["role"] == "user"
+    assert mapped[2]["content"][0]["type"] == "tool_result"
+    assert mapped[2]["content"][1] == {"type": "text", "text": "next"}  # 连续 user 合并
