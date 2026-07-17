@@ -331,6 +331,8 @@ func RenderEvent(event map[string]any) {
 		if line := verificationAnalysisLine(event); line != "" {
 			fmt.Println(line)
 		}
+	case "verification.repair.started":
+		fmt.Println(stringValue(event["message"]))
 	case "verification.completed":
 		status := "通过"
 		if !boolValue(event["success"]) {

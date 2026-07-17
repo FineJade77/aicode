@@ -35,6 +35,7 @@ def build_coder_patch_messages(request: AgentRequest, observations: list[dict[st
         "不要输出 Markdown，不要解释。"
         "你不能直接修改文件，只能提出一个结构化 patch proposal。"
         "只允许修改主 workspace 内的文件，不允许跨仓库写入。"
+        "如果已有 patch 后验证失败，优先根据 verification.analysis、失败用例和相关工具输出提出最小修复。"
         "如果上下文不足或不需要修改，输出 {\"action\":\"none\",\"reason\":\"...\"}。"
         "允许格式之一："
         "{\"action\":\"patch\",\"operation\":\"replace\",\"path\":\"relative/path\",\"old_text\":\"exact existing text\",\"new_text\":\"replacement text\",\"reason\":\"...\"}；"

@@ -54,7 +54,7 @@ def final_summary_text(request: AgentRequest, observations: list[dict[str, Any]]
         return prefix + "\n\n" + format_review_fallback_summary(request.language, observations)
 
     if provider == "stub" or not cleaned:
-        patch = find_observation(observations, "apply_patch")
+        patch = find_last_observation(observations, "apply_patch")
         if patch is not None:
             return format_patch_fallback_summary(request.language, patch)
         return localized(
@@ -266,6 +266,13 @@ def detected_test_command(observations: list[dict[str, Any]]) -> str | None:
 
 def find_observation(observations: list[dict[str, Any]], tool: str) -> dict[str, Any] | None:
     for observation in observations:
+        if observation.get("tool") == tool:
+            return observation
+    return None
+
+
+def find_last_observation(observations: list[dict[str, Any]], tool: str) -> dict[str, Any] | None:
+    for observation in reversed(observations):
         if observation.get("tool") == tool:
             return observation
     return None

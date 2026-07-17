@@ -55,6 +55,7 @@ go run ./cli "解释当前目录"
 CLI 会自动启动 Python Runtime daemon，并通过 SSE 接收事件。
 Runtime 会按计划执行工具循环：先收集工作区、项目和 git 状态，再根据请求选择只读分析、测试或 diff 工具；所有写入仍必须经过 inline diff 确认。
 当模型 provider 已配置且任务带有修复、实现、更新、补测试等写作意图时，Runtime 会让 coder model 输出受限 JSON patch proposal；Runtime 再生成 unified diff，等待用户确认后才应用。
+如果 patch 应用后的自动验证失败，Runtime 会基于失败分析最多生成一次后续修复 patch；后续修复同样只展示 diff，不会绕过用户确认。
 
 也可以手动启动 Runtime：
 
@@ -83,6 +84,7 @@ go run ./cli "replace README.md old text => new text"
 
 所有写入都会先展示 unified diff。只有输入 `y` 确认后，Runtime 才会应用 patch；其它输入会拒绝修改。
 Patch 应用成功后，Runtime 会自动探测项目测试命令并交给 Policy Engine；低风险测试会自动运行，没有测试命令时会跳过验证。
+验证失败时，Runtime 会提取失败摘要、失败用例和相关输出，供 coder model 尝试一次最小后续修复；修复 patch 仍然必须再次确认。
 显式 shell 命令会先经过 Policy Engine：低风险测试命令可自动执行，中风险命令会要求 CLI 确认，`rm`、破坏性 git、危险控制符等高风险命令不会执行。
 
 ## 审计日志

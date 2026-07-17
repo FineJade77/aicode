@@ -64,6 +64,15 @@ func TestRenderEventPrintsVerificationAnalysis(t *testing.T) {
 	assertContains(t, output, "验证分析: 1 failed, 2 passed in 0.12s")
 }
 
+func TestRenderEventPrintsVerificationRepairStarted(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":    "verification.repair.started",
+		"message": "验证失败，尝试生成一次后续修复 patch。",
+	})
+
+	assertContains(t, output, "尝试生成一次后续修复 patch")
+}
+
 func TestReviewRulesTable(t *testing.T) {
 	table := ReviewRulesTable(reviewRulesFixture())
 

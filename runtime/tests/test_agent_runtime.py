@@ -48,6 +48,33 @@ class CoderPatchModelRouter:
         return ModelResponse(text="done", model="test-summary", provider="test")
 
 
+class RepairingCoderModelRouter:
+    primary = ConfiguredPrimary()
+
+    def __init__(self) -> None:
+        self.purposes: list[str] = []
+        self.coder_calls = 0
+
+    async def complete(self, request):
+        self.purposes.append(request.purpose)
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            self.coder_calls += 1
+            if self.coder_calls == 1:
+                return ModelResponse(
+                    text='{"action":"patch","operation":"replace","path":"calc.py","old_text":"return a - b","new_text":"return 0","reason":"first attempt"}',
+                    model="test-coder",
+                    provider="test",
+                )
+            return ModelResponse(
+                text='{"action":"patch","operation":"replace","path":"calc.py","old_text":"return 0","new_text":"return a + b","reason":"repair failing test"}',
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="done", model="test-summary", provider="test")
+
+
 @pytest.mark.asyncio
 async def test_run_agent_safely_emits_final_on_model_error(tmp_path: Path) -> None:
     session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
@@ -97,3 +124,41 @@ async def test_run_agent_uses_coder_patch_after_context_and_requires_approval(tm
     assert "coder" in model_router.purposes
     assert any(event["type"] == "patch.preview" for event in events)
     assert any(event["type"] == "patch.applied" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_repairs_once_after_failed_verification(tmp_path: Path) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\ntestpaths = tests\n", encoding="utf-8")
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_calc.py").write_text("from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="修复 calc.py 的 add 函数", mode="default", workspace=str(tmp_path), language="zh-CN")
+    model_router = RepairingCoderModelRouter()
+    runtime = AgentRuntime(
+        model_router=model_router,
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    approval_count = 0
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=30)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            approval_count += 1
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=30)
+
+    assert approval_count == 2
+    assert model_router.coder_calls == 2
+    assert (tmp_path / "calc.py").read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
+    assert any(event["type"] == "verification.analysis" for event in events)
+    assert any(event["type"] == "verification.repair.started" for event in events)
+    completed = [event for event in events if event["type"] == "verification.completed"]
+    assert [event["success"] for event in completed] == [False, True]

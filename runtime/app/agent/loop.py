@@ -38,6 +38,9 @@ async def run_agent(session: Session, request: AgentRequest, runtime: AgentRunti
         patch_outcome = await propose_model_patch(session, request, observations, runtime)
     if patch_outcome is not None:
         observations.append(patch_outcome)
+        repair_outcome = await maybe_repair_failed_verification(session, request, observations, patch_outcome, runtime)
+        if repair_outcome is not None:
+            observations.append(repair_outcome)
     await session.events.put({"type": "plan.updated", "item_id": "loop", "status": "completed"})
 
     purpose = model_purpose_for_mode(request.mode)
@@ -199,6 +202,41 @@ async def propose_model_patch(
     if patch is None:
         return None
     return await propose_coder_patch(session, request, patch, runtime)
+
+
+async def maybe_repair_failed_verification(
+    session: Session,
+    request: AgentRequest,
+    observations: list[dict[str, Any]],
+    patch_outcome: dict[str, Any],
+    runtime: AgentRuntime,
+) -> dict[str, Any] | None:
+    if not should_repair_failed_verification(request, patch_outcome, runtime):
+        return None
+    runtime.audit.record(
+        "verification.repair.started",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={"files": patch_outcome.get("files", []), "verification": patch_outcome.get("verification", {})},
+    )
+    await session.events.put(
+        {
+            "type": "verification.repair.started",
+            "message": localized(request.language, "验证失败，尝试生成一次后续修复 patch。", "Verification failed; attempting one follow-up repair patch."),
+        }
+    )
+    return await propose_model_patch(session, request, observations, runtime)
+
+
+def should_repair_failed_verification(request: AgentRequest, patch_outcome: dict[str, Any], runtime: AgentRuntime) -> bool:
+    if request.mode == "review" or not primary_model_available(runtime):
+        return False
+    if patch_outcome.get("status") != "applied":
+        return False
+    verification = patch_outcome.get("verification")
+    if not isinstance(verification, dict):
+        return False
+    return verification.get("status") == "failed"
 
 
 def should_use_model_step(step: AgentStep, observations: list[dict[str, Any]]) -> bool:

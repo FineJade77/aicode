@@ -297,6 +297,40 @@ def test_patch_final_reports_verification_failure_analysis_for_stub() -> None:
     assert "验证失败: `python3 -m pytest`。 失败摘要: 1 failed, 2 passed in 0.12s" in summary
 
 
+def test_patch_final_reports_latest_patch_for_stub() -> None:
+    request = MessageRequest(message="修复 calc.py", mode="default", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [
+            {
+                "tool": "apply_patch",
+                "success": True,
+                "status": "applied",
+                "operation": "replace",
+                "files": ["calc.py"],
+                "verification": {
+                    "status": "failed",
+                    "command": "python3 -m pytest",
+                    "analysis": {"summary": "1 failed, 0 passed", "failures": []},
+                },
+            },
+            {
+                "tool": "apply_patch",
+                "success": True,
+                "status": "applied",
+                "operation": "replace",
+                "files": ["calc.py"],
+                "verification": {"status": "passed", "command": "python3 -m pytest"},
+            },
+        ],
+        "",
+        "stub",
+    )
+
+    assert "验证通过: `python3 -m pytest`。" in summary
+    assert "1 failed" not in summary
+
+
 def test_patch_final_reports_rejected_for_stub() -> None:
     request = MessageRequest(message="replace sample.txt old => new", mode="default", workspace="/repo", language="zh-CN")
     summary = final_summary_text(
