@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.project.config import load_project_config
@@ -99,7 +99,8 @@ TOOL_DOCS: list[dict[str, Any]] = [
 ]
 
 READ_ONLY_TOOLS = {tool["name"] for tool in TOOL_DOCS if tool["read_only"]}
-MAX_DYNAMIC_CONTEXT_READS = 3
+MAX_DYNAMIC_CONTEXT_READS = 5
+MAX_RELATED_TEST_QUERIES = 2
 
 
 def allowed_tool_names(mode: str) -> set[str]:
@@ -133,22 +134,61 @@ def choose_rule_step(message: str, mode: str, observations: list[dict[str, Any]]
 
 
 def choose_dynamic_context_step(observations: list[dict[str, Any]], allowed: set[str]) -> AgentStep | None:
+    if "read_file" in allowed and count_tool_observations(observations, "read_file") < MAX_DYNAMIC_CONTEXT_READS:
+        find_result_step = choose_context_candidate_read_step(observations, preferred_tools={"find_files"})
+        if find_result_step is not None:
+            return find_result_step
+
+    if "find_files" in allowed:
+        test_step = choose_related_test_search_step(observations)
+        if test_step is not None:
+            return test_step
+
     if "read_file" not in allowed:
         return None
     if count_tool_observations(observations, "read_file") >= MAX_DYNAMIC_CONTEXT_READS:
         return None
 
+    return choose_context_candidate_read_step(observations)
+
+
+def choose_context_candidate_read_step(observations: list[dict[str, Any]], preferred_tools: set[str] | None = None) -> AgentStep | None:
     for observation in observations:
+        if preferred_tools is not None and observation.get("tool") not in preferred_tools:
+            continue
         for candidate in context_file_candidates(observation):
             args: dict[str, Any] = {"path": candidate["path"], "max_bytes": 24_000}
             if candidate["workspace"] != "main":
                 args["workspace"] = candidate["workspace"]
-            if not observation_seen(observations, "read_file", args):
+            if read_file_seen(observations, args):
+                continue
+            return AgentStep(
+                action="tool",
+                tool="read_file",
+                args=args,
+                reason=f"read located context file {candidate['path']}",
+                source="rules",
+            )
+    return None
+
+
+def choose_related_test_search_step(observations: list[dict[str, Any]]) -> AgentStep | None:
+    for observation in observations:
+        if observation.get("tool") != "read_file" or not observation.get("success"):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        workspace = str(data.get("workspace") or "main")
+        path = strip_workspace_prefix(str(data.get("path") or ""), workspace)
+        for query in related_test_queries(path):
+            args: dict[str, Any] = {"query": query, "limit": 20}
+            if workspace != "main":
+                args["workspace"] = workspace
+            if not observation_seen(observations, "find_files", args):
                 return AgentStep(
                     action="tool",
-                    tool="read_file",
+                    tool="find_files",
                     args=args,
-                    reason=f"read located context file {candidate['path']}",
+                    reason=f"locate related test file for {path}",
                     source="rules",
                 )
     return None
@@ -176,7 +216,7 @@ def normalize_candidate_files(raw_files: list[Any], workspace: str) -> list[dict
     candidates: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for raw in raw_files:
-        path = strip_workspace_prefix(str(raw or "").strip(), workspace)
+        path = normalize_context_path(strip_workspace_prefix(str(raw or "").strip(), workspace))
         if not path:
             continue
         key = (workspace, path)
@@ -192,7 +232,7 @@ def normalize_candidate_files(raw_files: list[Any], workspace: str) -> list[dict
 def search_match_path(match: str, workspace: str) -> str:
     match = strip_workspace_prefix(match, workspace)
     path, _, _rest = match.partition(":")
-    return path
+    return normalize_context_path(path)
 
 
 def strip_workspace_prefix(value: str, workspace: str) -> str:
@@ -201,6 +241,58 @@ def strip_workspace_prefix(value: str, workspace: str) -> str:
         if value.startswith(prefix):
             return value[len(prefix) :]
     return value
+
+
+def normalize_context_path(path: str) -> str:
+    normalized = path.replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def read_file_seen(observations: list[dict[str, Any]], args: dict[str, Any]) -> bool:
+    target_path = normalize_context_path(str(args.get("path") or ""))
+    target_workspace = str(args.get("workspace") or "main")
+    for observation in observations:
+        if observation.get("tool") != "read_file":
+            continue
+        obs_args = observation.get("args") if isinstance(observation.get("args"), dict) else {}
+        obs_workspace = str(obs_args.get("workspace") or "main")
+        obs_path = normalize_context_path(str(obs_args.get("path") or ""))
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        data_workspace = str(data.get("workspace") or obs_workspace or "main")
+        data_path = normalize_context_path(strip_workspace_prefix(str(data.get("path") or obs_path), data_workspace))
+        if target_workspace == data_workspace and target_path == data_path:
+            return True
+    return False
+
+
+def related_test_queries(path: str) -> list[str]:
+    path = path.replace("\\", "/").strip()
+    if not path or is_test_path(path):
+        return []
+    candidate = PurePosixPath(path)
+    suffix = candidate.suffix.lower()
+    stem = candidate.stem
+    queries: list[str] = []
+    if suffix == ".py":
+        queries.extend([f"test_{stem}.py", f"{stem}_test.py"])
+    elif suffix == ".go":
+        queries.append(f"{stem}_test.go")
+    elif suffix in {".ts", ".tsx", ".js", ".jsx"}:
+        queries.extend([f"{stem}.test{suffix}", f"{stem}.spec{suffix}"])
+    return queries[:MAX_RELATED_TEST_QUERIES]
+
+
+def is_test_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    parts = normalized.split("/")
+    name = parts[-1] if parts else normalized
+    if any(part in {"test", "tests", "__tests__"} for part in parts[:-1]):
+        return True
+    if name.startswith("test_") or name.endswith("_test.py") or name.endswith("_test.go"):
+        return True
+    return any(marker in name for marker in [".test.", ".spec."])
 
 
 def build_planner_messages(

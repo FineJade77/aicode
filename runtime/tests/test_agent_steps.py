@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.agent.steps import allowed_tool_names, build_planner_messages, choose_rule_step, observation_seen, parse_agent_step, step_key
+from app.agent.steps import allowed_tool_names, build_planner_messages, choose_rule_step, observation_seen, parse_agent_step, related_test_queries, step_key
 
 
 def test_parse_agent_step_accepts_fenced_json() -> None:
@@ -88,6 +88,61 @@ def test_choose_rule_step_reads_find_files_result_from_workspace() -> None:
 
     assert step.tool == "read_file"
     assert step.args == {"path": "src/service.py", "max_bytes": 24_000, "workspace": "api"}
+
+
+def test_choose_rule_step_locates_related_python_test_after_source_read() -> None:
+    observations = bootstrap_observations()
+    source_args = {"path": "src/calc.py", "max_bytes": 30_000}
+    observations.append(
+        {
+            "tool": "read_file",
+            "args": source_args,
+            "step_key": step_key("read_file", source_args),
+            "success": True,
+            "data": {"workspace": "main", "path": "src/calc.py"},
+        }
+    )
+
+    step = choose_rule_step("修复 src/calc.py", "default", observations, [])
+
+    assert step.tool == "find_files"
+    assert step.args == {"query": "test_calc.py", "limit": 20}
+
+
+def test_choose_rule_step_reads_related_test_file_after_mapping() -> None:
+    observations = bootstrap_observations()
+    source_args = {"path": "src/calc.py", "max_bytes": 30_000}
+    find_args = {"query": "test_calc.py", "limit": 20}
+    observations.extend(
+        [
+            {
+                "tool": "read_file",
+                "args": source_args,
+                "step_key": step_key("read_file", source_args),
+                "success": True,
+                "data": {"workspace": "main", "path": "src/calc.py"},
+            },
+            {
+                "tool": "find_files",
+                "args": find_args,
+                "step_key": step_key("find_files", find_args),
+                "success": True,
+                "data": {"workspace": "main", "files": ["tests/test_calc.py"]},
+            },
+        ]
+    )
+
+    step = choose_rule_step("修复 src/calc.py", "default", observations, [])
+
+    assert step.tool == "read_file"
+    assert step.args == {"path": "tests/test_calc.py", "max_bytes": 24_000}
+
+
+def test_related_test_queries_cover_first_batch_languages() -> None:
+    assert related_test_queries("src/calc.py") == ["test_calc.py", "calc_test.py"]
+    assert related_test_queries("pkg/calc.go") == ["calc_test.go"]
+    assert related_test_queries("src/Button.tsx") == ["Button.test.tsx", "Button.spec.tsx"]
+    assert related_test_queries("tests/test_calc.py") == []
 
 
 def bootstrap_observations() -> list[dict]:

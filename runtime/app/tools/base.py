@@ -41,7 +41,7 @@ class ToolError(Exception):
     pass
 
 
-IGNORED_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", "dist", "build"}
+IGNORED_DIRS = {".git", ".aicode", ".venv", "node_modules", "__pycache__", ".pytest_cache", "dist", "build"}
 
 
 def resolve_workspace_path(workspace: Path, raw_path: str | None = None) -> Path:
