@@ -57,6 +57,7 @@ CLI 会自动启动 Python Runtime daemon，并通过 SSE 接收事件。
 Runtime 会按计划执行工具循环：先收集工作区、项目和 git 状态，再根据请求选择只读分析、测试或 diff 工具；所有写入仍必须经过 inline diff 确认。
 当请求只包含函数名、关键词或不确定位置的文件名时，Runtime 会先搜索/定位候选文件，并自动读取前几个相关文件作为 coder 上下文。
 当已读取源码文件时，Runtime 会按 Python、Go、TypeScript/JavaScript 的常见命名规则定位相关测试文件，并把命中的测试文件也读入 coder 上下文。
+Runtime 还会从已读取源码中启发式提取 Python、Go、TypeScript/JavaScript 的 import/require 依赖线索，定位并读取少量相关依赖文件，帮助 coder 获得入口附近的实现上下文。
 发给 planner、coder、reviewer、summarizer 的工具观测会经过上下文预算层：单条大输出会头尾保留并标记压缩，总体超预算时优先压缩低价值搜索/状态类输出，避免 prompt 成本失控。
 当模型 provider 已配置且任务带有修复、实现、更新、补测试等写作意图时，Runtime 会让 coder model 输出受限 JSON patch proposal；单次 proposal 可包含多个文件操作，支持 `schema_version: 1`、同一文件连续 replace/append、create、delete、rename。Runtime 会合并生成 unified diff，等待用户确认后才应用。
 如果 patch 应用后的自动验证失败，Runtime 会基于失败分析最多生成一次后续修复 patch；后续修复同样只展示 diff，不会绕过用户确认。

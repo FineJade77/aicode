@@ -1,7 +1,16 @@
 import json
 from pathlib import Path
 
-from app.agent.steps import allowed_tool_names, build_planner_messages, choose_rule_step, observation_seen, parse_agent_step, related_test_queries, step_key
+from app.agent.steps import (
+    allowed_tool_names,
+    build_planner_messages,
+    choose_rule_step,
+    observation_seen,
+    parse_agent_step,
+    related_dependency_queries,
+    related_test_queries,
+    step_key,
+)
 
 
 def test_parse_agent_step_accepts_fenced_json() -> None:
@@ -136,6 +145,55 @@ def test_choose_rule_step_reads_related_test_file_after_mapping() -> None:
 
     assert step.tool == "read_file"
     assert step.args == {"path": "tests/test_calc.py", "max_bytes": 24_000}
+
+
+def test_choose_rule_step_locates_python_dependency_after_source_read() -> None:
+    observations = bootstrap_observations()
+    source_args = {"path": "src/service.py", "max_bytes": 30_000}
+    test_args = {"query": "test_service.py", "limit": 20}
+    alt_test_args = {"query": "service_test.py", "limit": 20}
+    observations.extend(
+        [
+            {
+                "tool": "read_file",
+                "args": source_args,
+                "step_key": step_key("read_file", source_args),
+                "success": True,
+                "text": "# src/service.py\nfrom .utils import helper\n\n\ndef compute():\n    return helper()\n",
+                "data": {"workspace": "main", "path": "src/service.py"},
+            },
+            {
+                "tool": "find_files",
+                "args": test_args,
+                "step_key": step_key("find_files", test_args),
+                "success": True,
+                "data": {"workspace": "main", "files": []},
+            },
+            {
+                "tool": "find_files",
+                "args": alt_test_args,
+                "step_key": step_key("find_files", alt_test_args),
+                "success": True,
+                "data": {"workspace": "main", "files": []},
+            },
+        ]
+    )
+
+    step = choose_rule_step("修复 src/service.py", "default", observations, [])
+
+    assert step.tool == "find_files"
+    assert step.args == {"query": "src/utils.py", "limit": 20}
+
+
+def test_related_dependency_queries_cover_first_batch_languages() -> None:
+    assert related_dependency_queries("src/service.py", "from .utils import helper\nimport os\n") == ["src/utils.py", "utils.py"]
+    assert related_dependency_queries("src/app/service.py", "from ..shared import helper\n") == ["src/shared.py", "shared.py"]
+    assert related_dependency_queries("pkg/service.go", 'import "github.com/acme/project/pkg/mathutil"\n') == ["mathutil"]
+    assert related_dependency_queries("src/App.tsx", "import Button from './components/Button'\n") == [
+        "src/components/Button",
+        "src/components/Button.ts",
+        "src/components/Button.tsx",
+    ]
 
 
 def test_related_test_queries_cover_first_batch_languages() -> None:

@@ -93,6 +93,25 @@ class ContextAwareCoderPatchModelRouter:
         return ModelResponse(text="", model="test-summary", provider="stub")
 
 
+class DependencyAwareCoderPatchModelRouter:
+    primary = ConfiguredPrimary()
+
+    def __init__(self) -> None:
+        self.coder_messages = []
+
+    async def complete(self, request):
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            self.coder_messages = request.messages
+            return ModelResponse(
+                text='{"action":"patch","operation":"replace","path":"src/service.py","old_text":"return helper() - 1","new_text":"return helper() + 1","reason":"fix compute"}',
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="", model="test-summary", provider="stub")
+
+
 class HardenedPatchModelRouter:
     primary = ConfiguredPrimary()
 
@@ -299,6 +318,48 @@ async def test_run_agent_reads_related_test_context_before_coder_patch(tmp_path:
     )
     assert "tests/test_calc.py" in model_router.coder_messages[1]["content"]
     assert "assert add(1, 2) == 3" in model_router.coder_messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_reads_dependency_context_before_coder_patch(tmp_path: Path) -> None:
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "service.py").write_text(
+        "from .utils import helper\n\n\ndef compute():\n    return helper() - 1\n",
+        encoding="utf-8",
+    )
+    (src_dir / "utils.py").write_text("def helper():\n    return 41\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="修复 src/service.py 的 compute 函数", mode="default", workspace=str(tmp_path), language="zh-CN")
+    model_router = DependencyAwareCoderPatchModelRouter()
+    runtime = AgentRuntime(
+        model_router=model_router,
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / ".aicode" / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=10)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=10)
+
+    assert (tmp_path / "src" / "service.py").read_text(encoding="utf-8").endswith("    return helper() + 1\n")
+    assert any(
+        event["type"] == "tool.output" and event.get("tool") == "find_files" and event["data"]["query"] == "src/utils.py"
+        for event in events
+    )
+    assert any(
+        event["type"] == "tool.output" and event.get("tool") == "read_file" and event["data"]["path"] == "src/utils.py"
+        for event in events
+    )
+    assert "src/utils.py" in model_router.coder_messages[1]["content"]
+    assert "def helper" in model_router.coder_messages[1]["content"]
 
 
 @pytest.mark.asyncio

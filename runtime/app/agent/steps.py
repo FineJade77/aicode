@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import posixpath
+import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -100,8 +102,50 @@ TOOL_DOCS: list[dict[str, Any]] = [
 ]
 
 READ_ONLY_TOOLS = {tool["name"] for tool in TOOL_DOCS if tool["read_only"]}
-MAX_DYNAMIC_CONTEXT_READS = 5
+MAX_DYNAMIC_CONTEXT_READS = 7
+MAX_RELATED_DEPENDENCY_QUERIES = 3
 MAX_RELATED_TEST_QUERIES = 2
+PYTHON_COMMON_EXTERNAL_MODULES = {
+    "argparse",
+    "asyncio",
+    "collections",
+    "contextlib",
+    "dataclasses",
+    "datetime",
+    "functools",
+    "json",
+    "logging",
+    "os",
+    "pathlib",
+    "re",
+    "subprocess",
+    "sys",
+    "typing",
+    "unittest",
+}
+JS_COMMON_EXTERNAL_MODULES = {
+    "axios",
+    "lodash",
+    "next",
+    "react",
+    "react-dom",
+    "vue",
+}
+GO_COMMON_EXTERNAL_MODULES = {
+    "context",
+    "encoding/json",
+    "errors",
+    "fmt",
+    "io",
+    "log",
+    "net/http",
+    "os",
+    "path/filepath",
+    "strings",
+    "sync",
+    "testing",
+    "time",
+}
 
 
 def allowed_tool_names(mode: str) -> set[str]:
@@ -144,6 +188,9 @@ def choose_dynamic_context_step(observations: list[dict[str, Any]], allowed: set
         test_step = choose_related_test_search_step(observations)
         if test_step is not None:
             return test_step
+        dependency_step = choose_related_dependency_search_step(observations)
+        if dependency_step is not None:
+            return dependency_step
 
     if "read_file" not in allowed:
         return None
@@ -190,6 +237,31 @@ def choose_related_test_search_step(observations: list[dict[str, Any]]) -> Agent
                     tool="find_files",
                     args=args,
                     reason=f"locate related test file for {path}",
+                    source="rules",
+                )
+    return None
+
+
+def choose_related_dependency_search_step(observations: list[dict[str, Any]]) -> AgentStep | None:
+    for observation in observations:
+        if observation.get("tool") != "read_file" or not observation.get("success"):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        workspace = str(data.get("workspace") or "main")
+        path = strip_workspace_prefix(str(data.get("path") or ""), workspace)
+        if is_test_path(path):
+            continue
+        text = read_file_text_from_observation(observation)
+        for query in related_dependency_queries(path, text):
+            args: dict[str, Any] = {"query": query, "limit": 20}
+            if workspace != "main":
+                args["workspace"] = workspace
+            if not observation_seen(observations, "find_files", args):
+                return AgentStep(
+                    action="tool",
+                    tool="find_files",
+                    args=args,
+                    reason=f"locate dependency context for {path}",
                     source="rules",
                 )
     return None
@@ -283,6 +355,148 @@ def related_test_queries(path: str) -> list[str]:
     elif suffix in {".ts", ".tsx", ".js", ".jsx"}:
         queries.extend([f"{stem}.test{suffix}", f"{stem}.spec{suffix}"])
     return queries[:MAX_RELATED_TEST_QUERIES]
+
+
+def related_dependency_queries(path: str, text: str) -> list[str]:
+    path = normalize_context_path(path)
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix == ".py":
+        return python_dependency_queries(path, text)
+    if suffix == ".go":
+        return go_dependency_queries(text)
+    if suffix in {".ts", ".tsx", ".js", ".jsx"}:
+        return js_dependency_queries(path, text)
+    return []
+
+
+def python_dependency_queries(path: str, text: str) -> list[str]:
+    queries: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        from_match = re.match(r"from\s+([.\w]+)\s+import\s+([\w*,\s]+)", stripped)
+        if from_match:
+            module = from_match.group(1)
+            imported = from_match.group(2)
+            queries.extend(python_module_queries(path, module))
+            if module == ".":
+                queries.extend(f"{name}.py" for name in imported_python_names(imported))
+            continue
+        import_match = re.match(r"import\s+(.+)", stripped)
+        if import_match:
+            imports = import_match.group(1).split(",")
+            for item in imports:
+                module = item.strip().split(" as ", 1)[0].strip()
+                queries.extend(python_module_queries(path, module))
+    return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
+
+
+def python_module_queries(path: str, module: str) -> list[str]:
+    module = module.strip()
+    if not module:
+        return []
+    if module.startswith("."):
+        base_dir = PurePosixPath(path).parent
+        leading_dots = len(module) - len(module.lstrip("."))
+        relative = module[leading_dots:].replace(".", "/")
+        if not relative:
+            return []
+        for _ in range(max(0, leading_dots - 1)):
+            base_dir = base_dir.parent
+        resolved = normalize_context_path(posixpath.normpath(str(base_dir / relative)))
+        return [f"{resolved}.py", f"{PurePosixPath(resolved).name}.py"]
+    root = module.split(".", 1)[0]
+    if root in PYTHON_COMMON_EXTERNAL_MODULES:
+        return []
+    module_path = module.replace(".", "/")
+    return [f"{module_path}.py", f"{PurePosixPath(module_path).name}.py"]
+
+
+def imported_python_names(raw: str) -> list[str]:
+    names: list[str] = []
+    for item in raw.split(","):
+        name = item.strip().split(" as ", 1)[0].strip()
+        if name and name != "*":
+            names.append(name)
+    return names
+
+
+def go_dependency_queries(text: str) -> list[str]:
+    queries: list[str] = []
+    for module in re.findall(r'"([^"]+)"', text):
+        if module in GO_COMMON_EXTERNAL_MODULES:
+            continue
+        if "/" not in module and "." not in module:
+            continue
+        normalized = module.strip("./")
+        if not normalized:
+            continue
+        queries.append(PurePosixPath(normalized).name)
+    return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
+
+
+def js_dependency_queries(path: str, text: str) -> list[str]:
+    queries: list[str] = []
+    patterns = [
+        r"\bimport\s+(?:.+?\s+from\s+)?['\"]([^'\"]+)['\"]",
+        r"\bexport\s+.+?\s+from\s+['\"]([^'\"]+)['\"]",
+        r"\brequire\(\s*['\"]([^'\"]+)['\"]\s*\)",
+    ]
+    for pattern in patterns:
+        for module in re.findall(pattern, text):
+            queries.extend(js_module_queries(path, module))
+    return unique_queries(queries, MAX_RELATED_DEPENDENCY_QUERIES)
+
+
+def js_module_queries(path: str, module: str) -> list[str]:
+    module = module.strip()
+    if not module:
+        return []
+    if module.startswith("."):
+        base_dir = PurePosixPath(path).parent
+        resolved = normalize_context_path(posixpath.normpath(str(base_dir / module)))
+        return [resolved, *js_extension_queries(resolved), PurePosixPath(resolved).name]
+    if module.startswith("@/"):
+        normalized = normalize_context_path(module[2:])
+        return [normalized, *js_extension_queries(normalized), PurePosixPath(normalized).name]
+    root = module.split("/", 1)[0]
+    if root in JS_COMMON_EXTERNAL_MODULES or module.startswith("@"):
+        return []
+    if "/" in module:
+        normalized = normalize_context_path(module)
+        return [normalized, *js_extension_queries(normalized), PurePosixPath(normalized).name]
+    return []
+
+
+def js_extension_queries(path: str) -> list[str]:
+    if PurePosixPath(path).suffix:
+        return [path]
+    return [f"{path}.ts", f"{path}.tsx", f"{path}.js", f"{path}.jsx"]
+
+
+def unique_queries(queries: list[str], limit: int) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        normalized = normalize_context_path(query).strip()
+        if not normalized or normalized == "." or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def read_file_text_from_observation(observation: dict[str, Any]) -> str:
+    text = str(observation.get("text") or "")
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if lines and lines[0].startswith("# "):
+        return "\n".join(lines[1:])
+    return text
 
 
 def is_test_path(path: str) -> bool:
