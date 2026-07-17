@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agent.context_budget import budgeted_observations_for_model
 from app.agent.types import AgentRequest
 from app.agent.utils import localized
 
@@ -19,6 +20,7 @@ def build_model_messages(request: AgentRequest, observations: list[dict[str, Any
         system = (
             f"你是 aicode 的只读代码审查助手。使用{language_name}回答。"
             "只基于工具输出做结论，不要编造没有证据的问题。"
+            "如果 observation 带 context_compacted，说明部分输出被预算层压缩；不要猜测被省略内容。"
             "不得建议已经修改代码；review 模式只允许只读分析。"
             "优先输出: 结论、必须处理的问题、可选改进、建议验证命令。"
         )
@@ -26,13 +28,17 @@ def build_model_messages(request: AgentRequest, observations: list[dict[str, Any
         system = (
             f"你是 aicode 的 coding agent 摘要助手。使用{language_name}回答。"
             "基于工具输出给出简洁进展总结和下一步建议，不要编造。"
+            "如果 observation 带 context_compacted，说明部分输出被预算层压缩；不要猜测被省略内容。"
         )
 
+    purpose = model_purpose_for_mode(request.mode)
+    budgeted_observations, context_budget = budgeted_observations_for_model(observations, purpose)
     payload = {
         "user_request": request.message,
         "mode": request.mode,
         "workspace": request.workspace,
-        "tool_observations": observations,
+        "tool_observations": budgeted_observations,
+        "context_budget": context_budget,
     }
     return [
         {"role": "system", "content": system},

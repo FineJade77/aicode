@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from app.agent.patch_flow import build_coder_patch_messages, parse_coder_patch
@@ -113,3 +114,18 @@ def test_build_coder_patch_messages_includes_observations() -> None:
     assert "只能输出一个 JSON object" in messages[0]["content"]
     assert "read_file" in messages[1]["content"]
     assert "修复 README" in messages[1]["content"]
+
+
+def test_build_coder_patch_messages_uses_context_budget() -> None:
+    request = SimpleNamespace(message="修复大文件", mode="default", workspace="/repo", language="zh-CN")
+    messages = build_coder_patch_messages(
+        request,
+        [{"tool": "read_file", "text": "# big.py\n" + "x" * 30_000 + "\nTAIL", "data": {"path": "big.py"}}],
+    )
+    payload = json.loads(messages[1]["content"])
+
+    observation = payload["observations"][0]
+    assert payload["context_budget"]["compacted"] is True
+    assert observation["text"].startswith("# big.py")
+    assert observation["text"].endswith("TAIL")
+    assert "[CONTEXT COMPACTED:" in observation["text"]

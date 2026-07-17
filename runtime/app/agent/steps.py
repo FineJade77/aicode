@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from app.agent.context_budget import budgeted_observations_for_model
 from app.project.config import load_project_config
 
 
@@ -310,14 +311,17 @@ def build_planner_messages(
         '格式只能是 {"action":"tool","tool":"read_file","args":{"path":"README.md"},"reason":"..."} '
         '或 {"action":"finish","reason":"..."}。'
         "只能选择 allowed_tools 中的工具。review 模式只允许只读分析。"
+        "如果 observation 带 context_compacted，说明部分输出被预算层压缩；不要猜测被省略内容。"
     )
+    budgeted_observations, context_budget = budgeted_observations_for_model(observations, "planner")
     payload = {
         "user_request": message,
         "mode": mode,
         "workspace": workspace,
         "configured_workspaces": configured_workspace_docs(workspace),
         "allowed_tools": allowed_tool_docs(mode),
-        "observations": observations,
+        "observations": budgeted_observations,
+        "context_budget": context_budget,
     }
     return [
         {"role": "system", "content": system},

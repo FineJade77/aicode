@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.agent.context_budget import budgeted_observations_for_model
 from app.agent.steps import extract_json_object
 from app.agent.tool_flow import execute_tool
 from app.agent.types import AgentRequest, AgentRuntime
@@ -64,6 +65,7 @@ def build_coder_patch_messages(request: AgentRequest, observations: list[dict[st
         "你不能直接修改文件，只能提出一个结构化 patch proposal。"
         "只允许修改主 workspace 内的文件，不允许跨仓库写入。"
         "如果已有 patch 后验证失败，优先根据 verification.analysis、失败用例和相关工具输出提出最小修复。"
+        "如果 observation 带 context_compacted，说明部分输出被预算层压缩；不要猜测被省略内容。"
         "如果上下文不足或不需要修改，输出 {\"action\":\"none\",\"reason\":\"...\"}。"
         "允许格式之一："
         "{\"action\":\"patch\",\"schema_version\":1,\"operations\":["
@@ -80,11 +82,13 @@ def build_coder_patch_messages(request: AgentRequest, observations: list[dict[st
         "多操作 proposal 最多包含 8 个 operations；同一文件可连续 replace/append/create/delete，但 rename 不能和同一路径的其它操作混用。"
         f"最终 diff 不能超过 {MAX_PATCH_DIFF_BYTES} bytes。"
     )
+    budgeted_observations, context_budget = budgeted_observations_for_model(observations, "coder")
     payload = {
         "user_request": request.message,
         "mode": request.mode,
         "workspace": request.workspace,
-        "observations": observations,
+        "observations": budgeted_observations,
+        "context_budget": context_budget,
     }
     return [
         {"role": "system", "content": system},
