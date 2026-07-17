@@ -13,24 +13,30 @@ from app.audit.logger import stable_hash
 from app.project.config import load_project_config
 from app.project.detect import detect_test_command
 from app.sessions.store import Session
-from app.tools.base import ToolError
+from app.tools.base import ToolError, display_path, reject_protected_path, resolve_workspace_path
 from app.tools.patch import (
     PatchApplication,
     PatchProposal,
     apply_content_patches,
     create_append_patch,
+    create_content_patch,
+    create_delete_patch,
     create_file_patch,
+    create_rename_patch,
     create_replace_patch,
 )
 
 
 MAX_CODER_PATCH_OPERATIONS = 8
+SUPPORTED_PATCH_SCHEMA_VERSION = 1
+MAX_PATCH_DIFF_BYTES = 120_000
 
 
 @dataclass(slots=True)
 class CoderPatch:
     operation: str
     path: str
+    new_path: str = ""
     old_text: str = ""
     new_text: str = ""
     content: str = ""
@@ -60,15 +66,19 @@ def build_coder_patch_messages(request: AgentRequest, observations: list[dict[st
         "如果已有 patch 后验证失败，优先根据 verification.analysis、失败用例和相关工具输出提出最小修复。"
         "如果上下文不足或不需要修改，输出 {\"action\":\"none\",\"reason\":\"...\"}。"
         "允许格式之一："
-        "{\"action\":\"patch\",\"operations\":["
+        "{\"action\":\"patch\",\"schema_version\":1,\"operations\":["
         "{\"operation\":\"replace\",\"path\":\"relative/path\",\"old_text\":\"exact existing text\",\"new_text\":\"replacement text\"},"
-        "{\"operation\":\"create\",\"path\":\"relative/path\",\"content\":\"new file content\"}"
+        "{\"operation\":\"append\",\"path\":\"relative/path\",\"text\":\"text to append\"},"
+        "{\"operation\":\"create\",\"path\":\"relative/path\",\"content\":\"new file content\"},"
+        "{\"operation\":\"delete\",\"path\":\"relative/path\"},"
+        "{\"operation\":\"rename\",\"path\":\"old/path\",\"new_path\":\"new/path\"}"
         "],\"reason\":\"...\"}；"
         "{\"action\":\"patch\",\"operation\":\"replace\",\"path\":\"relative/path\",\"old_text\":\"exact existing text\",\"new_text\":\"replacement text\",\"reason\":\"...\"}；"
         "{\"action\":\"patch\",\"operation\":\"append\",\"path\":\"relative/path\",\"text\":\"text to append\",\"reason\":\"...\"}；"
         "{\"action\":\"patch\",\"operation\":\"create\",\"path\":\"relative/path\",\"content\":\"new file content\",\"reason\":\"...\"}。"
         "replace 的 old_text 必须是文件中完整且唯一存在的原文片段。"
-        "多文件 proposal 最多包含 8 个 operations，且每个 path 只能出现一次。"
+        "多操作 proposal 最多包含 8 个 operations；同一文件可连续 replace/append/create/delete，但 rename 不能和同一路径的其它操作混用。"
+        f"最终 diff 不能超过 {MAX_PATCH_DIFF_BYTES} bytes。"
     )
     payload = {
         "user_request": request.message,
@@ -98,6 +108,8 @@ def parse_coder_patch(text: str) -> CoderPatch | CoderPatchBundle | None:
         return None
     if action != "patch":
         return None
+    if not supported_patch_schema_version(payload):
+        return None
 
     reason = str(payload.get("reason") or "").strip()
     operations = payload.get("operations") or payload.get("patches")
@@ -107,12 +119,20 @@ def parse_coder_patch(text: str) -> CoderPatch | CoderPatchBundle | None:
     return parse_coder_patch_operation(payload, reason)
 
 
+def supported_patch_schema_version(payload: dict[str, Any]) -> bool:
+    raw = payload.get("schema_version", payload.get("version", SUPPORTED_PATCH_SCHEMA_VERSION))
+    try:
+        return int(raw) == SUPPORTED_PATCH_SCHEMA_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
 def parse_coder_patch_bundle(operations: list[Any], reason: str) -> CoderPatchBundle | None:
     if not operations or len(operations) > MAX_CODER_PATCH_OPERATIONS:
         return None
 
     patches: list[CoderPatch] = []
-    seen_paths: set[str] = set()
+    renamed_paths: set[str] = set()
     for item in operations:
         if not isinstance(item, dict):
             return None
@@ -120,9 +140,10 @@ def parse_coder_patch_bundle(operations: list[Any], reason: str) -> CoderPatchBu
         if patch is None:
             return None
         normalized = normalize_coder_patch_path(patch.path)
-        if normalized in seen_paths:
-            return None
-        seen_paths.add(normalized)
+        if patch.operation == "rename":
+            if normalized in renamed_paths:
+                return None
+            renamed_paths.add(normalized)
         patches.append(patch)
 
     return CoderPatchBundle(operations=patches, reason=reason)
@@ -155,6 +176,17 @@ def parse_coder_patch_operation(payload: dict[str, Any], reason: str) -> CoderPa
             return None
         return CoderPatch(operation=operation, path=path, content=content, reason=reason)
 
+    if operation == "delete":
+        return CoderPatch(operation=operation, path=path, reason=reason)
+
+    if operation == "rename":
+        new_path = str(payload.get("new_path") or payload.get("to") or "").strip()
+        if not valid_coder_patch_path(new_path):
+            return None
+        if normalize_coder_patch_path(new_path) == normalize_coder_patch_path(path):
+            return None
+        return CoderPatch(operation=operation, path=path, new_path=new_path, reason=reason)
+
     return None
 
 
@@ -185,6 +217,8 @@ async def propose_coder_patch(session: Session, request: AgentRequest, patch: Co
         return await propose_append_patch(session, request, patch.path, patch.text, runtime)
     if patch.operation == "create":
         return await propose_create_patch(session, request, patch.path, patch.content, runtime)
+    if patch.operation in {"delete", "rename"}:
+        return await propose_coder_patch_bundle(session, request, CoderPatchBundle(operations=[patch], reason=patch.reason), runtime)
     await emit_patch_generation_error(session, f"unsupported coder patch operation: {patch.operation}", runtime)
     return patch_outcome("error", patch.operation, [patch.path], reason=f"unsupported coder patch operation: {patch.operation}")
 
@@ -196,13 +230,7 @@ async def propose_coder_patch_bundle(session: Session, request: AgentRequest, bu
 
     try:
         project_config = load_project_config(Path(request.workspace))
-        entries = [
-            PatchProposalEntry(
-                operation=patch.operation,
-                proposal=create_proposal_for_coder_patch(Path(request.workspace), patch, project_config.protected_paths),
-            )
-            for patch in bundle.operations
-        ]
+        entries = create_proposals_for_coder_patches(Path(request.workspace), bundle.operations, project_config.protected_paths)
     except (ToolError, UnicodeDecodeError) as exc:
         await emit_patch_generation_error(session, str(exc), runtime)
         return patch_outcome("error", "multi", [], reason=str(exc))
@@ -217,7 +245,110 @@ def create_proposal_for_coder_patch(workspace: Path, patch: CoderPatch, protecte
         return create_append_patch(workspace, patch.path, patch.text, protected_paths=protected_paths)
     if patch.operation == "create":
         return create_file_patch(workspace, patch.path, patch.content, protected_paths=protected_paths)
+    if patch.operation == "delete":
+        return create_delete_patch(workspace, patch.path, protected_paths=protected_paths)
+    if patch.operation == "rename":
+        return create_rename_patch(workspace, patch.path, patch.new_path, protected_paths=protected_paths)
     raise ToolError(f"unsupported coder patch operation: {patch.operation}")
+
+
+@dataclass(slots=True)
+class FileEditState:
+    path: str
+    original_exists: bool
+    original_content: str
+    current_content: str
+    created: bool = False
+    deleted: bool = False
+
+
+def create_proposals_for_coder_patches(workspace: Path, patches: list[CoderPatch], protected_paths: list[str]) -> list[PatchProposalEntry]:
+    states: dict[str, FileEditState] = {}
+    entries: list[PatchProposalEntry] = []
+    touched_by_rename: set[str] = set()
+
+    for patch in patches:
+        normalized = normalize_coder_patch_path(patch.path)
+        if patch.operation == "rename":
+            if normalized in states:
+                raise ToolError(f"rename 不能和同一路径的其它操作混用: {patch.path}")
+            touched_by_rename.add(normalized)
+            entries.append(PatchProposalEntry(operation="rename", proposal=create_proposal_for_coder_patch(workspace, patch, protected_paths)))
+            continue
+        if normalized in touched_by_rename:
+            raise ToolError(f"rename 不能和同一路径的其它操作混用: {patch.path}")
+
+        state = states.get(normalized)
+        if state is None:
+            state = load_file_edit_state(workspace, patch.path, protected_paths)
+            states[normalized] = state
+        apply_coder_patch_to_state(state, patch)
+
+    for state in states.values():
+        if state.created and state.deleted:
+            raise ToolError(f"不能在同一 proposal 中创建后删除文件: {state.path}")
+        if state.deleted:
+            entries.append(PatchProposalEntry(operation="delete", proposal=create_delete_patch(workspace, state.path, protected_paths=protected_paths)))
+        else:
+            entries.append(
+                PatchProposalEntry(
+                    operation="create" if state.created else "update",
+                    proposal=create_content_patch(workspace, state.path, state.current_content, protected_paths=protected_paths, allow_create=state.created),
+                )
+            )
+    return entries
+
+
+def load_file_edit_state(workspace: Path, raw_path: str, protected_paths: list[str]) -> FileEditState:
+    path = resolve_workspace_path(workspace, raw_path)
+    reject_protected_path(workspace, path, protected_paths)
+    if path.exists() and not path.is_file():
+        raise ToolError(f"不是文件: {display_path(workspace, path)}")
+    original = path.read_text(encoding="utf-8") if path.exists() else ""
+    return FileEditState(
+        path=display_path(workspace, path),
+        original_exists=path.exists(),
+        original_content=original,
+        current_content=original,
+    )
+
+
+def apply_coder_patch_to_state(state: FileEditState, patch: CoderPatch) -> None:
+    if state.deleted:
+        raise ToolError(f"文件已在 proposal 中删除: {state.path}")
+    if patch.operation == "create":
+        if state.original_exists or state.created:
+            raise ToolError(f"文件已存在: {state.path}")
+        state.current_content = ensure_trailing_newline(patch.content)
+        state.created = True
+        return
+    if patch.operation == "replace":
+        if not state.original_exists and not state.created:
+            raise ToolError(f"文件不存在: {state.path}")
+        occurrences = state.current_content.count(patch.old_text)
+        if occurrences == 0:
+            raise ToolError("替换前文本未在文件中找到")
+        if occurrences > 1:
+            raise ToolError(f"替换前文本出现 {occurrences} 次，请提供更精确的片段")
+        state.current_content = state.current_content.replace(patch.old_text, patch.new_text, 1)
+        return
+    if patch.operation == "append":
+        if not state.original_exists and not state.created:
+            raise ToolError(f"文件不存在: {state.path}")
+        append_text = ensure_trailing_newline(patch.text)
+        separator = "" if state.current_content == "" or state.current_content.endswith("\n") else "\n"
+        state.current_content = state.current_content + separator + append_text
+        return
+    if patch.operation == "delete":
+        if not state.original_exists:
+            raise ToolError(f"文件不存在: {state.path}")
+        state.deleted = True
+        return
+    raise ToolError(f"unsupported coder patch operation: {patch.operation}")
+
+
+def ensure_trailing_newline(text: str) -> str:
+    return text if text.endswith("\n") else text + "\n"
 
 
 async def propose_append_patch(session: Session, request: AgentRequest, path: str, text: str, runtime: AgentRuntime) -> dict[str, Any]:
@@ -300,8 +431,13 @@ async def propose_patch_entries(
         await emit_patch_generation_error(session, "empty patch proposal", runtime)
         return patch_outcome("error", operation, [], reason="empty patch proposal")
 
-    files = [entry.proposal.path for entry in entries]
+    files = patch_entry_files(entries)
     diff = combine_patch_diffs([entry.proposal for entry in entries])
+    diff_size = len(diff.encode("utf-8"))
+    if diff_size > MAX_PATCH_DIFF_BYTES:
+        reason = f"patch diff too large: {diff_size} bytes > {MAX_PATCH_DIFF_BYTES} bytes"
+        await emit_patch_generation_error(session, reason, runtime)
+        return patch_outcome("error", operation, files, reason=reason)
     approval_payload: dict[str, Any] = {
         "operation": operation,
         "files": files,
@@ -310,6 +446,8 @@ async def propose_patch_entries(
                 "operation": entry.operation,
                 "path": entry.proposal.path,
                 "new_content": entry.proposal.new_content,
+                "kind": entry.proposal.kind,
+                "target_path": entry.proposal.target_path,
             }
             for entry in entries
         ],
@@ -317,6 +455,8 @@ async def propose_patch_entries(
     if len(entries) == 1:
         approval_payload["path"] = entries[0].proposal.path
         approval_payload["new_content"] = entries[0].proposal.new_content
+        approval_payload["kind"] = entries[0].proposal.kind
+        approval_payload["target_path"] = entries[0].proposal.target_path
     approval = session.create_approval(
         "patch",
         approval_payload,
@@ -391,7 +531,9 @@ async def propose_patch_entries(
                 PatchApplication(
                     path=entry.proposal.path,
                     new_content=entry.proposal.new_content,
-                    allow_create=entry.operation == "create",
+                    allow_create=entry.proposal.kind == "write" and entry.operation == "create",
+                    delete=entry.proposal.kind == "delete",
+                    target_path=entry.proposal.target_path,
                 )
                 for entry in entries
             ],
@@ -430,6 +572,18 @@ def patch_approval_message(language: str, files: list[str]) -> str:
     if len(files) == 1:
         return localized(language, f"是否允许修改 {files[0]}？", f"Allow changes to {files[0]}?")
     return localized(language, f"是否允许修改 {len(files)} 个文件？", f"Allow changes to {len(files)} files?")
+
+
+def patch_entry_files(entries: list[PatchProposalEntry]) -> list[str]:
+    files: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        for path in [entry.proposal.path, entry.proposal.target_path]:
+            if not path or path in seen:
+                continue
+            files.append(path)
+            seen.add(path)
+    return files
 
 
 def combine_patch_diffs(proposals: list[PatchProposal]) -> str:

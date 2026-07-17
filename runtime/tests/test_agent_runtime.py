@@ -4,11 +4,13 @@ from pathlib import Path
 import pytest
 
 from app.agent.loop import run_agent_safely
+from app.agent.patch_flow import MAX_PATCH_DIFF_BYTES, propose_patch
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
 from app.models.provider import ModelResponse
 from app.server.main import MessageRequest
 from app.sessions.store import Session
+from app.tools.patch import PatchProposal
 from app.tools.router import ToolRouter
 
 
@@ -85,6 +87,28 @@ class ContextAwareCoderPatchModelRouter:
             self.coder_messages = request.messages
             return ModelResponse(
                 text='{"action":"patch","operation":"replace","path":"src/calc.py","old_text":"return a - b","new_text":"return a + b","reason":"fix add"}',
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="", model="test-summary", provider="stub")
+
+
+class HardenedPatchModelRouter:
+    primary = ConfiguredPrimary()
+
+    async def complete(self, request):
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            return ModelResponse(
+                text=(
+                    '{"action":"patch","schema_version":1,"operations":['
+                    '{"operation":"replace","path":"README.md","old_text":"old value","new_text":"new value"},'
+                    '{"operation":"append","path":"README.md","text":"second line"},'
+                    '{"operation":"delete","path":"OLD.md"},'
+                    '{"operation":"rename","path":"old.py","new_path":"new.py"}'
+                    '],"reason":"exercise hardened patch flow"}'
+                ),
                 model="test-coder",
                 provider="test",
             )
@@ -235,6 +259,63 @@ async def test_run_agent_reads_located_context_before_coder_patch(tmp_path: Path
     assert any(event["type"] == "tool.output" and event.get("tool") == "search_text" for event in events)
     assert any(event["type"] == "tool.output" and event.get("tool") == "read_file" and event["data"]["path"] == "src/calc.py" for event in events)
     assert "def add" in model_router.coder_messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_applies_hardened_multi_operation_patch(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("old value\n", encoding="utf-8")
+    (tmp_path / "OLD.md").write_text("remove me\n", encoding="utf-8")
+    (tmp_path / "old.py").write_text("print('ok')\n", encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="修改多操作 patch", mode="default", workspace=str(tmp_path), language="zh-CN")
+    runtime = AgentRuntime(
+        model_router=HardenedPatchModelRouter(),
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / "audit.jsonl"),
+    )
+
+    task = asyncio.create_task(run_agent_safely(session, request, runtime))
+    events = []
+    approval_count = 0
+    while True:
+        event = await asyncio.wait_for(session.events.get(), timeout=5)
+        events.append(event)
+        if event["type"] == "approval.requested" and event.get("kind") == "patch":
+            approval_count += 1
+            assert session.resolve_approval(event["approval_id"], accepted=True)
+        if event["type"] == "final":
+            break
+    await asyncio.wait_for(task, timeout=5)
+
+    assert approval_count == 1
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new value\nsecond line\n"
+    assert not (tmp_path / "OLD.md").exists()
+    assert not (tmp_path / "old.py").exists()
+    assert (tmp_path / "new.py").read_text(encoding="utf-8") == "print('ok')\n"
+    preview = next(event for event in events if event["type"] == "patch.preview")
+    assert preview["files"] == ["old.py", "new.py", "README.md", "OLD.md"]
+    assert "rename from old.py" in preview["diff"]
+    assert "+++ /dev/null" in preview["diff"]
+
+
+@pytest.mark.asyncio
+async def test_propose_patch_rejects_large_diff_before_approval(tmp_path: Path) -> None:
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="large patch", mode="default", workspace=str(tmp_path), language="zh-CN")
+    runtime = AgentRuntime(
+        model_router=CoderPatchModelRouter(),
+        tools=ToolRouter(),
+        audit=AuditLogger(tmp_path / "audit.jsonl"),
+    )
+    proposal = PatchProposal(path="README.md", diff="+" * (MAX_PATCH_DIFF_BYTES + 1), new_content="")
+
+    outcome = await propose_patch(session, request, proposal, operation="replace", runtime=runtime)
+
+    assert outcome["status"] == "error"
+    assert "patch diff too large" in outcome["reason"]
+    event = await asyncio.wait_for(session.events.get(), timeout=1)
+    assert event["type"] == "tool.error"
+    assert session.approvals == {}
 
 
 @pytest.mark.asyncio

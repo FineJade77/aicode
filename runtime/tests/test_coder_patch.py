@@ -21,6 +21,7 @@ def test_parse_coder_patch_accepts_operations_json() -> None:
     patch = parse_coder_patch(
         """{
   "action": "patch",
+  "schema_version": 1,
   "operations": [
     {"operation": "replace", "path": "README.md", "old_text": "old", "new_text": "new"},
     {"operation": "create", "path": "TODO.md", "content": "todo"}
@@ -37,7 +38,7 @@ def test_parse_coder_patch_accepts_operations_json() -> None:
     assert patch.operations[1].path == "TODO.md"
 
 
-def test_parse_coder_patch_rejects_duplicate_operation_paths() -> None:
+def test_parse_coder_patch_accepts_same_file_operation_sequence() -> None:
     patch = parse_coder_patch(
         """{
   "action": "patch",
@@ -46,6 +47,34 @@ def test_parse_coder_patch_rejects_duplicate_operation_paths() -> None:
     {"operation": "append", "path": "./README.md", "text": "more"}
   ]
 }"""
+    )
+
+    assert patch is not None
+    assert len(patch.operations) == 2
+    assert patch.operations[0].path == "README.md"
+    assert patch.operations[1].path == "./README.md"
+
+
+def test_parse_coder_patch_accepts_delete_and_rename() -> None:
+    patch = parse_coder_patch(
+        """{
+  "action": "patch",
+  "operations": [
+    {"operation": "delete", "path": "old.txt"},
+    {"operation": "rename", "path": "src/old.py", "new_path": "src/new.py"}
+  ]
+}"""
+    )
+
+    assert patch is not None
+    assert patch.operations[0].operation == "delete"
+    assert patch.operations[1].operation == "rename"
+    assert patch.operations[1].new_path == "src/new.py"
+
+
+def test_parse_coder_patch_rejects_unsupported_schema_version() -> None:
+    patch = parse_coder_patch(
+        '{"action":"patch","schema_version":99,"operation":"replace","path":"README.md","old_text":"old","new_text":"new"}'
     )
 
     assert patch is None

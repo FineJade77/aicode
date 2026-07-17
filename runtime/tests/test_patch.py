@@ -3,7 +3,16 @@ from pathlib import Path
 import pytest
 
 from app.tools.base import ToolError
-from app.tools.patch import PatchApplication, apply_content_patch, apply_content_patches, create_append_patch, create_file_patch, create_replace_patch
+from app.tools.patch import (
+    PatchApplication,
+    apply_content_patch,
+    apply_content_patches,
+    create_append_patch,
+    create_delete_patch,
+    create_file_patch,
+    create_rename_patch,
+    create_replace_patch,
+)
 
 
 def test_create_append_patch_and_apply(tmp_path: Path) -> None:
@@ -67,6 +76,40 @@ def test_create_file_patch_requires_existing_parent(tmp_path: Path) -> None:
         create_file_patch(tmp_path, "missing/NEW.md", "hello")
 
 
+def test_create_delete_patch_and_apply(tmp_path: Path) -> None:
+    target = tmp_path / "OLD.md"
+    target.write_text("bye\n", encoding="utf-8")
+
+    proposal = create_delete_patch(tmp_path, "OLD.md")
+
+    assert proposal.path == "OLD.md"
+    assert proposal.kind == "delete"
+    assert "--- a/OLD.md" in proposal.diff
+    assert "+++ /dev/null" in proposal.diff
+
+    apply_content_patches(tmp_path, [PatchApplication(path=proposal.path, delete=True)])
+
+    assert not target.exists()
+
+
+def test_create_rename_patch_and_apply(tmp_path: Path) -> None:
+    old = tmp_path / "old.py"
+    new = tmp_path / "new.py"
+    old.write_text("print('ok')\n", encoding="utf-8")
+
+    proposal = create_rename_patch(tmp_path, "old.py", "new.py")
+
+    assert proposal.path == "old.py"
+    assert proposal.target_path == "new.py"
+    assert proposal.kind == "rename"
+    assert "rename from old.py" in proposal.diff
+
+    apply_content_patches(tmp_path, [PatchApplication(path=proposal.path, target_path=proposal.target_path)])
+
+    assert not old.exists()
+    assert new.read_text(encoding="utf-8") == "print('ok')\n"
+
+
 def test_apply_content_patches_updates_multiple_files(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
 
@@ -121,4 +164,32 @@ def test_apply_content_patches_rolls_back_written_files_on_write_failure(tmp_pat
         )
 
     assert readme.read_text(encoding="utf-8") == "old\n"
+    assert todo.read_text(encoding="utf-8") == "todo\n"
+
+
+def test_apply_content_patches_rolls_back_rename_on_later_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old = tmp_path / "old.py"
+    todo = tmp_path / "TODO.md"
+    old.write_text("print('ok')\n", encoding="utf-8")
+    todo.write_text("todo\n", encoding="utf-8")
+    original_write_text = Path.write_text
+
+    def failing_write_text(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        if self == todo and data == "new\n":
+            raise OSError("disk full")
+        return original_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", failing_write_text)
+
+    with pytest.raises(ToolError, match="disk full"):
+        apply_content_patches(
+            tmp_path,
+            [
+                PatchApplication(path="old.py", target_path="new.py"),
+                PatchApplication(path="TODO.md", new_content="new\n"),
+            ],
+        )
+
+    assert old.read_text(encoding="utf-8") == "print('ok')\n"
+    assert not (tmp_path / "new.py").exists()
     assert todo.read_text(encoding="utf-8") == "todo\n"
