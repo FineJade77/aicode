@@ -325,6 +325,8 @@ func RenderEvent(event map[string]any) {
 		fmt.Println(stringValue(event["message"]))
 	case "verification.skipped":
 		fmt.Printf("验证跳过: %s\n", stringValue(event["reason"]))
+	case "verification.denied":
+		fmt.Printf("验证未运行: %s\n", stringValue(event["reason"]))
 	case "verification.completed":
 		status := "通过"
 		if !boolValue(event["success"]) {

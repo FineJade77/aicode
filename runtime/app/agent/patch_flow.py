@@ -191,6 +191,37 @@ async def run_post_patch_verification(session: Session, request: AgentRequest, r
         )
         return {"status": "skipped", "reason": "no test command detected"}
 
+    decision = runtime.tools.evaluate("run_shell", {"command": command}, mode=request.mode)
+    if not decision.allowed or decision.requires_approval or decision.risk_level != "low":
+        reason = verification_denied_reason(request.language, decision)
+        runtime.audit.record(
+            "verification.denied",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={
+                "command": command,
+                "risk_level": decision.risk_level,
+                "requires_approval": decision.requires_approval,
+                "policy_reason": decision.reason,
+            },
+        )
+        await session.events.put(
+            {
+                "type": "verification.denied",
+                "command": command,
+                "risk_level": decision.risk_level,
+                "requires_approval": decision.requires_approval,
+                "reason": reason,
+            }
+        )
+        return {
+            "status": "denied",
+            "command": command,
+            "risk_level": decision.risk_level,
+            "requires_approval": decision.requires_approval,
+            "reason": reason,
+        }
+
     await session.events.put(
         {
             "type": "verification.started",
@@ -225,6 +256,16 @@ async def run_post_patch_verification(session: Session, request: AgentRequest, r
         "requires_approval": result.requires_approval,
         "text": truncate_for_model(result.text or result.error, limit=4_000),
     }
+
+
+def verification_denied_reason(language: str, decision: Any) -> str:
+    if language.startswith("en"):
+        if decision.requires_approval:
+            return "verification command requires explicit approval and was not auto-run"
+        if decision.risk_level == "high":
+            return "verification command is blocked by policy"
+        return "verification command was denied by policy"
+    return decision.reason or "验证命令未通过安全策略"
 
 
 def patch_outcome(

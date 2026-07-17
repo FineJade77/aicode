@@ -112,6 +112,8 @@ def format_verification_line_zh(status: str, command: str, reason: str) -> str:
         return f"- 验证失败: `{command}`。"
     if status == "skipped":
         return f"- 验证跳过: {reason or '未发现可自动运行的测试命令'}。"
+    if status == "denied":
+        return f"- 验证未运行: {reason or '验证命令未通过安全策略'}。"
     return "- 验证未运行。"
 
 
@@ -122,6 +124,8 @@ def format_verification_line_en(status: str, command: str, reason: str) -> str:
         return f"- Verification failed: `{command}`."
     if status == "skipped":
         return f"- Verification skipped: {reason or 'no test command detected'}."
+    if status == "denied":
+        return f"- Verification did not run: {reason or 'verification command was denied by policy'}."
     return "- Verification did not run."
 
 

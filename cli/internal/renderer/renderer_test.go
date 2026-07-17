@@ -44,6 +44,15 @@ func TestRenderEventPrintsRunStatus(t *testing.T) {
 	assertContains(t, output, "任务已排队")
 }
 
+func TestRenderEventPrintsVerificationDenied(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":   "verification.denied",
+		"reason": "禁止执行高风险命令: rm",
+	})
+
+	assertContains(t, output, "验证未运行: 禁止执行高风险命令: rm")
+}
+
 func TestReviewRulesTable(t *testing.T) {
 	table := ReviewRulesTable(reviewRulesFixture())
 

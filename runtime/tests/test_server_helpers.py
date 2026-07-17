@@ -250,6 +250,28 @@ def test_patch_final_reports_verification_skipped_for_stub() -> None:
     assert "验证跳过: no test command detected。" in summary
 
 
+def test_patch_final_reports_verification_denied_for_stub() -> None:
+    request = MessageRequest(message="create TODO.md hi", mode="default", workspace="/repo", language="zh-CN")
+    summary = final_summary_text(
+        request,
+        [
+            {
+                "tool": "apply_patch",
+                "success": True,
+                "status": "applied",
+                "operation": "create",
+                "files": ["TODO.md"],
+                "verification": {"status": "denied", "command": "rm -rf build", "reason": "禁止执行高风险命令: rm"},
+            }
+        ],
+        "Runtime 骨架已连接。",
+        "stub",
+    )
+
+    assert "已执行 `create`，文件: TODO.md。" in summary
+    assert "验证未运行: 禁止执行高风险命令: rm。" in summary
+
+
 def test_patch_final_reports_rejected_for_stub() -> None:
     request = MessageRequest(message="replace sample.txt old => new", mode="default", workspace="/repo", language="zh-CN")
     summary = final_summary_text(
@@ -371,3 +393,25 @@ async def test_post_patch_verification_runs_detected_tests(tmp_path: Path) -> No
     assert tool_output["type"] == "tool.output"
     assert completed["type"] == "verification.completed"
     assert completed["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_post_patch_verification_denies_unsafe_configured_command(tmp_path: Path) -> None:
+    audit.path = tmp_path / "audit.jsonl"
+    config_dir = tmp_path / ".aicode"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text('{"commands":{"test":"rm -rf build"}}', encoding="utf-8")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    request = MessageRequest(message="replace x", mode="default", workspace=str(tmp_path), language="zh-CN")
+
+    result = await run_post_patch_verification(session, request)
+    denied = await asyncio.wait_for(session.events.get(), timeout=1)
+
+    assert result["status"] == "denied"
+    assert result["command"] == "rm -rf build"
+    assert result["risk_level"] == "high"
+    assert "高风险命令" in result["reason"]
+    assert denied["type"] == "verification.denied"
+    assert denied["command"] == "rm -rf build"
+    assert denied["risk_level"] == "high"
+    assert session.events.empty()
