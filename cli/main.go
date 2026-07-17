@@ -110,6 +110,9 @@ func printHelp() {
   aicode config review list
   aicode config review docs
   aicode config review prune
+  aicode config workspace add api ../api
+  aicode config workspace list
+  aicode config workspace remove api
   aicode daemon start
   aicode daemon stop
   aicode daemon status`)
@@ -149,7 +152,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|review>")
+		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|review|workspace>")
 	}
 
 	switch args[0] {
@@ -208,6 +211,8 @@ func runConfigCommand(cfg config.Config, args []string) error {
 		return nil
 	case "review":
 		return runConfigReviewCommand(cfg, args[1:])
+	case "workspace":
+		return runConfigWorkspaceCommand(args[1:])
 	default:
 		return fmt.Errorf("未知 config 命令: %s", args[0])
 	}
@@ -378,6 +383,86 @@ func runConfigReviewPrune(cfg config.Config) error {
 
 func configReviewUsage() error {
 	return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> | set <largeDiffThreshold|maxFindings> <value> | unset <largeDiffThreshold|maxFindings> | list | docs | prune")
+}
+
+func runConfigWorkspaceCommand(args []string) error {
+	if len(args) == 1 && args[0] == "list" {
+		return runConfigWorkspaceList()
+	}
+	if len(args) == 3 && args[0] == "add" {
+		return runConfigWorkspaceAdd(args[1], args[2])
+	}
+	if len(args) == 2 && (args[0] == "remove" || args[0] == "rm") {
+		return runConfigWorkspaceRemove(args[1])
+	}
+	return configWorkspaceUsage()
+}
+
+func runConfigWorkspaceAdd(name string, targetPath string) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, entries, err := projectconfig.SetWorkspace(root.Path, name, targetPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已添加只读 workspace %s -> %s (%s)\n", name, targetPath, path)
+	printWorkspaceEntries(entries)
+	return nil
+}
+
+func runConfigWorkspaceRemove(name string) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, removed, entries, err := projectconfig.RemoveWorkspace(root.Path, name)
+	if err != nil {
+		return err
+	}
+	if removed {
+		fmt.Printf("已移除 workspace %s (%s)\n", name, path)
+	} else {
+		fmt.Printf("未发现 workspace %s (%s)\n", name, path)
+	}
+	printWorkspaceEntries(entries)
+	return nil
+}
+
+func runConfigWorkspaceList() error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, entries, err := projectconfig.ListWorkspaces(root.Path)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Printf("未配置额外 workspace (%s)\n", path)
+		return nil
+	}
+	fmt.Printf("Project workspaces (%s)\n", path)
+	printWorkspaceEntries(entries)
+	return nil
+}
+
+func printWorkspaceEntries(entries []projectconfig.WorkspaceEntry) {
+	if len(entries) == 0 {
+		fmt.Println("当前 workspaces: []")
+		return
+	}
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "NAME\tPATH\tMODE")
+	for _, entry := range entries {
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", entry.Name, entry.Path, entry.Mode)
+	}
+	writer.Flush()
+}
+
+func configWorkspaceUsage() error {
+	return fmt.Errorf("用法: aicode config workspace add <name> <path> | remove <name> | list")
 }
 
 func runResume(cfg config.Config, args []string) error {

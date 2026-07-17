@@ -149,6 +149,9 @@ go run ./cli config review unset largeDiffThreshold
 go run ./cli config review list
 go run ./cli config review docs
 go run ./cli config review prune
+go run ./cli config workspace add api ../api
+go run ./cli config workspace list
+go run ./cli config workspace remove api
 ```
 
 切换为英文交互：
@@ -191,6 +194,14 @@ go run ./cli config review unset largeDiffThreshold
 go run ./cli config review list
 go run ./cli config review docs
 go run ./cli config review prune
+```
+
+也可以用 CLI 管理额外只读 workspace：
+
+```bash
+go run ./cli config workspace add api ../api
+go run ./cli config workspace list
+go run ./cli config workspace remove api
 ```
 
 如果不确定 rule id，先运行：
