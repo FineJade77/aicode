@@ -332,6 +332,14 @@ func RenderEvent(event map[string]any) {
 		fmt.Println("Patch 已应用。")
 	case "patch.rejected":
 		fmt.Printf("Patch 已拒绝: %s\n", stringValue(event["reason"]))
+	case "patch.stale":
+		if message := stringValue(event["message"]); message != "" {
+			fmt.Println(message)
+		} else {
+			fmt.Printf("Patch 已过期: %s\n", stringValue(event["reason"]))
+		}
+	case "patch.rebuild.started":
+		fmt.Println(stringValue(event["message"]))
 	case "verification.started":
 		fmt.Println(stringValue(event["message"]))
 	case "verification.skipped":

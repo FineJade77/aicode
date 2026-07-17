@@ -64,6 +64,7 @@ def build_coder_patch_messages(request: AgentRequest, observations: list[dict[st
         "不要输出 Markdown，不要解释。"
         "你不能直接修改文件，只能提出一个结构化 patch proposal。"
         "只允许修改主 workspace 内的文件，不允许跨仓库写入。"
+        "如果已有 patch 因 stale 或 patch 已过期失败，必须基于当前工具输出重新生成最小 patch。"
         "如果已有 patch 后验证失败，优先根据 verification.analysis、失败用例和相关工具输出提出最小修复。"
         "如果 observation 带 context_compacted，说明部分输出被预算层压缩；不要猜测被省略内容。"
         "如果上下文不足或不需要修改，输出 {\"action\":\"none\",\"reason\":\"...\"}。"
@@ -550,16 +551,38 @@ async def propose_patch_entries(
             protected_paths=project_config.protected_paths,
         )
     except ToolError as exc:
+        reason = str(exc)
+        if is_stale_patch_error(reason):
+            runtime.audit.record(
+                "patch.stale",
+                session_id=session.session_id,
+                workspace=session.workspace,
+                data={"approval_id": approval.approval_id, "files": files, "reason": reason},
+            )
+            await session.events.put(
+                {
+                    "type": "patch.stale",
+                    "approval_id": approval.approval_id,
+                    "files": files,
+                    "reason": reason,
+                    "message": localized(
+                        request.language,
+                        "Patch 已过期，文件在确认前发生变化；将尝试重新生成 diff。",
+                        "Patch is stale because files changed before confirmation; attempting to rebuild the diff.",
+                    ),
+                }
+            )
+            return patch_outcome("stale", operation, files, approval_id=approval.approval_id, reason=reason)
         await session.events.put(
             {
                 "type": "tool.error",
                 "tool": "apply_patch",
-                "error": str(exc),
+                "error": reason,
                 "risk_level": "medium",
                 "requires_approval": True,
             }
         )
-        return patch_outcome("error", operation, files, approval_id=approval.approval_id, reason=str(exc))
+        return patch_outcome("error", operation, files, approval_id=approval.approval_id, reason=reason)
 
     runtime.audit.record(
         "patch.applied",
@@ -708,6 +731,10 @@ def verification_denied_reason(language: str, decision: Any) -> str:
             return "verification command is blocked by policy"
         return "verification command was denied by policy"
     return decision.reason or "验证命令未通过安全策略"
+
+
+def is_stale_patch_error(reason: str) -> bool:
+    return reason.startswith("patch 已过期:")
 
 
 def patch_outcome(

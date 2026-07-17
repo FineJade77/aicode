@@ -73,6 +73,25 @@ func TestRenderEventPrintsVerificationRepairStarted(t *testing.T) {
 	assertContains(t, output, "尝试生成一次后续修复 patch")
 }
 
+func TestRenderEventPrintsPatchStale(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":    "patch.stale",
+		"message": "Patch 已过期，文件在确认前发生变化；将尝试重新生成 diff。",
+		"reason":  "patch 已过期: README.md 在确认前已被修改，请重新生成 diff",
+	})
+
+	assertContains(t, output, "Patch 已过期")
+}
+
+func TestRenderEventPrintsPatchRebuildStarted(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":    "patch.rebuild.started",
+		"message": "Patch 已过期，尝试重新生成一次 diff。",
+	})
+
+	assertContains(t, output, "重新生成一次 diff")
+}
+
 func TestRenderEventPrintsContextMappingStep(t *testing.T) {
 	output := captureRenderEvent(map[string]any{
 		"type":   "agent.step",

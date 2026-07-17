@@ -39,6 +39,10 @@ async def run_agent(session: Session, request: AgentRequest, runtime: AgentRunti
         patch_outcome = await propose_model_patch(session, request, observations, runtime)
     if patch_outcome is not None:
         observations.append(patch_outcome)
+        rebuild_outcome = await maybe_rebuild_stale_patch(session, request, observations, patch_outcome, runtime)
+        if rebuild_outcome is not None:
+            observations.append(rebuild_outcome)
+            patch_outcome = rebuild_outcome
         repair_outcome = await maybe_repair_failed_verification(session, request, observations, patch_outcome, runtime)
         if repair_outcome is not None:
             observations.append(repair_outcome)
@@ -233,6 +237,38 @@ async def maybe_repair_failed_verification(
         }
     )
     return await propose_model_patch(session, request, observations, runtime)
+
+
+async def maybe_rebuild_stale_patch(
+    session: Session,
+    request: AgentRequest,
+    observations: list[dict[str, Any]],
+    patch_outcome: dict[str, Any],
+    runtime: AgentRuntime,
+) -> dict[str, Any] | None:
+    if not should_rebuild_stale_patch(request, patch_outcome, runtime):
+        return None
+    runtime.audit.record(
+        "patch.rebuild.started",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={"files": patch_outcome.get("files", []), "reason": patch_outcome.get("reason", "")},
+    )
+    await session.events.put(
+        {
+            "type": "patch.rebuild.started",
+            "files": patch_outcome.get("files", []),
+            "reason": patch_outcome.get("reason", ""),
+            "message": localized(request.language, "Patch 已过期，尝试重新生成一次 diff。", "Patch is stale; attempting to rebuild the diff once."),
+        }
+    )
+    return await propose_model_patch(session, request, observations, runtime)
+
+
+def should_rebuild_stale_patch(request: AgentRequest, patch_outcome: dict[str, Any], runtime: AgentRuntime) -> bool:
+    if request.mode == "review" or not primary_model_available(runtime):
+        return False
+    return patch_outcome.get("status") == "stale"
 
 
 def should_repair_failed_verification(request: AgentRequest, patch_outcome: dict[str, Any], runtime: AgentRuntime) -> bool:

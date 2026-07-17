@@ -50,6 +50,33 @@ class CoderPatchModelRouter:
         return ModelResponse(text="done", model="test-summary", provider="test")
 
 
+class StaleRebuildCoderPatchModelRouter:
+    primary = ConfiguredPrimary()
+
+    def __init__(self) -> None:
+        self.purposes: list[str] = []
+        self.coder_calls = 0
+
+    async def complete(self, request):
+        self.purposes.append(request.purpose)
+        if request.purpose == "planner":
+            return ModelResponse(text='{"action":"finish","reason":"context collected"}', model="test-planner", provider="test")
+        if request.purpose == "coder":
+            self.coder_calls += 1
+            if self.coder_calls == 1:
+                return ModelResponse(
+                    text='{"action":"patch","operation":"replace","path":"README.md","old_text":"old value","new_text":"new value","reason":"first attempt"}',
+                    model="test-coder",
+                    provider="test",
+                )
+            return ModelResponse(
+                text='{"action":"patch","operation":"replace","path":"README.md","old_text":"external value","new_text":"rebuilt value","reason":"rebuild stale patch"}',
+                model="test-coder",
+                provider="test",
+            )
+        return ModelResponse(text="done", model="test-summary", provider="test")
+
+
 class MultiFileCoderPatchModelRouter:
     primary = ConfiguredPrimary()
 
@@ -232,32 +259,39 @@ async def test_run_agent_uses_coder_patch_after_context_and_requires_approval(tm
 
 
 @pytest.mark.asyncio
-async def test_run_agent_rejects_stale_patch_after_approval_wait(tmp_path: Path) -> None:
+async def test_run_agent_rebuilds_stale_patch_after_approval_wait(tmp_path: Path) -> None:
     readme = tmp_path / "README.md"
     readme.write_text("old value\n", encoding="utf-8")
     session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
     request = MessageRequest(message="修复 README.md 里的旧文案", mode="default", workspace=str(tmp_path), language="zh-CN")
+    model_router = StaleRebuildCoderPatchModelRouter()
     runtime = AgentRuntime(
-        model_router=CoderPatchModelRouter(),
+        model_router=model_router,
         tools=ToolRouter(),
         audit=AuditLogger(tmp_path / "audit.jsonl"),
     )
 
     task = asyncio.create_task(run_agent_safely(session, request, runtime))
     events = []
+    approval_count = 0
     while True:
         event = await asyncio.wait_for(session.events.get(), timeout=5)
         events.append(event)
         if event["type"] == "approval.requested" and event.get("kind") == "patch":
-            readme.write_text("external value\n", encoding="utf-8")
+            approval_count += 1
+            if approval_count == 1:
+                readme.write_text("external value\n", encoding="utf-8")
             assert session.resolve_approval(event["approval_id"], accepted=True)
         if event["type"] == "final":
             break
     await asyncio.wait_for(task, timeout=5)
 
-    assert readme.read_text(encoding="utf-8") == "external value\n"
-    assert any(event["type"] == "tool.error" and event.get("tool") == "apply_patch" and "patch 已过期" in event["error"] for event in events)
-    assert not any(event["type"] == "patch.applied" for event in events)
+    assert readme.read_text(encoding="utf-8") == "rebuilt value\n"
+    assert approval_count == 2
+    assert model_router.coder_calls == 2
+    assert any(event["type"] == "patch.stale" and "patch 已过期" in event["reason"] for event in events)
+    assert any(event["type"] == "patch.rebuild.started" for event in events)
+    assert any(event["type"] == "patch.applied" for event in events)
 
 
 @pytest.mark.asyncio
