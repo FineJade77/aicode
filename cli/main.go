@@ -103,6 +103,10 @@ func printHelp() {
   aicode config set ui.language en-US
   aicode config set models.reviewer gpt-5
   aicode config unset models.reviewer
+  aicode config protected add secrets/local/**
+  aicode config protected list
+  aicode config protected remove secrets/local/**
+  aicode config protected reset
   aicode config review disable large_diff
   aicode config review enable large_diff
   aicode config review set largeDiffThreshold 1200
@@ -156,7 +160,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 
 func runConfigCommand(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|review|test|workspace>")
+		return fmt.Errorf("用法: aicode config <init|show|list|get|docs|set|unset|protected|review|test|workspace>")
 	}
 
 	switch args[0] {
@@ -213,6 +217,8 @@ func runConfigCommand(cfg config.Config, args []string) error {
 		}
 		fmt.Printf("%s 未在用户配置中显式设置 (%s)\n", args[1], path)
 		return nil
+	case "protected":
+		return runConfigProtectedCommand(args[1:])
 	case "review":
 		return runConfigReviewCommand(cfg, args[1:])
 	case "test":
@@ -389,6 +395,100 @@ func runConfigReviewPrune(cfg config.Config) error {
 
 func configReviewUsage() error {
 	return fmt.Errorf("用法: aicode config review <enable|disable> <rule_id> | set <largeDiffThreshold|maxFindings> <value> | unset <largeDiffThreshold|maxFindings> | list | docs | prune")
+}
+
+func runConfigProtectedCommand(args []string) error {
+	if len(args) == 1 && args[0] == "list" {
+		return runConfigProtectedList()
+	}
+	if len(args) == 2 && args[0] == "add" {
+		return runConfigProtectedAdd(args[1])
+	}
+	if len(args) == 2 && (args[0] == "remove" || args[0] == "rm") {
+		return runConfigProtectedRemove(args[1])
+	}
+	if len(args) == 1 && args[0] == "reset" {
+		return runConfigProtectedReset()
+	}
+	return configProtectedUsage()
+}
+
+func runConfigProtectedList() error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, values, explicit, err := projectconfig.ListProtectedPaths(root.Path)
+	if err != nil {
+		return err
+	}
+	source := "project config"
+	if !explicit {
+		source = "defaults"
+	}
+	fmt.Printf("Protected paths (%s, %s)\n", source, path)
+	printStringList(values)
+	return nil
+}
+
+func runConfigProtectedAdd(pattern string) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, values, err := projectconfig.AddProtectedPath(root.Path, pattern)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已添加 protected path %s (%s)\n", pattern, path)
+	printStringList(values)
+	return nil
+}
+
+func runConfigProtectedRemove(pattern string) error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, removed, values, err := projectconfig.RemoveProtectedPath(root.Path, pattern)
+	if err != nil {
+		return err
+	}
+	if removed {
+		fmt.Printf("已移除 protected path %s (%s)\n", pattern, path)
+	} else {
+		fmt.Printf("未发现 protected path %s (%s)\n", pattern, path)
+	}
+	printStringList(values)
+	return nil
+}
+
+func runConfigProtectedReset() error {
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	path, values, err := projectconfig.ResetProtectedPaths(root.Path)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已重置 protectedPaths 为默认值 (%s)\n", path)
+	printStringList(values)
+	return nil
+}
+
+func printStringList(values []string) {
+	if len(values) == 0 {
+		fmt.Println("[]")
+		return
+	}
+	for _, value := range values {
+		fmt.Printf("- %s\n", value)
+	}
+}
+
+func configProtectedUsage() error {
+	return fmt.Errorf("用法: aicode config protected add <pattern> | remove <pattern> | list | reset")
 }
 
 func runConfigTestCommand(args []string) error {

@@ -142,6 +142,10 @@ go run ./cli config docs
 go run ./cli config get models.reviewer
 go run ./cli config set models.reviewer gpt-5
 go run ./cli config unset models.reviewer
+go run ./cli config protected add secrets/local/**
+go run ./cli config protected list
+go run ./cli config protected remove secrets/local/**
+go run ./cli config protected reset
 go run ./cli config review disable large_diff
 go run ./cli config review enable large_diff
 go run ./cli config review set largeDiffThreshold 1200
@@ -186,6 +190,15 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 - `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。
 
 当前内置规则覆盖疑似密钥、敏感路径、大 diff、调试残留、动态执行、前端 XSS、Python 反序列化/YAML 加载、Go TLS 跳过校验和过宽文件权限等常见风险。
+
+可以用 CLI 管理项目保护路径。第一次新增规则时会基于默认保护列表追加，不会丢掉 `.env`、`secrets/**` 等默认安全项：
+
+```bash
+go run ./cli config protected add secrets/local/**
+go run ./cli config protected list
+go run ./cli config protected remove secrets/local/**
+go run ./cli config protected reset
+```
 
 可以用 CLI 直接启用或禁用 review 规则：
 
