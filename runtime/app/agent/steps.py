@@ -30,8 +30,8 @@ TOOL_DOCS: list[dict[str, Any]] = [
     {
         "name": "list_files",
         "read_only": True,
-        "description": "List workspace files.",
-        "args": {"path": ".", "max_depth": 1, "limit": 40},
+        "description": "List files in the main workspace or a configured read-only workspace.",
+        "args": {"path": ".", "workspace": "optional configured workspace name", "max_depth": 1, "limit": 40},
     },
     {
         "name": "detect_project",
@@ -42,32 +42,32 @@ TOOL_DOCS: list[dict[str, Any]] = [
     {
         "name": "git_status",
         "read_only": True,
-        "description": "Read git status --short.",
-        "args": {},
+        "description": "Read git status --short in the main workspace or a configured read-only workspace.",
+        "args": {"workspace": "optional configured workspace name"},
     },
     {
         "name": "git_diff",
         "read_only": True,
-        "description": "Read current git diff.",
-        "args": {"path": "optional relative path"},
+        "description": "Read current git diff in the main workspace or a configured read-only workspace.",
+        "args": {"path": "optional relative path", "workspace": "optional configured workspace name"},
     },
     {
         "name": "git_show",
         "read_only": True,
-        "description": "Read git show --stat --oneline for a ref.",
-        "args": {"ref": "HEAD"},
+        "description": "Read git show --stat --oneline for a ref in the main workspace or a configured read-only workspace.",
+        "args": {"ref": "HEAD", "workspace": "optional configured workspace name"},
     },
     {
         "name": "read_file",
         "read_only": True,
-        "description": "Read a UTF-8 text file inside the workspace.",
-        "args": {"path": "relative/path", "max_bytes": 30000},
+        "description": "Read a UTF-8 text file inside the main workspace or a configured read-only workspace.",
+        "args": {"path": "relative/path", "workspace": "optional configured workspace name", "max_bytes": 30000},
     },
     {
         "name": "search_text",
         "read_only": True,
-        "description": "Search text inside the workspace.",
-        "args": {"query": "keyword", "limit": 40},
+        "description": "Search text inside the main workspace or a configured read-only workspace.",
+        "args": {"query": "keyword", "workspace": "optional configured workspace name", "limit": 40},
     },
     {
         "name": "review_diff",

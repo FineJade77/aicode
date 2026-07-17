@@ -173,6 +173,7 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 
 - `protectedPaths`: 文件读取、搜索、列表和 patch 写入都会跳过或拦截这些路径。
 - `commands.test`: 设置为具体命令时，`aicode test` 会优先使用该命令；设置为 `auto` 时自动探测。
+- `workspaces`: 声明额外只读仓库，供 `list_files`、`read_file`、`search_text`、`git_status`、`git_diff`、`git_show` 分析使用。
 - `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
 - `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
 - `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。
@@ -218,9 +219,18 @@ go run ./cli review-rules
     ".env",
     "secrets/**",
     "infra/prod/**"
+  ],
+  "workspaces": [
+    {
+      "name": "api",
+      "path": "../api",
+      "mode": "read_only"
+    }
   ]
 }
 ```
+
+多仓库 workspace 第一版只做只读分析。工具调用传入 `{"workspace":"api"}` 时，Runtime 会把路径限制在该配置仓库内；patch、shell 和测试命令仍只在主 workspace 内执行。
 
 ## 模型配置
 

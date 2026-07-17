@@ -110,6 +110,74 @@ async def test_search_text_skips_project_protected_path(tmp_path: Path) -> None:
     assert "token.txt" not in result.text
 
 
+@pytest.mark.asyncio
+async def test_read_file_reads_configured_read_only_workspace(tmp_path: Path) -> None:
+    main = tmp_path / "main"
+    lib = tmp_path / "lib"
+    main.mkdir()
+    (lib / "src").mkdir(parents=True)
+    write_project_config(main, {"workspaces": [{"name": "lib", "path": "../lib", "mode": "read_only"}]})
+    (lib / "src" / "tool.py").write_text("def helper():\n    return 'ok'\n", encoding="utf-8")
+
+    result = await ToolRouter().run("read_file", {"workspace": "lib", "path": "src/tool.py"}, str(main), "default", "zh-CN")
+
+    assert result.success
+    assert result.data["workspace"] == "lib"
+    assert result.data["path"] == "lib:src/tool.py"
+    assert "# lib:src/tool.py" in result.text
+
+
+@pytest.mark.asyncio
+async def test_list_files_lists_configured_read_only_workspace(tmp_path: Path) -> None:
+    main = tmp_path / "main"
+    lib = tmp_path / "lib"
+    main.mkdir()
+    (lib / "src").mkdir(parents=True)
+    write_project_config(main, {"workspaces": [{"name": "lib", "path": "../lib", "mode": "read_only"}]})
+    (lib / "src" / "tool.py").write_text("print('ok')\n", encoding="utf-8")
+
+    result = await ToolRouter().run("list_files", {"workspace": "lib", "max_depth": 2}, str(main), "default", "zh-CN")
+
+    assert result.success
+    assert result.data["workspace"] == "lib"
+    assert "lib:src/" in result.text
+    assert "lib:src/tool.py" in result.text
+
+
+@pytest.mark.asyncio
+async def test_search_text_searches_configured_read_only_workspace(tmp_path: Path) -> None:
+    main = tmp_path / "main"
+    lib = tmp_path / "lib"
+    main.mkdir()
+    lib.mkdir()
+    write_project_config(main, {"protectedPaths": ["secret/**"], "workspaces": [{"name": "lib", "path": "../lib", "mode": "read_only"}]})
+    (lib / "public.py").write_text("needle = 'visible'\n", encoding="utf-8")
+    (lib / "secret").mkdir()
+    (lib / "secret" / "token.txt").write_text("needle = 'hidden'\n", encoding="utf-8")
+
+    result = await ToolRouter().run("search_text", {"workspace": "lib", "query": "needle"}, str(main), "default", "zh-CN")
+
+    assert result.success
+    assert result.data["workspace"] == "lib"
+    assert "lib:public.py" in result.text
+    assert "token.txt" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_read_file_blocks_path_escape_from_configured_workspace(tmp_path: Path) -> None:
+    main = tmp_path / "main"
+    lib = tmp_path / "lib"
+    main.mkdir()
+    lib.mkdir()
+    write_project_config(main, {"workspaces": [{"name": "lib", "path": "../lib", "mode": "read_only"}]})
+    (main / "secret.txt").write_text("secret\n", encoding="utf-8")
+
+    result = await ToolRouter().run("read_file", {"workspace": "lib", "path": "../main/secret.txt"}, str(main), "default", "zh-CN")
+
+    assert not result.success
+    assert "workspace 边界" in result.error
+
+
 def test_append_patch_blocks_project_protected_path(tmp_path: Path) -> None:
     protected = tmp_path / "secret.txt"
     protected.write_text("secret\n", encoding="utf-8")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.tools.base import ToolContext, ToolResult
+from app.tools.base import ToolContext, ToolResult, resolve_tool_workspace
 from app.tools.command import run_command
 
 
@@ -8,7 +8,7 @@ class GitStatusTool:
     name = "git_status"
 
     async def run(self, args: dict, context: ToolContext) -> ToolResult:
-        return await run_git(context, ["status", "--short"])
+        return await run_git(context, args, ["status", "--short"])
 
 
 class GitDiffTool:
@@ -16,7 +16,7 @@ class GitDiffTool:
 
     async def run(self, args: dict, context: ToolContext) -> ToolResult:
         extra = ["--", str(args["path"])] if args.get("path") else []
-        return await run_git(context, ["diff", *extra], empty_text="当前没有未提交 diff")
+        return await run_git(context, args, ["diff", *extra], empty_text="当前没有未提交 diff")
 
 
 class GitShowTool:
@@ -24,14 +24,15 @@ class GitShowTool:
 
     async def run(self, args: dict, context: ToolContext) -> ToolResult:
         ref = str(args.get("ref", "HEAD"))
-        return await run_git(context, ["show", "--stat", "--oneline", ref])
+        return await run_git(context, args, ["show", "--stat", "--oneline", ref])
 
 
-async def run_git(context: ToolContext, args: list[str], empty_text: str = "无输出") -> ToolResult:
-    command = ["git", *args]
-    proc = await run_command(command, cwd=context.workspace, timeout=20)
+async def run_git(context: ToolContext, tool_args: dict, git_args: list[str], empty_text: str = "无输出") -> ToolResult:
+    workspace_root, workspace_name = resolve_tool_workspace(context, tool_args.get("workspace"))
+    command = ["git", *git_args]
+    proc = await run_command(command, cwd=workspace_root, timeout=20)
     output = proc.stdout.strip()
     error = proc.stderr.strip()
     if proc.returncode != 0:
         return ToolResult(success=False, error=error or output or "git 命令失败")
-    return ToolResult(success=True, text=output or empty_text, data={"command": command, "timed_out": proc.timed_out})
+    return ToolResult(success=True, text=output or empty_text, data={"command": command, "workspace": workspace_name or "main", "timed_out": proc.timed_out})

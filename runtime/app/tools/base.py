@@ -5,7 +5,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.project.config import default_protected_paths
+from app.project.config import WorkspaceRef, default_protected_paths
 
 
 @dataclass(slots=True)
@@ -14,6 +14,7 @@ class ToolContext:
     mode: str = "default"
     language: str = "zh-CN"
     protected_paths: list[str] = field(default_factory=default_protected_paths)
+    workspace_refs: list[WorkspaceRef] = field(default_factory=list)
     review_disabled_rules: list[str] = field(default_factory=list)
     review_large_diff_threshold: int = 500
     review_max_findings: int = 50
@@ -54,6 +55,31 @@ def resolve_workspace_path(workspace: Path, raw_path: str | None = None) -> Path
     except ValueError as exc:
         raise ToolError("路径越过 workspace 边界") from exc
     return candidate
+
+
+def resolve_tool_workspace(context: ToolContext, raw_workspace: Any = None) -> tuple[Path, str]:
+    name = str(raw_workspace or "").strip()
+    if name in {"", ".", "main", "primary"}:
+        return context.workspace.resolve(), ""
+
+    for ref in context.workspace_refs:
+        if ref.name != name:
+            continue
+        if ref.mode != "read_only":
+            raise ToolError(f"workspace 仅支持 read_only 模式: {name}")
+        root = Path(ref.path).expanduser()
+        if not root.is_absolute():
+            root = context.workspace / root
+        return root.resolve(), name
+
+    raise ToolError(f"未知 workspace: {name}")
+
+
+def scoped_display_path(workspace_name: str, workspace: Path, path: Path) -> str:
+    rel = display_path(workspace, path)
+    if not workspace_name:
+        return rel
+    return f"{workspace_name}:{rel}"
 
 
 def reject_protected_path(workspace: Path, path: Path, protected_paths: list[str]) -> None:
