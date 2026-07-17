@@ -3,7 +3,7 @@ import pytest
 
 from app.config.settings import AnthropicSettings
 from app.models.anthropic import AnthropicProvider, to_anthropic_messages
-from app.models.provider import CompletionRequest
+from app.models.provider import CompletionRequest, ProviderError
 
 
 def sse(event: str, data: str) -> str:
@@ -38,6 +38,68 @@ async def test_stream_parses_anthropic_events(monkeypatch):
     assert events[2].usage.input_tokens == 9
     assert events[2].usage.output_tokens == 7
     assert events[2].model == "claude-x"
+
+
+@pytest.mark.asyncio
+async def test_retry_exhaustion_on_500(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(500, content=b"server error")
+
+    async def _fast_sleep(*a, **k):
+        pass
+
+    monkeypatch.setattr("app.models.anthropic.asyncio.sleep", _fast_sleep)
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    with pytest.raises(ProviderError, match="HTTP 500"):
+        async for _ in provider.stream_complete(request):
+            pass
+    assert calls["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_no_retry_on_400(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, content=b"bad request")
+
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    with pytest.raises(ProviderError, match="HTTP 400"):
+        async for _ in provider.stream_complete(request):
+            pass
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_input_json_fallback(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    # Build an SSE body with malformed input_json_delta
+    malformed_body = (
+        sse("message_start", '{"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":5}}}')
+        + sse("content_block_start", '{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_bad","name":"broken"}}')
+        + sse("content_block_delta", '{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{bad"}}')
+        + sse("content_block_stop", '{"type":"content_block_stop","index":0}')
+        + sse("message_delta", '{"type":"message_delta","usage":{"output_tokens":2}}')
+        + sse("message_stop", '{"type":"message_stop"}')
+    ).encode()
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=malformed_body))))
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    events = [event async for event in provider.stream_complete(request)]
+    assert [e.type for e in events] == ["tool_call", "done"]
+    assert events[0].tool_call.name == "broken"
+    assert events[0].tool_call.arguments == {}
+    assert events[0].tool_call.id == "tu_bad"
 
 
 def test_message_mapping_tool_roundtrip():
