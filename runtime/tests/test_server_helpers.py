@@ -18,6 +18,7 @@ from app.server.main import (
     final_summary_text,
     model_purpose_for_mode,
     model_routes,
+    process_session_runs,
     review_rules,
     run_post_patch_verification,
 )
@@ -76,6 +77,34 @@ def test_message_request_rejects_workspace_mismatch(tmp_path: Path) -> None:
         bind_message_request_to_session(session, request)
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_process_session_runs_serializes_queued_messages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
+    second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN")
+    first_run = session.enqueue_agent_run(first)
+    second_run = session.enqueue_agent_run(second)
+    active = 0
+    seen: list[str] = []
+
+    async def fake_run_agent(target_session: Session, request: MessageRequest) -> None:
+        nonlocal active
+        active += 1
+        assert active == 1
+        seen.append(request.message)
+        await target_session.events.put({"type": "final", "summary": request.message})
+        active -= 1
+
+    monkeypatch.setattr("app.server.main.run_agent", fake_run_agent)
+
+    await process_session_runs(session)
+
+    finals = [event for event in session.events.events_after(0) if event["type"] == "final"]
+    assert seen == ["first", "second"]
+    assert [event["summary"] for event in finals] == ["first", "second"]
+    assert [event["run_id"] for event in finals] == [first_run.run_id, second_run.run_id]
 
 
 def test_review_mode_uses_reviewer_model_purpose() -> None:

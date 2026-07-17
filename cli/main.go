@@ -484,18 +484,19 @@ func runResumeAgent(cfg config.Config, session sessionInfo, message string) erro
 	defer cancel()
 
 	api := client.New(cfg.Runtime.URL)
-	if err := api.SendMessage(ctx, session.SessionID, client.SendMessageRequest{
+	run, err := api.SendMessage(ctx, session.SessionID, client.SendMessageRequest{
 		Message:   message,
 		Mode:      "chat",
 		Workspace: session.Workspace,
 		Language:  session.Language,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
 	fmt.Printf("恢复会话: %s\n", session.SessionID)
 	fmt.Printf("工作区: %s\n", session.Workspace)
-	return api.StreamEvents(ctx, session.SessionID, func(event map[string]any) error {
+	return api.StreamRunEvents(ctx, session.SessionID, run.RunID, func(event map[string]any) error {
 		renderer.RenderEvent(event)
 		return handleInteractiveEvent(api, session.SessionID, event)
 	})
@@ -664,17 +665,18 @@ func runAgent(cfg config.Config, mode string, prompt string) error {
 		return err
 	}
 
-	if err := api.SendMessage(ctx, session.SessionID, client.SendMessageRequest{
+	run, err := api.SendMessage(ctx, session.SessionID, client.SendMessageRequest{
 		Message:   prompt,
 		Mode:      mode,
 		Workspace: root.Path,
 		Language:  cfg.UI.Language,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
 	fmt.Printf("会话: %s\n", session.SessionID)
-	return api.StreamEvents(ctx, session.SessionID, func(event map[string]any) error {
+	return api.StreamRunEvents(ctx, session.SessionID, run.RunID, func(event map[string]any) error {
 		renderer.RenderEvent(event)
 		return handleInteractiveEvent(api, session.SessionID, event)
 	})

@@ -37,6 +37,11 @@ type SendMessageRequest struct {
 	Language  string `json:"language"`
 }
 
+type SendMessageResponse struct {
+	Status string `json:"status"`
+	RunID  string `json:"run_id"`
+}
+
 type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
 }
@@ -82,8 +87,12 @@ func (c Client) CreateSession(ctx context.Context, payload CreateSessionRequest)
 	return out, nil
 }
 
-func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendMessageRequest) error {
-	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/messages", payload, nil)
+func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendMessageRequest) (SendMessageResponse, error) {
+	var out SendMessageResponse
+	if err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/messages", payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
 func (c Client) Approve(ctx context.Context, sessionID string, approvalID string) error {
@@ -95,9 +104,17 @@ func (c Client) Reject(ctx context.Context, sessionID string, approvalID string)
 }
 
 func (c Client) StreamEvents(ctx context.Context, sessionID string, handle func(map[string]any) error) error {
+	return c.streamEvents(ctx, sessionID, "", handle)
+}
+
+func (c Client) StreamRunEvents(ctx context.Context, sessionID string, runID string, handle func(map[string]any) error) error {
+	return c.streamEvents(ctx, sessionID, runID, handle)
+}
+
+func (c Client) streamEvents(ctx context.Context, sessionID string, runID string, handle func(map[string]any) error) error {
 	var lastEventID int64
 	for {
-		final, retryable, err := c.streamEventsOnce(ctx, sessionID, lastEventID, handle, &lastEventID)
+		final, retryable, err := c.streamEventsOnce(ctx, sessionID, runID, lastEventID, handle, &lastEventID)
 		if final {
 			return nil
 		}
@@ -116,11 +133,12 @@ func (c Client) StreamEvents(ctx context.Context, sessionID string, handle func(
 func (c Client) streamEventsOnce(
 	ctx context.Context,
 	sessionID string,
+	runID string,
 	after int64,
 	handle func(map[string]any) error,
 	lastEventID *int64,
 ) (bool, bool, error) {
-	req, err := c.newStreamRequest(ctx, sessionID, after)
+	req, err := c.newStreamRequest(ctx, sessionID, runID, after)
 	if err != nil {
 		return false, false, err
 	}
@@ -176,10 +194,17 @@ func (c Client) streamEventsOnce(
 	return false, true, nil
 }
 
-func (c Client) newStreamRequest(ctx context.Context, sessionID string, after int64) (*http.Request, error) {
+func (c Client) newStreamRequest(ctx context.Context, sessionID string, runID string, after int64) (*http.Request, error) {
 	streamURL := c.baseURL + "/v1/sessions/" + url.PathEscape(sessionID) + "/events"
+	params := url.Values{}
 	if after > 0 {
-		streamURL += "?after=" + strconv.FormatInt(after, 10)
+		params.Set("after", strconv.FormatInt(after, 10))
+	}
+	if runID != "" {
+		params.Set("run_id", runID)
+	}
+	if encoded := params.Encode(); encoded != "" {
+		streamURL += "?" + encoded
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
 	if err != nil {

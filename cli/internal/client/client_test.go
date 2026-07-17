@@ -88,6 +88,53 @@ func TestStreamEventsUsesPayloadEventIDWhenIDLineMissing(t *testing.T) {
 	}
 }
 
+func TestStreamRunEventsSendsRunID(t *testing.T) {
+	var gotRunID string
+	api := New("http://runtime.test")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotRunID = r.URL.Query().Get("run_id")
+		return sseResponse("id: 1\nevent: final\ndata: {\"type\":\"final\",\"event_id\":1,\"summary\":\"done\"}\n\n"), nil
+	})}
+
+	err := api.StreamRunEvents(context.Background(), "sess_1", "run_abc", func(event map[string]any) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotRunID != "run_abc" {
+		t.Fatalf("run_id = %q, want run_abc", gotRunID)
+	}
+}
+
+func TestSendMessageReturnsRunID(t *testing.T) {
+	api := New("http://runtime.test")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost {
+			return nil, fmt.Errorf("method = %s, want POST", r.Method)
+		}
+		return jsonResponse(`{"status":"queued","run_id":"run_123"}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	response, err := api.SendMessage(ctx, "sess_1", SendMessageRequest{
+		Message:   "hello",
+		Mode:      "default",
+		Workspace: "/repo",
+		Language:  "zh-CN",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if response.Status != "queued" || response.RunID != "run_123" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -99,6 +146,15 @@ func sseResponse(body string) *http.Response {
 		StatusCode: http.StatusOK,
 		Status:     "200 OK",
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func jsonResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }

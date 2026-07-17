@@ -21,7 +21,7 @@ from app.config.settings import settings
 from app.events.sse import encode_sse
 from app.models.router import ModelRouter
 from app.project.config import load_project_config
-from app.sessions.store import Session, store
+from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
 from app.tools.router import ToolRouter
 from app.usage.store import summarize_usage
@@ -102,7 +102,10 @@ async def get_session(session_id: str) -> dict[str, Any]:
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
     effective_request = bind_message_request_to_session(session, request)
+    was_running = session.agent_runner_active() or session.agent_queue.qsize() > 0
     session.events.set_default_after(session.events.last_event_id())
+    queued = session.enqueue_agent_run(effective_request)
+    session.events.set_default_run_id(queued.run_id)
     store.append_message(session, effective_request.model_dump())
     audit.record(
         "message.received",
@@ -113,21 +116,26 @@ async def send_message(session_id: str, request: MessageRequest) -> dict[str, st
             "language": effective_request.language,
             "message_hash": stable_hash(effective_request.message),
             "message_preview": effective_request.message[:200],
+            "run_id": queued.run_id,
+            "queued": was_running,
         },
     )
-    asyncio.create_task(run_agent(session, effective_request))
-    return {"status": "accepted"}
+    ensure_session_runner(session)
+    return {"status": "queued" if was_running else "accepted", "run_id": queued.run_id}
 
 
 @app.get("/v1/sessions/{session_id}/events")
-async def stream_events(session_id: str, request: Request, after: int | None = None) -> StreamingResponse:
+async def stream_events(session_id: str, request: Request, after: int | None = None, run_id: str | None = None) -> StreamingResponse:
     session = require_session(session_id)
     cursor = event_cursor(after, request.headers.get("last-event-id"))
     if cursor is None:
         cursor = session.events.default_after()
+    target_run_id = run_id or session.events.default_run_id()
 
     async def iterator():
         async for event in session.events.subscribe(after=cursor):
+            if target_run_id and event.get("run_id") != target_run_id:
+                continue
             yield encode_sse(event)
             if event.get("type") == "final":
                 break
@@ -226,6 +234,29 @@ def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
 
 async def run_agent(session: Session, request: MessageRequest) -> None:
     await agent_run_agent_safely(session, request, agent_runtime)
+
+
+def ensure_session_runner(session: Session) -> None:
+    if session.agent_runner_active():
+        return
+    session.agent_runner_task = asyncio.create_task(process_session_runs(session))
+
+
+async def process_session_runs(session: Session) -> None:
+    while True:
+        queued = session.next_agent_run()
+        if queued is None:
+            return
+        await process_session_run(session, queued)
+
+
+async def process_session_run(session: Session, queued: QueuedAgentRun) -> None:
+    session.events.set_current_run_id(queued.run_id)
+    try:
+        await run_agent(session, queued.request)
+    finally:
+        session.events.set_current_run_id(None)
+        session.finish_agent_run()
 
 
 async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]):

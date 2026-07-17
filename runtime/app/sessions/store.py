@@ -33,6 +33,12 @@ class PendingApproval:
         }
 
 
+@dataclass(slots=True)
+class QueuedAgentRun:
+    run_id: str
+    request: Any
+
+
 class SessionEvents:
     def __init__(
         self,
@@ -46,11 +52,15 @@ class SessionEvents:
         self._read_after = 0
         self._next_sequence = max((int(event.get("event_id") or 0) for event in self._events), default=0) + 1
         self._default_after: int | None = None
+        self._default_run_id: str | None = None
+        self._current_run_id: str | None = None
         self._max_events = normalize_event_limit(max_events)
         self._trim_retained_events()
 
     async def put(self, event: dict[str, Any]) -> None:
         event = dict(event)
+        if self._current_run_id and "run_id" not in event:
+            event["run_id"] = self._current_run_id
         if "event_id" not in event:
             event["event_id"] = self._next_sequence
             self._next_sequence += 1
@@ -93,6 +103,15 @@ class SessionEvents:
     def default_after(self) -> int | None:
         return self._default_after
 
+    def set_default_run_id(self, run_id: str | None) -> None:
+        self._default_run_id = run_id
+
+    def default_run_id(self) -> str | None:
+        return self._default_run_id
+
+    def set_current_run_id(self, run_id: str | None) -> None:
+        self._current_run_id = run_id
+
     def retained_count(self) -> int:
         return len(self._events)
 
@@ -130,6 +149,8 @@ class Session:
     events: SessionEvents = field(default_factory=SessionEvents)
     messages: list[dict[str, Any]] = field(default_factory=list)
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
+    agent_queue: asyncio.Queue[QueuedAgentRun] = field(default_factory=asyncio.Queue)
+    agent_runner_task: asyncio.Task[Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -140,7 +161,28 @@ class Session:
             "updated_at": self.updated_at.isoformat(),
             "messages": self.messages,
             "approvals": [approval.to_dict() for approval in self.approvals.values()],
+            "agent": {
+                "running": self.agent_runner_active(),
+                "queued": self.agent_queue.qsize(),
+            },
         }
+
+    def enqueue_agent_run(self, request: Any) -> QueuedAgentRun:
+        queued = QueuedAgentRun(run_id=f"run_{uuid4().hex[:12]}", request=request)
+        self.agent_queue.put_nowait(queued)
+        return queued
+
+    def next_agent_run(self) -> QueuedAgentRun | None:
+        try:
+            return self.agent_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
+    def finish_agent_run(self) -> None:
+        self.agent_queue.task_done()
+
+    def agent_runner_active(self) -> bool:
+        return self.agent_runner_task is not None and not self.agent_runner_task.done()
 
     def create_approval(self, kind: str, payload: dict[str, Any]) -> PendingApproval:
         approval = PendingApproval(
