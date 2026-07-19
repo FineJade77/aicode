@@ -68,3 +68,42 @@ def test_unknown_command_asks(engine):
 
 def test_unknown_tool_denied(engine):
     assert engine.gate("mystery", {}).verdict == "deny"
+
+
+def test_newline_chained_deny_command_is_denied(engine):
+    assert gate_bash(engine, "ls\nrm -rf /").verdict == "deny"
+
+
+def test_bare_ampersand_chained_deny_command_is_denied(engine):
+    assert gate_bash(engine, "ls & rm -rf /").verdict == "deny"
+
+
+def test_deny_wins_over_control_token_precedence(engine):
+    assert gate_bash(engine, "rm -rf / && true").verdict == "deny"
+
+
+def test_deny_wins_after_semicolon_separator(engine):
+    assert gate_bash(engine, "git push --force origin main; echo done").verdict == "deny"
+
+
+def test_path_and_env_prefix_do_not_bypass_deny_list(engine):
+    assert gate_bash(engine, "/bin/rm -rf /").verdict == "deny"
+    assert gate_bash(engine, "FOO=1 rm -rf /").verdict == "deny"
+
+
+def test_benign_chained_commands_stay_allowed(engine):
+    assert gate_bash(engine, "ls && pwd").verdict == "allow"
+    assert gate_bash(engine, "pytest && echo done").verdict == "allow"
+
+
+def test_remaining_control_and_redirection_tokens_force_ask(engine):
+    for command in [
+        "ls; pwd",
+        "ls || pwd",
+        "echo hi > out.txt",
+        "echo hi >> out.txt",
+        "cat < in.txt",
+        "cat `whoami`",
+        "cat $(whoami)",
+    ]:
+        assert gate_bash(engine, command).verdict == "ask", command

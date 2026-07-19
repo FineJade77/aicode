@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import shlex
 from dataclasses import dataclass
 from typing import Any
@@ -20,6 +22,31 @@ ALLOW_EXECUTABLES = {"pwd", "ls", "rg", "grep", "head", "tail", "wc", "cat", "wh
 ALLOW_GIT_SUBCOMMANDS = {"status", "diff", "show", "log", "blame", "rev-parse"}
 DENY_GIT_SUBCOMMANDS = {"reset", "clean", "rebase"}
 CONTROL_TOKENS = {"|", "&&", "||", ";", ">", ">>", "<", "$(", "`"}
+
+# --- gate_bash internals -------------------------------------------------
+#
+# A bash command can smuggle a dangerous statement past classification by
+# hiding it after a shell statement separator (`;`, `&&`, `||`, `&`, `|`,
+# a newline) or behind an env-assignment / path prefix on argv[0]. To stay
+# robust against these bypasses we split the raw command into sub-commands
+# on every statement separator BEFORE classifying, classify each
+# sub-command independently, and then combine verdicts with "most
+# restrictive wins" (deny > ask > allow).
+#
+# Some separators are considered safe enough for pure control-flow chaining
+# (`&&`, bare `&`, newlines) — if every sub-command they join is benign the
+# overall command can still be "allow" (e.g. "pytest && echo done").
+# Others (`;`, `||`, `|`) are common vectors for smuggling a fallback/
+# secondary command past review, so their mere presence forces at least
+# "ask" even when every sub-command classifies as benign on its own.
+# Redirection and command-substitution markers (`>`, `>>`, `<`, `` ` ``,
+# `$(`) are not statement separators we can safely split on, but their
+# presence also forces at least "ask" since they can hide execution that
+# static splitting can't see.
+_ASK_FLOOR_SEPARATORS = {";", "||", "|"}
+_INLINE_ASK_FLOOR_TOKENS = (">>", ">", "<", "$(", "`")
+_STATEMENT_SEP_RE = re.compile(r"(&&|\|\||[;&|\r\n])")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 @dataclass(slots=True)
@@ -47,16 +74,82 @@ class PolicyEngine:
         command = command.strip()
         if not command:
             return GateDecision("deny", "low", "空命令")
-        if any(token in command for token in CONTROL_TOKENS):
+
+        ask_floor = any(token in command for token in _INLINE_ASK_FLOOR_TOKENS)
+
+        segments, sep_floor = self._split_statements(command)
+        ask_floor = ask_floor or sep_floor
+
+        decisions = [self._classify_single(segment) for segment in segments]
+        decisions = [decision for decision in decisions if decision is not None]
+
+        if not decisions:
+            return GateDecision("deny", "low", "空命令")
+
+        for decision in decisions:
+            if decision.verdict == "deny":
+                return decision
+
+        ask_decision = next((decision for decision in decisions if decision.verdict == "ask"), None)
+        if ask_decision is not None:
+            return ask_decision
+        if ask_floor:
             return GateDecision("ask", "high", "包含 shell 控制符，需要确认后执行")
+        return GateDecision("allow", "low")
+
+    def _split_statements(self, command: str) -> tuple[list[str], bool]:
+        """Split a raw command on shell statement separators.
+
+        Returns the non-empty sub-command strings plus a flag indicating
+        whether any separator that forces an "ask" floor (`;`, `||`, `|`)
+        was encountered.
+        """
+        tokens = _STATEMENT_SEP_RE.split(command)
+        segments: list[str] = []
+        floor = False
+        for index, token in enumerate(tokens):
+            if index % 2 == 0:
+                if token.strip():
+                    segments.append(token)
+            elif token in _ASK_FLOOR_SEPARATORS:
+                floor = True
+        return segments, floor
+
+    def _normalize_parts(self, parts: list[str]) -> list[str]:
+        """Strip leading env-assignment tokens and env/command wrappers.
+
+        This keeps the deny/allow lists from being defeated by a prefix
+        like `FOO=1 rm -rf /` or `env rm -rf /` that leaves argv[0]
+        pointing at something other than the real executable.
+        """
+        parts = list(parts)
+        changed = True
+        while changed:
+            changed = False
+            while parts and _ENV_ASSIGN_RE.match(parts[0]):
+                parts = parts[1:]
+                changed = True
+            if parts and parts[0] in ("env", "command"):
+                parts = parts[1:]
+                changed = True
+        return parts
+
+    def _classify_single(self, command: str) -> GateDecision | None:
+        command = command.strip()
+        if not command:
+            return None
         try:
-            parts = shlex.split(command)
+            raw_parts = shlex.split(command)
         except ValueError as exc:
             return GateDecision("deny", "high", str(exc))
+        if not raw_parts:
+            return None
+        parts = self._normalize_parts(raw_parts)
         if not parts:
-            return GateDecision("deny", "low", "空命令")
+            return GateDecision("ask", "medium", "命令需要确认后执行")
         executable = parts[0]
-        if executable in DENY_EXECUTABLES:
+        basename = os.path.basename(executable)
+        if executable in DENY_EXECUTABLES or basename in DENY_EXECUTABLES:
             return GateDecision("deny", "high", f"禁止执行高风险命令: {executable}")
         if executable == "git":
             return self._gate_git(parts)
