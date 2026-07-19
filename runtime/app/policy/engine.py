@@ -13,8 +13,74 @@ class PolicyDecision:
     reason: str = ""
 
 
+READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "review_diff"}
+
+DENY_EXECUTABLES = {"rm", "sudo", "su", "shutdown", "reboot", "mkfs", "dd"}
+ALLOW_EXECUTABLES = {"pwd", "ls", "rg", "grep", "head", "tail", "wc", "cat", "which", "echo"}
+ALLOW_GIT_SUBCOMMANDS = {"status", "diff", "show", "log", "blame", "rev-parse"}
+DENY_GIT_SUBCOMMANDS = {"reset", "clean", "rebase"}
+CONTROL_TOKENS = {"|", "&&", "||", ";", ">", ">>", "<", "$(", "`"}
+
+
+@dataclass(slots=True)
+class GateDecision:
+    verdict: str  # allow | ask | deny
+    risk_level: str
+    reason: str = ""
+
+
 class PolicyEngine:
     """Small, conservative policy layer for Phase 1 tool execution."""
+
+    def gate(self, tool_name: str, args: dict[str, Any], mode: str = "default") -> GateDecision:
+        if tool_name in READ_ONLY_TOOLS_V2:
+            return GateDecision("allow", "low")
+        if mode == "review":
+            return GateDecision("deny", "high", "review 模式只允许只读工具")
+        if tool_name == "edit_file":
+            return GateDecision("ask", "medium", "文件写入需要 inline diff 确认")
+        if tool_name == "bash":
+            return self.gate_bash(str(args.get("command", "")))
+        return GateDecision("deny", "high", f"未知工具: {tool_name}")
+
+    def gate_bash(self, command: str) -> GateDecision:
+        command = command.strip()
+        if not command:
+            return GateDecision("deny", "low", "空命令")
+        if any(token in command for token in CONTROL_TOKENS):
+            return GateDecision("ask", "high", "包含 shell 控制符，需要确认后执行")
+        try:
+            parts = shlex.split(command)
+        except ValueError as exc:
+            return GateDecision("deny", "high", str(exc))
+        if not parts:
+            return GateDecision("deny", "low", "空命令")
+        executable = parts[0]
+        if executable in DENY_EXECUTABLES:
+            return GateDecision("deny", "high", f"禁止执行高风险命令: {executable}")
+        if executable == "git":
+            return self._gate_git(parts)
+        if self._is_low_risk_test(parts):
+            return GateDecision("allow", "low")
+        if executable in ALLOW_EXECUTABLES:
+            return GateDecision("allow", "low")
+        return GateDecision("ask", "medium", f"命令需要确认后执行: {executable}")
+
+    def _gate_git(self, parts: list[str]) -> GateDecision:
+        subcommand = parts[1] if len(parts) > 1 else ""
+        if subcommand in DENY_GIT_SUBCOMMANDS:
+            return GateDecision("deny", "high", f"禁止执行破坏性 git 命令: git {subcommand}")
+        if subcommand == "checkout" and "--" in parts:
+            return GateDecision("deny", "high", "禁止 git checkout -- 丢弃改动")
+        if subcommand == "push" and any(flag in parts for flag in ("--force", "-f", "--force-with-lease", "--delete")):
+            return GateDecision("deny", "high", "禁止强制/删除式 git push")
+        if subcommand == "branch" and any(flag in parts for flag in ("-D", "-d", "-M", "-m")):
+            return GateDecision("deny", "high", "禁止删除/重命名分支")
+        if subcommand == "stash" and "drop" in parts:
+            return GateDecision("deny", "high", "禁止 git stash drop")
+        if subcommand in ALLOW_GIT_SUBCOMMANDS:
+            return GateDecision("allow", "low")
+        return GateDecision("ask", "medium", f"git {subcommand} 需要确认后执行")
 
     read_tools = {
         "detect_project",
