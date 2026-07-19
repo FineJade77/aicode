@@ -107,3 +107,44 @@ def test_remaining_control_and_redirection_tokens_force_ask(engine):
         "cat $(whoami)",
     ]:
         assert gate_bash(engine, command).verdict == "ask", command
+
+
+def test_escaped_and_quoted_separators_do_not_hard_fail(engine):
+    # `\;` is a literal argument to `find`, not a shell separator; `find`
+    # is not on the allowlist so the (correctly split) sub-command asks.
+    assert gate_bash(engine, r"find . -exec rm {} \;").verdict == "ask"
+    # `&&` here is inside a double-quoted echo argument, not a real
+    # separator; still surfaced as "ask" out of caution since a
+    # quote-aware split proves it merely looks like a control operator.
+    assert gate_bash(engine, 'echo "a && b"').verdict == "ask"
+    # `&` here is inside a quoted filename argument to `ls`, not a real
+    # separator, and single `&`/`|`/`;` embedded in quoted text is fully
+    # trusted, so this is a single benign `ls` call.
+    assert gate_bash(engine, 'ls "foo & rm -rf /"').verdict == "allow"
+
+
+def test_quoted_semicolon_in_git_commit_message_stays_single_command(engine):
+    assert gate_bash(engine, 'git commit -m "fix: a; b"').verdict == "ask"
+
+
+def test_git_via_absolute_or_qualified_path_still_denies(engine):
+    for command in [
+        "/usr/bin/git reset --hard",
+        "/usr/bin/git push --force origin main",
+        "/opt/homebrew/bin/git branch -D feature",
+    ]:
+        assert gate_bash(engine, command).verdict == "deny", command
+
+
+def test_env_and_command_wrappers_do_not_bypass_deny_list(engine):
+    for command in [
+        "/usr/bin/env rm -rf /",
+        "env -i rm -rf /",
+        "/usr/bin/env -S rm -rf /",
+    ]:
+        assert gate_bash(engine, command).verdict == "deny", command
+
+
+def test_prior_bypass_inputs_still_deny_after_quote_aware_split(engine):
+    assert gate_bash(engine, "ls\nrm -rf /").verdict == "deny"
+    assert gate_bash(engine, "rm -rf / && true").verdict == "deny"

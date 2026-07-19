@@ -43,10 +43,28 @@ CONTROL_TOKENS = {"|", "&&", "||", ";", ">", ">>", "<", "$(", "`"}
 # `$(`) are not statement separators we can safely split on, but their
 # presence also forces at least "ask" since they can hide execution that
 # static splitting can't see.
-_ASK_FLOOR_SEPARATORS = {";", "||", "|"}
+#
+# Splitting is done with a quote/escape-aware tokenizer (shlex in
+# "punctuation_chars" mode) rather than a raw regex, so a separator
+# character that is quoted (`echo "a && b"`) or escaped (`find . -exec rm
+# {} \;`) is kept inside its owning word token instead of being mistaken
+# for a real statement boundary.
+_FLOOR_SEP_CHARS = {";", "|"}
 _INLINE_ASK_FLOOR_TOKENS = (">>", ">", "<", "$(", "`")
-_STATEMENT_SEP_RE = re.compile(r"(&&|\|\||[;&|\r\n])")
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_ENV_WRAPPER_NAMES = {"env", "command"}
+# Punctuation chars handed to shlex.shlex so it emits `;`, `&`, `&&`, `|`,
+# `||`, `(`, `)`, `<`, `>` as their own tokens instead of folding them into
+# surrounding words. `\n` is added on top of shlex's own defaults so a bare
+# newline (moved out of `whitespace` below) is also emitted as a token,
+# letting us tell "ls\nrm -rf /" apart from a single merged word.
+_STATEMENT_PUNCTUATION = "();<>|&\n"
+# A token is a genuine statement separator only if it is made up entirely
+# of these characters (e.g. ";", "&", "&&", "|", "||", "\n"). Tokens like
+# "<", ">", "(", ")" are punctuation too but are not statement separators —
+# they stay inside the sub-command's token list and are handled by the
+# inline-ask-floor substring check instead.
+_SEP_OPERATOR_CHARS = set(";&|\n")
 
 
 @dataclass(slots=True)
@@ -77,7 +95,10 @@ class PolicyEngine:
 
         ask_floor = any(token in command for token in _INLINE_ASK_FLOOR_TOKENS)
 
-        segments, sep_floor = self._split_statements(command)
+        try:
+            segments, sep_floor = self._split_statements(command)
+        except ValueError as exc:
+            return GateDecision("deny", "high", str(exc))
         ask_floor = ask_floor or sep_floor
 
         decisions = [self._classify_single(segment) for segment in segments]
@@ -97,30 +118,75 @@ class PolicyEngine:
             return GateDecision("ask", "high", "包含 shell 控制符，需要确认后执行")
         return GateDecision("allow", "low")
 
-    def _split_statements(self, command: str) -> tuple[list[str], bool]:
-        """Split a raw command on shell statement separators.
+    def _tokenize(self, command: str) -> list[str]:
+        """Tokenize a raw command with a quote/escape-aware shell lexer.
 
-        Returns the non-empty sub-command strings plus a flag indicating
-        whether any separator that forces an "ask" floor (`;`, `||`, `|`)
-        was encountered.
+        Uses `shlex.shlex` in punctuation-chars mode so operators (`;`,
+        `&`, `&&`, `|`, `||`, `<`, `>`, `(`, `)`) come out as their own
+        tokens while quoted strings and escaped characters (`\\;`, `"a &&
+        b"`) stay intact inside a single word token. `\n` is pulled out of
+        `whitespace` and added to `punctuation_chars` so a bare newline is
+        also emitted as its own separator token instead of silently
+        merging the words on either side of it.
         """
-        tokens = _STATEMENT_SEP_RE.split(command)
-        segments: list[str] = []
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_STATEMENT_PUNCTUATION)
+        lexer.whitespace_split = True
+        lexer.whitespace = lexer.whitespace.replace("\n", "")
+        return list(lexer)
+
+    def _is_separator_operator(self, token: str) -> bool:
+        return bool(token) and all(ch in _SEP_OPERATOR_CHARS for ch in token)
+
+    def _split_statements(self, command: str) -> tuple[list[list[str]], bool]:
+        """Split a raw command into sub-command token lists.
+
+        Splits on genuine statement-separator tokens (`;`, `&`, `&&`,
+        `|`, `||`, newlines) as identified by a quote/escape-aware
+        tokenizer, so a separator hidden inside quotes or escaped (e.g.
+        `find . -exec rm {} \\;`, `echo "a && b"`) is kept as part of its
+        owning sub-command instead of being mistaken for a boundary.
+
+        Returns the non-empty sub-command token lists plus a flag
+        indicating whether an "ask" floor was earned, either because a
+        real `;`/`|`/`||` separator was used, or because a sub-command's
+        argument text merely *contains* a compound operator look-alike
+        (`&&`/`||`) that a quote-aware split proved is not an actual
+        separator — such input is provably inert but still suspicious
+        enough to require a human look rather than a silent allow.
+
+        Raises ValueError if the command is not valid shell syntax (e.g.
+        genuinely unbalanced quotes); the caller treats that as "deny".
+        """
+        tokens = self._tokenize(command)
+        segments: list[list[str]] = []
+        current: list[str] = []
         floor = False
-        for index, token in enumerate(tokens):
-            if index % 2 == 0:
-                if token.strip():
-                    segments.append(token)
-            elif token in _ASK_FLOOR_SEPARATORS:
+        for token in tokens:
+            if self._is_separator_operator(token):
+                if current:
+                    segments.append(current)
+                    current = []
+                if any(ch in _FLOOR_SEP_CHARS for ch in token):
+                    floor = True
+                continue
+            if "&&" in token or "||" in token:
                 floor = True
+            current.append(token)
+        if current:
+            segments.append(current)
         return segments, floor
 
     def _normalize_parts(self, parts: list[str]) -> list[str]:
         """Strip leading env-assignment tokens and env/command wrappers.
 
         This keeps the deny/allow lists from being defeated by a prefix
-        like `FOO=1 rm -rf /` or `env rm -rf /` that leaves argv[0]
-        pointing at something other than the real executable.
+        like `FOO=1 rm -rf /`, `env rm -rf /`, `/usr/bin/env -i rm -rf /`
+        or `/usr/bin/env -S rm -rf /` that leaves argv[0] pointing at
+        something other than the real executable. The wrapper check is
+        basename-based (applied after env-assignment stripping) so a
+        path-qualified `env`/`command` invocation is recognized too, and
+        any flag tokens immediately following the wrapper (`-i`, `-S`,
+        `-u NAME`, ...) are skipped along with it.
         """
         parts = list(parts)
         changed = True
@@ -129,29 +195,24 @@ class PolicyEngine:
             while parts and _ENV_ASSIGN_RE.match(parts[0]):
                 parts = parts[1:]
                 changed = True
-            if parts and parts[0] in ("env", "command"):
+            if parts and os.path.basename(parts[0]) in _ENV_WRAPPER_NAMES:
                 parts = parts[1:]
                 changed = True
+                while parts and parts[0].startswith("-"):
+                    parts = parts[1:]
         return parts
 
-    def _classify_single(self, command: str) -> GateDecision | None:
-        command = command.strip()
-        if not command:
+    def _classify_single(self, parts: list[str]) -> GateDecision | None:
+        if not parts:
             return None
-        try:
-            raw_parts = shlex.split(command)
-        except ValueError as exc:
-            return GateDecision("deny", "high", str(exc))
-        if not raw_parts:
-            return None
-        parts = self._normalize_parts(raw_parts)
+        parts = self._normalize_parts(parts)
         if not parts:
             return GateDecision("ask", "medium", "命令需要确认后执行")
         executable = parts[0]
         basename = os.path.basename(executable)
         if executable in DENY_EXECUTABLES or basename in DENY_EXECUTABLES:
             return GateDecision("deny", "high", f"禁止执行高风险命令: {executable}")
-        if executable == "git":
+        if executable == "git" or basename == "git":
             return self._gate_git(parts)
         if self._is_low_risk_test(parts):
             return GateDecision("allow", "low")
