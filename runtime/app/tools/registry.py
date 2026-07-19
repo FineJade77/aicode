@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
+import shutil
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "search",
-        "description": "在代码库中用正则搜索文本（ripgrep）。定位符号、字符串、文件时优先用它。",
+        "description": "在代码库中用正则搜索文本，定位符号、字符串或文件；query 为正则表达式，可用 glob 过滤。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -160,6 +160,8 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
     offset = max(1, int(arguments.get("offset") or 1))
     limit = max(1, min(int(arguments.get("limit") or DEFAULT_READ_LINES), MAX_READ_LINES))
     lines = target.read_text("utf-8", errors="replace").splitlines()
+    if lines and offset > len(lines):
+        raise ToolError(f"offset {offset} 超出文件行数 {len(lines)}")
     chunk = lines[offset - 1 : offset - 1 + limit]
     shown = "\n".join(f"{offset + index}\t{line}" for index, line in enumerate(chunk))
     label = scoped_display_path(workspace_name, root, target)
@@ -178,13 +180,88 @@ async def run_search(context: ToolContext, arguments: dict[str, Any]) -> ToolRes
     limit = max(1, min(int(arguments.get("limit") or MAX_SEARCH_RESULTS), MAX_SEARCH_RESULTS))
     glob_pattern = str(arguments.get("glob") or "")
 
-    matches = []
     try:
         pattern = re.compile(query)
     except re.error as exc:
         raise ToolError(f"正则表达式无效: {exc}")
 
-    # Search files in the workspace
+    if shutil.which("rg"):
+        return await _search_with_rg(context, root, workspace_name, query, glob_pattern, limit)
+    return _search_with_python(context, root, workspace_name, pattern, query, glob_pattern, limit)
+
+
+async def _search_with_rg(
+    context: ToolContext,
+    root: Path,
+    workspace_name: str,
+    query: str,
+    glob_pattern: str,
+    limit: int,
+) -> ToolResult:
+    command = [
+        "rg",
+        "--line-number",
+        "--no-heading",
+        "--max-count",
+        "5",
+        "--hidden",
+        "--glob",
+        "!.git",
+        "--glob",
+        "!node_modules",
+        "--glob",
+        "!.venv",
+        "--glob",
+        "!__pycache__",
+    ]
+    if glob_pattern:
+        command.extend(["--glob", glob_pattern])
+    command.extend(["-e", query])
+
+    proc = await asyncio.create_subprocess_exec(
+        *command,
+        cwd=str(root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_bytes, stderr_bytes = await proc.communicate()
+    returncode = proc.returncode if proc.returncode is not None else -1
+
+    prefix = f"{workspace_name}: " if workspace_name else ""
+    if returncode == 1:
+        return ToolResult(success=True, text=f"{prefix}没有匹配: {query}", data={"query": query, "matches": 0})
+    if returncode != 0:
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        raise ToolError(stderr_text or "rg 执行失败")
+
+    matches: list[str] = []
+    for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+        if len(matches) >= limit:
+            break
+        rel_path = line.split(":", 1)[0].replace("\\", "/")
+        if is_protected_path(rel_path, context.protected_paths):
+            continue
+        matches.append(line)
+
+    if not matches:
+        return ToolResult(success=True, text=f"{prefix}没有匹配: {query}", data={"query": query, "matches": 0})
+    return ToolResult(
+        success=True,
+        text=f"{prefix}匹配 {len(matches)} 处:\n" + "\n".join(matches),
+        data={"query": query, "matches": len(matches)},
+    )
+
+
+def _search_with_python(
+    context: ToolContext,
+    root: Path,
+    workspace_name: str,
+    pattern: re.Pattern[str],
+    query: str,
+    glob_pattern: str,
+    limit: int,
+) -> ToolResult:
+    matches: list[str] = []
     for file_path in root.rglob("*"):
         if len(matches) >= limit:
             break
@@ -193,14 +270,13 @@ async def run_search(context: ToolContext, arguments: dict[str, Any]) -> ToolRes
         if any(part in IGNORED_DIRS for part in file_path.parts):
             continue
 
+        rel_path_str = str(file_path.relative_to(root)).replace("\\", "/")
+
         # Check glob pattern
-        if glob_pattern:
-            rel_path_str = str(file_path.relative_to(root)).replace("\\", "/")
-            if not fnmatch(rel_path_str, glob_pattern):
-                continue
+        if glob_pattern and not fnmatch(rel_path_str, glob_pattern):
+            continue
 
         # Check protected paths
-        rel_path_str = str(file_path.relative_to(root)).replace("\\", "/")
         if is_protected_path(rel_path_str, context.protected_paths):
             continue
 
