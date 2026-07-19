@@ -299,4 +299,27 @@ def _search_with_python(
 
 
 async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
-    return ToolResult(success=False, error="bash 将在 Task 7 实现", risk_level="medium")
+    command = str(arguments.get("command") or "").strip()
+    if not command:
+        raise ToolError("command 不能为空")
+    timeout = max(1, min(int(arguments.get("timeout") or 120), 600))
+    process = await asyncio.create_subprocess_shell(
+        command,
+        cwd=context.workspace,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        return ToolResult(success=False, error=f"命令超时（{timeout}s）: {command}", risk_level="medium", data={"command": command})
+    output = stdout.decode(errors="replace")
+    text = f"exit={process.returncode}\n{output}".rstrip()
+    return ToolResult(
+        success=process.returncode == 0,
+        text=text,
+        error="" if process.returncode == 0 else text,
+        data={"command": command, "exit_code": process.returncode},
+    )
