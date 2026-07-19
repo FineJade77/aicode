@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
+import signal
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,8 @@ from app.tools.review import ReviewDiffTool
 MAX_READ_LINES = 500
 DEFAULT_READ_LINES = 200
 MAX_SEARCH_RESULTS = 40
+DEFAULT_BASH_TIMEOUT = 120
+MAX_BASH_TIMEOUT = 600
 
 WORKSPACE_ARG = {"type": "string", "description": "可选：配置的只读 workspace 名称，默认主 workspace"}
 
@@ -76,7 +80,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
-                "timeout": {"type": "integer", "description": "秒，默认 120", "default": 120},
+                "timeout": {"type": "integer", "description": f"秒，默认 {DEFAULT_BASH_TIMEOUT}", "default": DEFAULT_BASH_TIMEOUT},
             },
             "required": ["command"],
         },
@@ -302,17 +306,21 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
     command = str(arguments.get("command") or "").strip()
     if not command:
         raise ToolError("command 不能为空")
-    timeout = max(1, min(int(arguments.get("timeout") or 120), 600))
+    timeout = max(1, min(int(arguments.get("timeout") or DEFAULT_BASH_TIMEOUT), MAX_BASH_TIMEOUT))
     process = await asyncio.create_subprocess_shell(
         command,
         cwd=context.workspace,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except TimeoutError:
-        process.kill()
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            process.kill()
         await process.wait()
         return ToolResult(success=False, error=f"命令超时（{timeout}s）: {command}", risk_level="medium", data={"command": command})
     output = stdout.decode(errors="replace")
