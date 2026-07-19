@@ -60,3 +60,32 @@ def test_stale_detection(tmp_path):
 def test_protected_path_rejected(tmp_path):
     with pytest.raises(EditError):
         build_edit_proposal(tmp_path, {"path": ".env", "new_text": "SECRET=1"}, [".env"])
+
+
+def test_stale_detection_create_collision(tmp_path):
+    proposal = build_edit_proposal(tmp_path, {"path": "new/b.py", "new_text": "print(1)\n"}, [])
+    target = tmp_path / "new" / "b.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("externally created\n", encoding="utf-8")  # 外部并发创建
+    with pytest.raises(EditStaleError):
+        apply_edit(tmp_path, proposal)
+    assert target.read_text(encoding="utf-8") == "externally created\n"
+
+
+def test_stale_detection_external_delete(tmp_path):
+    target = tmp_path / "a.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    proposal = build_edit_proposal(tmp_path, {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}, [])
+    target.unlink()  # 外部删除
+    with pytest.raises(EditStaleError):
+        apply_edit(tmp_path, proposal)
+    assert not target.exists()
+
+
+def test_non_utf8_file_rejected_without_corruption(tmp_path):
+    target = tmp_path / "a.bin"
+    original_bytes = b"x = 1\n\xff\xfegarbage\ny = 2\n"
+    target.write_bytes(original_bytes)
+    with pytest.raises(EditError, match="UTF-8"):
+        build_edit_proposal(tmp_path, {"path": "a.bin", "old_text": "y = 2", "new_text": "y = 3"}, [])
+    assert target.read_bytes() == original_bytes

@@ -5,7 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.tools.base import ToolError, display_path, is_protected_path, resolve_workspace_path
+from app.tools.base import ToolError, display_path, reject_protected_path, resolve_workspace_path
 
 
 class EditError(Exception):
@@ -29,6 +29,13 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _read_existing_text(target: Path, rel: str) -> str:
+    try:
+        return target.read_text("utf-8")
+    except UnicodeDecodeError as exc:
+        raise EditError(f"文件不是 UTF-8 文本，无法编辑: {rel}") from exc
+
+
 def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[str]) -> EditProposal:
     raw_path = str(arguments.get("path") or "").strip()
     if not raw_path:
@@ -38,8 +45,10 @@ def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[
     except ToolError as exc:
         raise EditError(str(exc)) from exc
     rel = display_path(workspace, target)
-    if is_protected_path(rel, protected_paths):
-        raise EditError(f"受保护路径不可修改: {rel}")
+    try:
+        reject_protected_path(workspace, target, protected_paths)
+    except ToolError as exc:
+        raise EditError(str(exc)) from exc
 
     old_text = str(arguments.get("old_text") or "")
     new_text = str(arguments.get("new_text") or "")
@@ -48,7 +57,7 @@ def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[
     if delete:
         if not target.is_file():
             raise EditError(f"文件不存在，无法删除: {rel}")
-        original = target.read_text("utf-8", errors="replace")
+        original = _read_existing_text(target, rel)
         diff = unified_diff(original, "", rel)
         return EditProposal(path=rel, kind="delete", diff=diff, new_content=None, base_hash=file_hash(target))
 
@@ -64,7 +73,7 @@ def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[
         raise EditError(f"不是普通文件: {rel}")
     if not old_text:
         raise EditError("修改已有文件必须提供 old_text（文件中完整且唯一的原文片段）")
-    original = target.read_text("utf-8", errors="replace")
+    original = _read_existing_text(target, rel)
     count = original.count(old_text)
     if count == 0:
         raise EditError(f"未找到 old_text，请先 read_file 确认原文: {rel}")
@@ -85,7 +94,7 @@ def apply_edit(workspace: Path, proposal: EditProposal) -> None:
         return
     if not target.is_file():
         raise EditStaleError(f"文件已被外部删除: {proposal.path}")
-    if proposal.base_hash and file_hash(target) != proposal.base_hash:
+    if file_hash(target) != proposal.base_hash:
         raise EditStaleError(f"文件已被外部修改，请重新 read_file 后再试: {proposal.path}")
     if proposal.kind == "delete":
         target.unlink()
