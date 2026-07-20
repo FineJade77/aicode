@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.agent.loop_v2 import run_turn
+from app.agent.loop import run_turn
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
 from app.config.settings import Settings
@@ -22,9 +22,9 @@ class Request:
 
 def make_runtime(turns, tmp_path):
     fake = FakeProvider(turns)
-    router = ModelRouter(primary=fake, fallback=fake, settings=Settings())
+    router = ModelRouter(primary=fake, settings=Settings())
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
-    return AgentRuntime(model_router=router, tools=None, audit=audit, policy=PolicyEngine()), fake
+    return AgentRuntime(model_router=router, audit=audit, policy=PolicyEngine()), fake
 
 
 def make_session(tmp_path):

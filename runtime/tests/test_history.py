@@ -40,7 +40,7 @@ def test_truncate_tool_output_layers():
 @pytest.mark.asyncio
 async def test_compact_replaces_old_tool_messages(session):
     sess, _store = session
-    runtime = AgentRuntime(model_router=None, tools=None, audit=None)
+    runtime = AgentRuntime(model_router=None, audit=None)
     big = "y" * 40_000
     history = [{"role": "user", "content": "task"}]
     for index in range(12):
@@ -57,6 +57,6 @@ async def test_compact_replaces_old_tool_messages(session):
 @pytest.mark.asyncio
 async def test_compact_noop_under_budget(session):
     sess, _store = session
-    runtime = AgentRuntime(model_router=None, tools=None, audit=None)
+    runtime = AgentRuntime(model_router=None, audit=None)
     history = [{"role": "user", "content": "hi"}]
     assert await compact_if_needed(history, runtime, sess) == history

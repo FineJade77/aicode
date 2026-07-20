@@ -113,7 +113,8 @@ async def test_model_routes_endpoint_returns_route_status() -> None:
     data = await model_routes()
 
     assert data["provider"]["primary"] == "openai_compatible"
-    assert data["provider"]["fallback"] == "stub"
+    assert data["provider"]["type"] == "openai_compatible"
+    assert "main" in data["routes"]
     assert "reviewer" in data["routes"]
     assert "summarizer" in data["routes"]
     assert "api_key_env" in data["openai_compatible"]

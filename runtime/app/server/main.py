@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agent.loop_v2 import run_turn_safely
+from app.agent.loop import run_turn_safely
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import settings
@@ -20,14 +20,12 @@ from app.policy.engine import PolicyEngine
 from app.project.config import load_project_config
 from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
-from app.tools.router import ToolRouter
 from app.usage.store import summarize_usage
 
 app = FastAPI(title=settings.app_name, version=settings.version)
 model_router = ModelRouter.from_settings(settings)
-tools = ToolRouter()
 audit = AuditLogger.from_env()
-agent_runtime = AgentRuntime(model_router=model_router, tools=tools, audit=audit, policy=PolicyEngine())
+agent_runtime = AgentRuntime(model_router=model_router, audit=audit, policy=PolicyEngine())
 
 
 class CreateSessionRequest(BaseModel):

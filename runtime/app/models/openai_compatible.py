@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import urllib.error
-import urllib.request
 from typing import Any
 
 import httpx
@@ -13,10 +11,6 @@ from app.config.settings import OpenAICompatibleSettings
 from app.models.provider import (
     RETRYABLE_STATUS,
     CompletionRequest,
-    ModelProvider,
-    ModelProviderUnavailable,
-    ModelRequest,
-    ModelResponse,
     ProviderError,
     StreamEvent,
     ToolCallRequest,
@@ -59,7 +53,7 @@ class _Retry(Exception):
     pass
 
 
-class OpenAICompatibleProvider(ModelProvider):
+class OpenAICompatibleProvider:
     provider_name = "openai_compatible"
 
     def __init__(self, settings: OpenAICompatibleSettings, client: httpx.AsyncClient | None = None) -> None:
@@ -80,26 +74,6 @@ class OpenAICompatibleProvider(ModelProvider):
         if direct:
             return direct
         return os.getenv(self.settings.api_key_env)
-
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        api_key = self.api_key()
-        if not api_key:
-            raise ModelProviderUnavailable(f"missing API key env: {self.settings.api_key_env}")
-
-        model = request.model
-        if not model:
-            raise ValueError("model is required for OpenAI-compatible requests")
-
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": request.messages,
-            "temperature": request.temperature,
-        }
-        if request.max_tokens is not None:
-            payload["max_tokens"] = request.max_tokens
-
-        response = await asyncio.to_thread(self._post_chat_completion, payload, api_key)
-        return parse_chat_completion_response(response, fallback_model=model, provider=self.provider_name)
 
     async def stream_complete(self, request: CompletionRequest):
         api_key = self.api_key()
@@ -176,51 +150,12 @@ class OpenAICompatibleProvider(ModelProvider):
             yield StreamEvent(type="tool_call", tool_call=ToolCallRequest(id=slot["id"] or f"tc_{index}", name=slot["name"], arguments=arguments))
         yield StreamEvent(type="done", usage=usage, model=model)
 
-    def _post_chat_completion(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url=chat_completions_url(self.settings.base_url),
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.settings.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"OpenAI-compatible request failed: HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"OpenAI-compatible request failed: {exc.reason}") from exc
-
 
 def chat_completions_url(base_url: str) -> str:
     base = base_url.rstrip("/")
     if base.endswith("/chat/completions"):
         return base
     return base + "/chat/completions"
-
-
-def parse_chat_completion_response(payload: dict[str, Any], *, fallback_model: str, provider: str) -> ModelResponse:
-    choices = payload.get("choices") or []
-    text = ""
-    if choices:
-        message = choices[0].get("message") or {}
-        text = str(message.get("content") or "")
-
-    usage = payload.get("usage") or {}
-    return ModelResponse(
-        text=text,
-        model=str(payload.get("model") or fallback_model),
-        provider=provider,
-        input_tokens=as_int(usage.get("prompt_tokens")),
-        output_tokens=as_int(usage.get("completion_tokens")),
-        estimated_cost=0.0,
-    )
 
 
 def as_int(value: Any) -> int:

@@ -9,12 +9,8 @@ from app.models.openai_compatible import OpenAICompatibleProvider
 from app.models.provider import (
     CompletionRequest,
     CompletionResult,
-    ModelProvider,
-    ModelProviderUnavailable,
-    ModelRequest,
-    ModelResponse,
     ProviderNotConfigured,
-    StubProvider,
+    StreamingModelProvider,
     ToolCallRequest,
     Usage,
 )
@@ -23,54 +19,18 @@ from app.usage.pricing import estimate_cost, model_prices_data
 
 @dataclass(slots=True)
 class ModelRouter:
-    primary: ModelProvider
-    fallback: ModelProvider
+    primary: StreamingModelProvider
     settings: Settings
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "ModelRouter":
         if settings.provider.type == "anthropic":
-            primary: ModelProvider = AnthropicProvider(settings.anthropic)
+            primary: StreamingModelProvider = AnthropicProvider(settings.anthropic)
         else:
             primary = OpenAICompatibleProvider(settings.openai_compatible)
-        return cls(primary=primary, fallback=StubProvider(), settings=settings)
-
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        routed = ModelRequest(
-            purpose=request.purpose,
-            messages=request.messages,
-            model=request.model or self.model_for_purpose(request.purpose),
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-        )
-
-        try:
-            return self.with_estimated_cost(await self.primary.complete(routed))
-        except ModelProviderUnavailable:
-            return self.with_estimated_cost(
-                await self.fallback.complete(
-                    ModelRequest(
-                        purpose=routed.purpose,
-                        messages=routed.messages,
-                        model="stub",
-                        temperature=routed.temperature,
-                        max_tokens=routed.max_tokens,
-                    )
-                )
-            )
+        return cls(primary=primary, settings=settings)
 
     def model_for_purpose(self, purpose: str) -> str:
-        if purpose == "planner":
-            return self.settings.models.planner
-        if purpose == "coder":
-            return self.settings.models.coder
-        if purpose == "reviewer":
-            return self.settings.models.reviewer
-        if purpose == "summarizer":
-            return self.settings.models.summarizer
-        return self.settings.models.default
-
-    def model_for_purpose_v2(self, purpose: str) -> str:
         if purpose == "reviewer":
             return self.settings.models.reviewer
         if purpose == "summarizer":
@@ -96,7 +56,7 @@ class ModelRouter:
             system=system,
             messages=messages,
             tools=list(tools),
-            model=self.model_for_purpose_v2(purpose),
+            model=self.model_for_purpose(purpose),
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -131,31 +91,18 @@ class ModelRouter:
             ),
         )
 
-    def with_estimated_cost(self, response: ModelResponse) -> ModelResponse:
-        response.estimated_cost = estimate_cost(
-            provider=response.provider,
-            model=response.model,
-            input_tokens=response.input_tokens,
-            output_tokens=response.output_tokens,
-            prices=self.settings.pricing.model_prices,
-        )
-        return response
-
     def route_status(self) -> dict:
         primary_name = getattr(self.primary, "provider_name", self.primary.__class__.__name__)
-        fallback_name = getattr(self.fallback, "provider_name", self.fallback.__class__.__name__)
         is_configured = getattr(self.primary, "is_configured", None)
         primary_configured = bool(is_configured()) if callable(is_configured) else True
         return {
             "provider": {
                 "primary": primary_name,
                 "primary_configured": primary_configured,
-                "fallback": fallback_name,
+                "type": self.settings.provider.type,
             },
             "routes": {
-                "default": self.settings.models.default,
-                "planner": self.settings.models.planner,
-                "coder": self.settings.models.coder,
+                "main": self.settings.models.main,
                 "reviewer": self.settings.models.reviewer,
                 "summarizer": self.settings.models.summarizer,
             },

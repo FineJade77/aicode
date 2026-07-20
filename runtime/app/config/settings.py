@@ -8,9 +8,6 @@ from app.usage.pricing import ModelPrice, parse_model_prices
 
 
 class ModelSettings(BaseModel):
-    default: str = "gpt-5"
-    planner: str = "gpt-5-high"
-    coder: str = "gpt-5"
     main: str = "gpt-5"
     reviewer: str = "gpt-5"
     summarizer: str = "gpt-5-mini"
@@ -54,9 +51,6 @@ class Settings(BaseModel):
             default_language=os.getenv("AICODE_DEFAULT_LANGUAGE", "zh-CN"),
             version=os.getenv("AICODE_RUNTIME_VERSION", "0.1.0"),
             models=ModelSettings(
-                default=os.getenv("AICODE_MODEL_DEFAULT", "gpt-5"),
-                planner=os.getenv("AICODE_MODEL_PLANNER", "gpt-5-high"),
-                coder=os.getenv("AICODE_MODEL_CODER", "gpt-5"),
                 main=os.getenv("AICODE_MODEL_MAIN", os.getenv("AICODE_MODEL_CODER", "gpt-5")),
                 reviewer=os.getenv("AICODE_MODEL_REVIEWER", "gpt-5"),
                 summarizer=os.getenv("AICODE_MODEL_SUMMARIZER", "gpt-5-mini"),

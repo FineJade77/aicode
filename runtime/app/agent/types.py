@@ -14,6 +14,5 @@ class AgentRequest(Protocol):
 @dataclass(slots=True)
 class AgentRuntime:
     model_router: Any
-    tools: Any
     audit: Any
     policy: Any = None
