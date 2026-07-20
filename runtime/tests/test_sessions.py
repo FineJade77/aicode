@@ -282,6 +282,28 @@ async def test_flush_is_a_noop_when_nothing_was_ever_written(tmp_path: Path) -> 
     await store.flush()
 
 
+@pytest.mark.asyncio
+async def test_aclose_flushes_and_stops_event_writer(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    await session.events.put({"type": "final", "summary": "done"})
+    assert store.event_writer_status()["writer_running"] is True
+
+    await store.aclose()
+    status = store.event_writer_status()
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute(
+            "select count(*) from events where session_id = ?", (session.session_id,)
+        ).fetchone()[0]
+
+    assert count == 1
+    assert status["writer_running"] is False
+    assert status["queue_size"] == 0
+
+
 def test_normalize_event_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch) -> None:
     assert normalize_event_limit(0) == 1
 

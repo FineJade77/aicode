@@ -34,6 +34,33 @@ func PrintUsageSummary(value any) {
 	fmt.Print(UsageSummaryTable(value))
 }
 
+func PrintDaemonStatus(value any) {
+	fmt.Print(DaemonStatusTable(value))
+}
+
+func DaemonStatusTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Daemon Status\n")
+	out.WriteString(fmt.Sprintf("status: %s\n", stringValue(root["status"])))
+	out.WriteString(fmt.Sprintf("name: %s\n", stringValue(root["name"])))
+	out.WriteString(fmt.Sprintf("version: %s\n", stringValue(root["version"])))
+	if pid := stringValue(root["pid"]); pid != "" {
+		out.WriteString(fmt.Sprintf("pid: %s\n", pid))
+	}
+
+	if writer, ok := root["event_writer"].(map[string]any); ok {
+		out.WriteString("\nEvent Writer\n")
+		writeKeyValueTable(&out, writer, "METRIC", "VALUE")
+	}
+
+	return out.String()
+}
+
 func ModelRoutesTable(value any) string {
 	root, ok := value.(map[string]any)
 	if !ok {

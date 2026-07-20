@@ -175,6 +175,30 @@ func TestModelRoutesTable(t *testing.T) {
 	assertContains(t, table, "openai_compatible")
 }
 
+func TestDaemonStatusTable(t *testing.T) {
+	table := DaemonStatusTable(map[string]any{
+		"status":  "ok",
+		"name":    "aicode-runtime",
+		"version": "0.1.0",
+		"pid":     float64(1234),
+		"event_writer": map[string]any{
+			"queue_size":     float64(0),
+			"queue_max_size": float64(5000),
+			"writer_running": true,
+			"enqueued":       float64(10),
+			"written":        float64(9),
+			"dropped":        float64(1),
+			"failed":         float64(0),
+		},
+	})
+
+	assertContains(t, table, "Daemon Status")
+	assertContains(t, table, "status: ok")
+	assertContains(t, table, "Event Writer")
+	assertContains(t, table, "queue_size")
+	assertContains(t, table, "dropped")
+}
+
 func TestUsageSummaryTable(t *testing.T) {
 	table := UsageSummaryTable(map[string]any{
 		"record_count":        float64(2),

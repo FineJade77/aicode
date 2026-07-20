@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -510,6 +511,17 @@ class SessionStore:
         """
         if self._write_queue is not None:
             await self._write_queue.join()
+
+    async def aclose(self) -> None:
+        """Flush pending event writes and stop the background writer task."""
+        await self.flush()
+        task = self._writer_task
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self._writer_task = None
+        self._write_queue = None
 
     def _prune_events(self, conn: sqlite3.Connection, session_id: str) -> None:
         conn.execute(

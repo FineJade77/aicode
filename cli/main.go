@@ -153,7 +153,7 @@ func runDaemonCommand(cfg config.Config, args []string) error {
 		if err != nil {
 			return err
 		}
-		renderer.PrintJSON(status)
+		renderer.PrintDaemonStatus(status)
 		return nil
 	default:
 		return fmt.Errorf("未知 daemon 命令: %s", args[0])
