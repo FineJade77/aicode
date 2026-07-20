@@ -19,6 +19,7 @@ from app.events.sse import encode_sse
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.config import load_project_config
+from app.server.auth import auth_middleware
 from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
 from app.usage.store import summarize_usage
@@ -38,6 +39,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
+app.middleware("http")(auth_middleware)
 
 
 class CreateSessionRequest(BaseModel):
