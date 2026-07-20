@@ -21,7 +21,7 @@ func TestStreamEventsReconnectsWithLastEventID(t *testing.T) {
 	requestCount := 0
 	var secondAfter string
 	var secondLastEventID string
-	api := New("http://runtime.test")
+	api := New("http://runtime.test", "")
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requestCount++
 		switch requestCount {
@@ -65,7 +65,7 @@ func TestStreamEventsUsesPayloadEventIDWhenIDLineMissing(t *testing.T) {
 
 	requestCount := 0
 	var secondAfter string
-	api := New("http://runtime.test")
+	api := New("http://runtime.test", "")
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requestCount++
 		switch requestCount {
@@ -92,7 +92,7 @@ func TestStreamEventsUsesPayloadEventIDWhenIDLineMissing(t *testing.T) {
 
 func TestStreamRunEventsSendsRunID(t *testing.T) {
 	var gotRunID string
-	api := New("http://runtime.test")
+	api := New("http://runtime.test", "")
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		gotRunID = r.URL.Query().Get("run_id")
 		return sseResponse("id: 1\nevent: final\ndata: {\"type\":\"final\",\"event_id\":1,\"summary\":\"done\"}\n\n"), nil
@@ -111,7 +111,7 @@ func TestStreamRunEventsSendsRunID(t *testing.T) {
 }
 
 func TestSendMessageReturnsRunID(t *testing.T) {
-	api := New("http://runtime.test")
+	api := New("http://runtime.test", "")
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost {
 			return nil, fmt.Errorf("method = %s, want POST", r.Method)
@@ -146,12 +146,53 @@ func TestApproveSendsAcceptAll(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(server.URL)
+	c := New(server.URL, "")
 	if err := c.Approve(context.Background(), "sess_1", "appr_1", true); err != nil {
 		t.Fatalf("Approve failed: %v", err)
 	}
 	if got["accept_all"] != true {
 		t.Fatalf("expected accept_all=true, got %v", got)
+	}
+}
+
+func TestRequestsIncludeAuthorizationHeaderWhenTokenSet(t *testing.T) {
+	var gotHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "secret-token")
+	if _, err := c.GetJSON(context.Background(), "/v1/sessions"); err != nil {
+		t.Fatalf("GetJSON failed: %v", err)
+	}
+	if gotHeader != "Bearer secret-token" {
+		t.Fatalf("expected Authorization header %q, got %q", "Bearer secret-token", gotHeader)
+	}
+}
+
+func TestRequestsOmitAuthorizationHeaderWhenNoToken(t *testing.T) {
+	var gotHeader string
+	sawRequest := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		gotHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "")
+	if _, err := c.GetJSON(context.Background(), "/v1/sessions"); err != nil {
+		t.Fatalf("GetJSON failed: %v", err)
+	}
+	if !sawRequest {
+		t.Fatalf("expected server to receive a request")
+	}
+	if gotHeader != "" {
+		t.Fatalf("expected no Authorization header, got %q", gotHeader)
 	}
 }
 

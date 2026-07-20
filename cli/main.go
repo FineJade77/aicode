@@ -747,7 +747,7 @@ func runResumeAgent(cfg config.Config, session sessionInfo, message string) erro
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	api := client.New(cfg.Runtime.URL)
+	api := client.New(cfg.Runtime.URL, daemon.Token())
 	run, err := api.SendMessage(ctx, session.SessionID, client.SendMessageRequest{
 		Message:   message,
 		Mode:      "chat",
@@ -850,7 +850,7 @@ func fetchReviewRulesForWorkspace(cfg config.Config, workspacePath string) (any,
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
-	api := client.New(cfg.Runtime.URL)
+	api := client.New(cfg.Runtime.URL, daemon.Token())
 	return api.GetJSON(ctx, "/v1/review/rules?workspace="+url.QueryEscape(workspacePath))
 }
 
@@ -900,7 +900,7 @@ func fetchRuntimeJSON(cfg config.Config, path string) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
 
-	api := client.New(cfg.Runtime.URL)
+	api := client.New(cfg.Runtime.URL, daemon.Token())
 	return api.GetJSON(ctx, path)
 }
 
@@ -920,7 +920,7 @@ func runAgent(cfg config.Config, mode string, prompt string) error {
 		return err
 	}
 
-	api := client.New(cfg.Runtime.URL)
+	api := client.New(cfg.Runtime.URL, daemon.Token())
 	session, err := api.CreateSession(ctx, client.CreateSessionRequest{
 		Workspace: root.Path,
 		Language:  cfg.UI.Language,

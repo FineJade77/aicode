@@ -17,6 +17,7 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+	token   string
 }
 
 var streamReconnectDelay = 250 * time.Millisecond
@@ -51,12 +52,19 @@ type ApproveRequest struct {
 	AcceptAll  bool   `json:"accept_all"`
 }
 
-func New(baseURL string) Client {
+func New(baseURL string, token string) Client {
 	return Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http: &http.Client{
 			Timeout: 0,
 		},
+		token: token,
+	}
+}
+
+func (c Client) setAuthHeader(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 }
 
@@ -65,6 +73,7 @@ func (c Client) GetJSON(ctx context.Context, path string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.setAuthHeader(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -219,6 +228,7 @@ func (c Client) newStreamRequest(ctx context.Context, sessionID string, runID st
 	if after > 0 {
 		req.Header.Set("Last-Event-ID", strconv.FormatInt(after, 10))
 	}
+	c.setAuthHeader(req)
 	return req, nil
 }
 
@@ -268,6 +278,7 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, out any)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	c.setAuthHeader(req)
 
 	httpClient := c.http
 	if _, ok := ctx.Deadline(); !ok {
