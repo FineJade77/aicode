@@ -189,7 +189,13 @@ func runDockerSandboxTest() error {
 	image := dockerSandboxImage(command)
 	fmt.Printf("Sandbox: docker\nWorkspace: %s\nImage: %s\nCommand: %s\n", root.Path, image, command)
 
-	cmd := exec.Command("docker", dockerSandboxArgs(root.Path, image, command)...)
+	envMasks, cleanup, err := dockerSandboxEnvMasks(root.Path)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	cmd := exec.Command("docker", dockerSandboxArgs(root.Path, image, command, envMasks)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -307,8 +313,61 @@ func dockerSandboxImage(command string) string {
 	}
 }
 
-func dockerSandboxArgs(workspacePath string, image string, command string) []string {
-	return []string{
+type sandboxMount struct {
+	Source string
+	Target string
+}
+
+func dockerSandboxEnvMasks(workspacePath string) ([]sandboxMount, func(), error) {
+	maskedFiles, err := sandboxEnvFiles(workspacePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(maskedFiles) == 0 {
+		return nil, func() {}, nil
+	}
+	tempDir, err := os.MkdirTemp("", "aicode-sandbox-mask-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("创建 sandbox env mask 失败: %w", err)
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(tempDir)
+	}
+	emptyFile := filepath.Join(tempDir, "empty-env")
+	if err := os.WriteFile(emptyFile, []byte{}, 0o600); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("创建 sandbox env mask 文件失败: %w", err)
+	}
+
+	mounts := make([]sandboxMount, 0, len(maskedFiles))
+	for _, name := range maskedFiles {
+		mounts = append(mounts, sandboxMount{
+			Source: emptyFile,
+			Target: filepath.ToSlash(filepath.Join("/workspace", name)),
+		})
+	}
+	return mounts, cleanup, nil
+}
+
+func sandboxEnvFiles(workspacePath string) ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(workspacePath, ".env*"))
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		info, err := os.Stat(match)
+		if err != nil || info.IsDir() || !info.Mode().IsRegular() {
+			continue
+		}
+		names = append(names, filepath.Base(match))
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func dockerSandboxArgs(workspacePath string, image string, command string, envMasks []sandboxMount) []string {
+	args := []string{
 		"run",
 		"--rm",
 		"--network",
@@ -317,13 +376,19 @@ func dockerSandboxArgs(workspacePath string, image string, command string) []str
 		"AICODE_SANDBOX=1",
 		"--mount",
 		"type=bind,src=" + workspacePath + ",dst=/workspace,readonly",
+	}
+	for _, mask := range envMasks {
+		args = append(args, "--mount", "type=bind,src="+mask.Source+",dst="+mask.Target+",readonly")
+	}
+	args = append(args,
 		"-w",
 		"/workspace",
 		image,
 		"sh",
 		"-lc",
 		command,
-	}
+	)
+	return args
 }
 
 func fileExists(basePath string, name string) bool {

@@ -126,6 +126,8 @@ go run ./cli resume <session_id> "继续这个会话"
 
 手动启动 Runtime（`cd runtime && python3 -m uvicorn ...`，不经过 `aicode daemon start`）时不会设置 `AICODE_RUNTIME_TOKEN`，此时 API 保持不认证，方便本地调试；如果需要给手动启动的 Runtime 也加上认证，自行 `export AICODE_RUNTIME_TOKEN=...` 后启动即可，但对应的 CLI 请求也需要一致的 token 才能通过。
 
+如果 CLI 返回 `401 Unauthorized`，通常是旧 daemon 或手动启动的 uvicorn 仍占用 `8765`，导致当前 `runtime.token` 与正在运行的进程不一致。先运行 `go run ./cli daemon stop`，再用 `lsof -nP -iTCP:8765 -sTCP:LISTEN` 确认没有旧进程后重新 `go run ./cli daemon start`。
+
 ## 配置
 
 用户级配置默认路径：
@@ -223,7 +225,7 @@ go run ./cli config test show
 go run ./cli config test unset
 ```
 
-也可以先用 Docker MVP 在隔离环境里跑测试。该模式默认禁网、只读挂载 workspace，且不传入 `.env`：
+也可以先用 Docker MVP 在隔离环境里跑测试。该模式默认禁网、只读挂载 workspace，且会用空文件遮住仓库根目录的 `.env*`：
 
 ```bash
 go run ./cli --sandbox docker test

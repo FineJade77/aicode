@@ -38,7 +38,7 @@
 | 低风险测试命令 | 允许自动执行 |
 | review 模式 | 严格只读（工具集过滤 + policy deny 双保险） |
 | 多仓库 workspace | 只读分析（`read_file`/`search`/`list_files` 支持 `workspace` 参数） |
-| Docker sandbox | Phase 4 支持 |
+| Docker sandbox | CLI MVP 已支持 `aicode --sandbox docker test`；完整资源限制/审计增强后续补齐 |
 | 审计日志 | 从第一版开始记录，后续增强到企业级 |
 
 ## 3. 总体架构
@@ -61,7 +61,7 @@ Python 3.11+ Runtime Daemon
   +-- Session Store (SQLite)
   |
   v
-Workspace / Git / Shell / SQLite / Docker Sandbox (Phase 4)
+Workspace / Git / Shell / SQLite / Docker Sandbox (test MVP)
 ```
 
 Go CLI 是用户交互层：命令解析、自动启停 daemon、SSE 事件消费与渲染、审批交互。它不调用模型、不做规划、不修改文件、不判断风险。
@@ -329,9 +329,9 @@ SQLite 存 session / message / event。message 的 role 为 user/assistant/tool�
 
 只读分析。`read_file`/`search`/`list_files` 接受 `workspace` 参数，Runtime 把路径限制在该配置仓库内并强制只读；`edit_file`/`bash`/测试命令只作用于主 workspace。路径逃逸（`../`）被拦截。
 
-## 17. Docker Sandbox（Phase 4）
+## 17. Docker Sandbox
 
-sandbox 内运行 test/build/lint，workspace 只读挂载、默认禁网、CPU/内存限制、不注入敏感环境变量。命令示例 `aicode --sandbox docker "运行测试"`。
+当前 CLI 已支持 `aicode --sandbox docker test`：自动探测测试命令，在 Docker 中运行，workspace 只读挂载，默认禁网，仅注入 `AICODE_SANDBOX=1`，并用空文件遮住仓库根目录的 `.env*`。后续补齐 build/lint、CPU/内存限制和审计日志记录。
 
 ## 18. 国际化
 
@@ -362,5 +362,5 @@ aicode/
 - IDE / Web / Desktop UI
 - 本地模型
 - 自动发布、跨仓库自动写入、自动删除文件、自动执行高风险 shell
-- 完整 Docker sandbox（Phase 4）
+- 完整 Docker sandbox（build/lint、资源限制、审计增强）
 - 企业远端审计服务

@@ -28,7 +28,7 @@ func TestParseGlobalArgsReportsMissingSandboxValue(t *testing.T) {
 }
 
 func TestDockerSandboxArgsAreIsolated(t *testing.T) {
-	args := dockerSandboxArgs("/repo", "golang:1.22", "go test ./...")
+	args := dockerSandboxArgs("/repo", "golang:1.22", "go test ./...", nil)
 	want := []string{
 		"run",
 		"--rm",
@@ -50,6 +50,70 @@ func TestDockerSandboxArgsAreIsolated(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(args, " "), "--env-file") {
 		t.Fatalf("docker args should not pass env files: %#v", args)
+	}
+}
+
+func TestDockerSandboxArgsMasksEnvFiles(t *testing.T) {
+	args := dockerSandboxArgs("/repo", "golang:1.22", "go test ./...", []sandboxMount{
+		{Source: "/tmp/empty-env", Target: "/workspace/.env"},
+		{Source: "/tmp/empty-env", Target: "/workspace/.env.local"},
+	})
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"type=bind,src=/tmp/empty-env,dst=/workspace/.env,readonly",
+		"type=bind,src=/tmp/empty-env,dst=/workspace/.env.local,readonly",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("docker args %q missing %q", joined, want)
+		}
+	}
+}
+
+func TestSandboxEnvFilesFindsRootEnvFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{".env", ".env.local", ".env.test"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("secret=1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, ".env.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := sandboxEnvFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".env", ".env.local", ".env.test"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sandboxEnvFiles() = %#v, want %#v", got, want)
+	}
+}
+
+func TestDockerSandboxEnvMasksCreatesEmptyFileMasks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("secret=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	masks, cleanup, err := dockerSandboxEnvMasks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if len(masks) != 1 {
+		t.Fatalf("masks = %#v", masks)
+	}
+	if masks[0].Target != "/workspace/.env" {
+		t.Fatalf("mask target = %q", masks[0].Target)
+	}
+	content, err := os.ReadFile(masks[0].Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) != 0 {
+		t.Fatalf("mask source content = %q", content)
 	}
 }
 

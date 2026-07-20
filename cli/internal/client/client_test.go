@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -139,15 +138,16 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 
 func TestApproveSendsAcceptAll(t *testing.T) {
 	var got map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := New("http://runtime.test", "")
+	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"accepted"}`))
-	}))
-	defer server.Close()
+		return jsonResponse(`{"status":"accepted"}`), nil
+	})}
 
-	c := New(server.URL, "")
-	if err := c.Approve(context.Background(), "sess_1", "appr_1", true); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if err := c.Approve(ctx, "sess_1", "appr_1", true); err != nil {
 		t.Fatalf("Approve failed: %v", err)
 	}
 	if got["accept_all"] != true {
@@ -157,14 +157,12 @@ func TestApproveSendsAcceptAll(t *testing.T) {
 
 func TestRequestsIncludeAuthorizationHeaderWhenTokenSet(t *testing.T) {
 	var gotHeader string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := New("http://runtime.test", "secret-token")
+	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		gotHeader = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
+		return jsonResponse(`{}`), nil
+	})}
 
-	c := New(server.URL, "secret-token")
 	if _, err := c.GetJSON(context.Background(), "/v1/sessions"); err != nil {
 		t.Fatalf("GetJSON failed: %v", err)
 	}
@@ -176,15 +174,13 @@ func TestRequestsIncludeAuthorizationHeaderWhenTokenSet(t *testing.T) {
 func TestRequestsOmitAuthorizationHeaderWhenNoToken(t *testing.T) {
 	var gotHeader string
 	sawRequest := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := New("http://runtime.test", "")
+	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sawRequest = true
 		gotHeader = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
+		return jsonResponse(`{}`), nil
+	})}
 
-	c := New(server.URL, "")
 	if _, err := c.GetJSON(context.Background(), "/v1/sessions"); err != nil {
 		t.Fatalf("GetJSON failed: %v", err)
 	}
@@ -193,6 +189,62 @@ func TestRequestsOmitAuthorizationHeaderWhenNoToken(t *testing.T) {
 	}
 	if gotHeader != "" {
 		t.Fatalf("expected no Authorization header, got %q", gotHeader)
+	}
+}
+
+func TestGetJSONUnauthorizedExplainsTokenRecovery(t *testing.T) {
+	c := New("http://runtime.test", "stale-token")
+	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return unauthorizedResponse(), nil
+	})}
+	_, err := c.GetJSON(context.Background(), "/v1/sessions")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertRuntimeAuthHint(t, err)
+}
+
+func TestPostJSONUnauthorizedExplainsTokenRecovery(t *testing.T) {
+	c := New("http://runtime.test", "stale-token")
+	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return unauthorizedResponse(), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := c.Reject(ctx, "sess_1", "appr_1")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertRuntimeAuthHint(t, err)
+}
+
+func TestStreamUnauthorizedExplainsTokenRecovery(t *testing.T) {
+	api := New("http://runtime.test", "stale-token")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Status:     "401 Unauthorized",
+			Body:       io.NopCloser(strings.NewReader(`{"detail":"unauthorized"}`)),
+		}, nil
+	})}
+
+	err := api.StreamEvents(context.Background(), "sess_1", func(event map[string]any) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	assertRuntimeAuthHint(t, err)
+}
+
+func assertRuntimeAuthHint(t *testing.T, err error) {
+	t.Helper()
+	text := err.Error()
+	for _, want := range []string{"Runtime 认证失败", "runtime.token", "go run ./cli daemon stop", "go run ./cli daemon start"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("error %q does not contain %q", text, want)
+		}
 	}
 }
 
@@ -217,5 +269,13 @@ func jsonResponse(body string) *http.Response {
 		Status:     "200 OK",
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func unauthorizedResponse() *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Status:     "401 Unauthorized",
+		Body:       io.NopCloser(strings.NewReader(`{"detail":"unauthorized"}`)),
 	}
 }

@@ -83,7 +83,7 @@ func (c Client) GetJSON(ctx context.Context, path string) (any, error) {
 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GET %s failed: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		return nil, runtimeHTTPError("GET "+path, resp.StatusCode, resp.Status, body)
 	}
 
 	var value any
@@ -165,7 +165,7 @@ func (c Client) streamEventsOnce(
 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return false, false, fmt.Errorf("event stream failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return false, false, runtimeHTTPError("event stream", resp.StatusCode, resp.Status, body)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -293,7 +293,7 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, out any)
 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("POST %s failed: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		return runtimeHTTPError("POST "+path, resp.StatusCode, resp.Status, body)
 	}
 
 	if out == nil {
@@ -301,4 +301,17 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, out any)
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func runtimeHTTPError(operation string, statusCode int, status string, body []byte) error {
+	detail := strings.TrimSpace(string(body))
+	if statusCode == http.StatusUnauthorized {
+		return fmt.Errorf(
+			"%s failed: %s: %s\nRuntime 认证失败：当前 CLI 的 runtime.token 与正在运行的 daemon 不匹配。请运行 `go run ./cli daemon stop`，确认 8765 端口没有旧 uvicorn/daemon 后，再 `go run ./cli daemon start`。",
+			operation,
+			status,
+			detail,
+		)
+	}
+	return fmt.Errorf("%s failed: %s: %s", operation, status, detail)
 }

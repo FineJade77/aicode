@@ -12,7 +12,7 @@
 6. 默认中文交互，但所有用户可见文案必须支持英文配置。
 7. 第一版多仓库只做只读分析。
 8. token/cost 第一版只做本地统计。
-9. Docker sandbox 放到 Phase 4。
+9. Docker sandbox 先提供测试 MVP，完整资源限制和审计增强放到 Phase 4。
 
 ## 2. 版本规划总览
 
@@ -23,7 +23,7 @@
 | Phase 2 | 2 周 | 完成验证闭环：自动测试、失败分析、session resume、usage |
 | Agent Loop v2 | 2-3 周 | 模型驱动重构：原生 function calling 主循环、流式输出、双 provider、edit_file 确认链路（已完成） |
 | Phase 3 | 3 周 | 完成上下文引擎：索引、符号、测试映射、多仓库只读分析 |
-| Phase 4 | 2-3 周 | 完成安全增强：Docker sandbox、审计增强、敏感信息脱敏 |
+| Phase 4 | 2-3 周 | 完成安全增强：补齐 Docker sandbox、审计增强、敏感信息脱敏 |
 | Phase 5 | 2 周 | 打磨 Codex 风格 CLI 体验和开发者效率工具 |
 
 ## 3. Phase 0: 基础骨架
@@ -411,7 +411,7 @@ aicode "修复认证模块的边界条件并补测试"
 
 Docker Sandbox：
 
-- `aicode --sandbox docker`
+- 已完成 MVP：`aicode --sandbox docker test`
 - sandbox 内运行 test/build/lint
 - workspace 只读挂载
 - 可选写入挂载
@@ -442,7 +442,7 @@ Policy 增强：
 运行：
 
 ```bash
-aicode --sandbox docker "运行测试"
+aicode --sandbox docker test
 ```
 
 应满足：
@@ -574,7 +574,7 @@ aicode commit-message
 - tree-sitter index
 - 多仓库只读分析
 - project memory
-- Docker sandbox
+- Docker sandbox 补齐
 - 审计日志增强
 - sensitive redaction
 - diff 分文件确认
@@ -590,7 +590,7 @@ aicode commit-message
 | 上下文不足导致错误修改 | 修错位置 | 先读相关文件和 git diff，必要时要求用户补充 |
 | 模型成本失控 | 使用成本不可控 | 第一版记录 token/cost，后续支持预算限制 |
 | 多仓库复杂度过高 | MVP 延误 | 第一版多仓库只读分析，不支持跨仓库写入 |
-| Docker sandbox 复杂 | 影响进度 | 放到 Phase 4，不阻塞 MVP |
+| Docker sandbox 完整隔离复杂 | 影响进度 | 先提供 test MVP，Phase 4 补齐资源限制、build/lint 和审计 |
 | 中英文输出混乱 | 体验不稳定 | 用户可见文案统一走 language setting |
 
 ## 12. Definition of Done
