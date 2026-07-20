@@ -21,7 +21,7 @@
 | Phase 0 | 1 周 | 建立 Go CLI + Python Runtime 基础骨架 |
 | Phase 1 | 2-3 周 | 完成 coding MVP：读、搜、跑命令、出 diff、确认后写入 |
 | Phase 2 | 2 周 | 完成验证闭环：自动测试、失败分析、session resume、usage |
-| Agent Loop v2 | 2-3 周 | 模型驱动重构：原生 function calling 主循环、流式输出、双 provider、edit_file 确认链路 |
+| Agent Loop v2 | 2-3 周 | 模型驱动重构：原生 function calling 主循环、流式输出、双 provider、edit_file 确认链路（已完成） |
 | Phase 3 | 3 周 | 完成上下文引擎：索引、符号、测试映射、多仓库只读分析 |
 | Phase 4 | 2-3 周 | 完成安全增强：Docker sandbox、审计增强、敏感信息脱敏 |
 | Phase 5 | 2 周 | 打磨 Codex 风格 CLI 体验和开发者效率工具 |
@@ -285,7 +285,7 @@ aicode "运行测试并修复失败"
 - 不做大型索引
 - 不做跨仓库 patch
 
-## 6. Agent Loop v2: 模型驱动重构（当前进行中）
+## 6. Agent Loop v2: 模型驱动重构（已完成）
 
 周期：2-3 周
 
