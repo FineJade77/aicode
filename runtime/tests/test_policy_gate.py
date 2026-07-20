@@ -15,6 +15,7 @@ def gate_bash(engine, command, mode="default"):
 def test_read_only_tools_allowed_in_review(engine):
     assert engine.gate("read_file", {"path": "a.py"}, mode="review").verdict == "allow"
     assert engine.gate("search", {"query": "x"}, mode="review").verdict == "allow"
+    assert engine.gate("related_files", {"path": "a.py"}, mode="review").verdict == "allow"
 
 
 def test_write_tools_denied_in_review(engine):

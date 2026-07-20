@@ -21,6 +21,7 @@ from app.tools.base import (
 )
 from app.tools.command import run_command, run_shell_command
 from app.tools.file import ListFilesTool
+from app.tools.related import RelatedFilesTool
 from app.tools.review import ReviewDiffTool
 
 MAX_READ_LINES = 500
@@ -74,6 +75,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "related_files",
+        "description": "基于源码/测试命名、同名文件和引用行，查找与指定文件相关的只读上下文文件。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "相对路径"},
+                "limit": {"type": "integer", "default": 20},
+                "workspace": WORKSPACE_ARG,
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "bash",
         "description": "在主 workspace 执行 shell 命令（git、测试、构建等）。低风险命令直接执行；中风险需要用户确认；破坏性命令会被拒绝。",
         "input_schema": {
@@ -111,7 +125,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
-READ_ONLY_TOOL_NAMES = {"read_file", "search", "list_files", "review_diff"}
+READ_ONLY_TOOL_NAMES = {"read_file", "search", "list_files", "related_files", "review_diff"}
 TOOL_SCHEMAS_BY_NAME = {schema["name"]: schema for schema in TOOL_SCHEMAS}
 
 
@@ -187,6 +201,8 @@ async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -
             return with_duration(await run_search(context, arguments), started)
         if name == "list_files":
             return with_duration(await ListFilesTool().run(arguments, context), started)
+        if name == "related_files":
+            return with_duration(await RelatedFilesTool().run(arguments, context), started)
         if name == "review_diff":
             return with_duration(await ReviewDiffTool().run(arguments, context), started)
         if name == "bash":

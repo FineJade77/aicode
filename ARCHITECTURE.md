@@ -53,7 +53,7 @@ Python 3.11+ Runtime Daemon
   +-- Agent Loop (模型驱动的工具循环)
   +-- Model Router (main / reviewer / summarizer)
   +-- Provider 层 (OpenAI-compatible / Anthropic，流式 + tool calling)
-  +-- Tool Registry (read_file/search/list_files/bash/edit_file/review_diff)
+  +-- Tool Registry (read_file/search/list_files/related_files/bash/edit_file/review_diff)
   +-- Policy Engine (allow / ask / deny 三态闸门)
   +-- Edit Approval (inline diff + accept-all + stale 检测)
   +-- History (加载 / 持久化 / 三层上下文压缩)
@@ -182,6 +182,7 @@ Schema 见 `schemas/events.schema.json`、`schemas/tools.schema.json`、`schemas
 | `read_file` | 带行号读取，`offset`/`limit` 分页；支持 `workspace` | 只读 |
 | `search` | ripgrep 优先，无 rg 时纯 Python 回退；正则 + glob；支持 `workspace` | 只读 |
 | `list_files` | 目录树，深度受限；支持 `workspace` | 只读 |
+| `related_files` | 按源码/测试命名、同名文件和引用行查找相关上下文；支持 `workspace` | 只读 |
 | `bash` | 统一命令执行入口（git/测试/构建等），超时杀进程组 | 由 policy 分级 |
 | `edit_file` | replace/create/delete，单文件 stale 检测，拒绝非 UTF-8 | 必经 approval |
 | `review_diff` | 对当前 git diff 跑确定性 review 规则 | 只读 |
@@ -327,7 +328,7 @@ SQLite 存 session / message / event。message 的 role 为 user/assistant/tool�
 
 ## 16. 多仓库 Workspace
 
-只读分析。`read_file`/`search`/`list_files` 接受 `workspace` 参数，Runtime 把路径限制在该配置仓库内并强制只读；`edit_file`/`bash`/测试命令只作用于主 workspace。路径逃逸（`../`）被拦截。
+只读分析。`read_file`/`search`/`list_files`/`related_files` 接受 `workspace` 参数，Runtime 把路径限制在该配置仓库内并强制只读；`edit_file`/`bash`/测试命令只作用于主 workspace。路径逃逸（`../`）被拦截。
 
 ## 17. Docker Sandbox
 

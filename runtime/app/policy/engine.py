@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "review_diff"}
+READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "related_files", "review_diff"}
 
 DENY_EXECUTABLES = {"rm", "sudo", "su", "shutdown", "reboot", "mkfs", "dd"}
 ALLOW_EXECUTABLES = {"pwd", "ls", "rg", "grep", "head", "tail", "wc", "cat", "which", "echo"}

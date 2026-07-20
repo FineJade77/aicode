@@ -298,7 +298,7 @@ aicode "运行测试并修复失败"
 ### 交付物
 
 - 模型驱动主循环：history 为唯一状态并跨消息持久化，多轮修正开箱即用；TurnBudget 步数/成本上限强制收尾
-- 工具集收敛：`read_file` / `search` / `list_files` / `bash` / `edit_file` / `review_diff`
+- 工具集收敛：`read_file` / `search` / `list_files` / `related_files` / `bash` / `edit_file` / `review_diff`
 - `edit_file` 逐次 inline diff 确认 + 会话级 accept-all（protected paths 除外）+ 单文件 stale 检测
 - Provider 重写：OpenAI 兼容（`tools`）+ Anthropic（`tool_use`）双协议，流式输出，httpx 超时重试
 - 模型路由收敛为 `main` / `reviewer` / `summarizer` 三角色
@@ -316,9 +316,8 @@ review 模式仍为硬只读；未配置 provider 时明确报错并提示配置
 
 ### 不做
 
-- API 本地 token 认证、事件落盘异步化（独立修补项，不混入本次重构）
-- `related_files` 工具、tree-sitter 索引（Phase 3 重新评估）
-- Docker sandbox、IDE/Web UI
+- tree-sitter 索引（Phase 3 重新评估；`related_files` 启发式工具已补）
+- IDE/Web UI
 
 ## 7. Phase 3: 上下文引擎
 
@@ -343,6 +342,7 @@ review 模式仍为硬只读；未配置 provider 时明确报错并提示配置
 
 代码理解：
 
+- `related_files` 只读启发式工具（源码/测试同名、test/spec 命名、引用行）
 - tree-sitter 集成
 - TypeScript symbol extraction
 - Python symbol extraction

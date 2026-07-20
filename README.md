@@ -2,7 +2,7 @@
 
 `aicode` 是一个本地优先、CLI-first、默认中文交互的 Coding Agent。
 
-当前仓库已完成 Agent Loop v2 模型驱动重构（设计见 `docs/superpowers/specs/2026-07-17-agent-loop-redesign-design.md`）：
+当前仓库已完成 Agent Loop 模型驱动开发：
 
 - Go CLI: `cli/`
 - Python Runtime: `runtime/`
@@ -15,7 +15,7 @@
 - CLI 自动启动/停止 Runtime daemon
 - HTTP + SSE 事件流，流式输出（`assistant.delta`）
 - 模型驱动工具循环：主循环由模型通过原生 function calling 驱动（OpenAI `tools` + Anthropic `tool_use`），loop 本身保持极简，安全由执行点的统一 Policy 闸门保证
-- 工具集：`read_file` / `search` / `list_files` / `bash` / `edit_file` / `review_diff`
+- 工具集：`read_file` / `search` / `list_files` / `related_files` / `bash` / `edit_file` / `review_diff`
 - `edit_file` 逐次展示 inline diff 确认，支持会话级"全部允许"（accept-all）降噪（protected paths 除外），单文件 stale 检测，拒绝编辑非 UTF-8 文件
 - OpenAI 兼容 + Anthropic 双 provider，三角色模型路由（`main` / `reviewer` / `summarizer`）
 - Policy Engine 三态分级闸门（allow/ask/deny），并修复了 `sed -i`、`git push` 等历史分级漏洞
@@ -44,7 +44,7 @@ go run ./cli "解释当前目录"
 ```
 
 CLI 会自动启动 Python Runtime daemon，并通过 SSE 接收事件。
-Runtime 的主循环由模型通过原生 function calling 驱动：模型自主决定调用 `read_file` / `search` / `list_files` / `bash` 探索代码库，需要修改代码时调用 `edit_file`；每次 `edit_file` 调用都会先展示 inline diff，等待用户确认（`y` 应用一次、`a` 应用并对本会话后续编辑自动放行、其它任意输入拒绝）。
+Runtime 的主循环由模型通过原生 function calling 驱动：模型自主决定调用 `read_file` / `search` / `list_files` / `related_files` / `bash` 探索代码库，需要修改代码时调用 `edit_file`；每次 `edit_file` 调用都会先展示 inline diff，等待用户确认（`y` 应用一次、`a` 应用并对本会话后续编辑自动放行、其它任意输入拒绝）。
 应用编辑后，如果模型准备结束当前轮次，Runtime 会插入一条提示要求模型运行相关测试或命令验证改动；验证失败时模型会继续修复，连续 3 次修复失败会停止并汇报现状。
 多轮对话中可以直接说"不对，改成 X"：对话 history 作为唯一状态跨消息持久化，模型会基于上一轮上下文继续修改。
 发给模型的工具观测会经过三层上下文预算控制：单条大输出头尾保留并标记压缩，历史超预算时优先压缩低价值输出，仍超预算时由 summarizer 模型对早期历史做摘要兜底，避免 prompt 成本失控。
@@ -185,9 +185,9 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 
 当前已生效的字段：
 
-- `protectedPaths`: `read_file`、`search`、`list_files`、`review_diff` 和 `edit_file` 都会跳过或拦截这些路径。
+- `protectedPaths`: `read_file`、`search`、`list_files`、`related_files`、`review_diff` 和 `edit_file` 都会跳过或拦截这些路径。
 - `commands.test`: 设置为具体命令时，`aicode test` 会优先使用该命令；设置为 `auto` 时自动探测。
-- `workspaces`: 声明额外只读仓库，供 `list_files`、`search`、`read_file` 分析使用（这三个工具支持 `workspace` 参数；`bash`、`edit_file`、`review_diff` 始终只作用于主 workspace）。
+- `workspaces`: 声明额外只读仓库，供 `list_files`、`search`、`read_file`、`related_files` 分析使用（这些只读工具支持 `workspace` 参数；`bash`、`edit_file`、`review_diff` 始终只作用于主 workspace）。
 - `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
 - `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
 - `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。
@@ -280,7 +280,7 @@ go run ./cli review-rules
 
 多仓库 workspace 第一版只做只读分析。工具调用传入 `{"workspace":"api"}` 时，Runtime 会把路径限制在该配置仓库内；`edit_file`、`bash` 和测试命令仍只在主 workspace 内执行。
 
-模型可以在调用 `read_file`、`search`、`list_files` 时传入 `workspace` 参数指向额外仓库，例如读取 `api` workspace 中的 `src/service.py`，或在 `api` workspace 内搜索 `login`；`bash`、`edit_file`、`review_diff` 始终只作用于主 workspace，跨仓库的 git diff 需要用户显式提供或改用 `read_file`/`search` 分析。
+模型可以在调用 `read_file`、`search`、`list_files`、`related_files` 时传入 `workspace` 参数指向额外仓库，例如读取 `api` workspace 中的 `src/service.py`，或在 `api` workspace 内搜索 `login`；`bash`、`edit_file`、`review_diff` 始终只作用于主 workspace，跨仓库的 git diff 需要用户显式提供或改用只读工具分析。
 
 ## 模型配置
 

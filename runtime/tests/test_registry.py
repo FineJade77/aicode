@@ -13,9 +13,9 @@ def make_context(tmp_path) -> ToolContext:
 
 def test_schema_names_and_modes():
     names = {schema["name"] for schema in TOOL_SCHEMAS}
-    assert names == {"read_file", "search", "list_files", "bash", "edit_file", "review_diff"}
+    assert names == {"read_file", "search", "list_files", "related_files", "bash", "edit_file", "review_diff"}
     review_names = {schema["name"] for schema in tool_schemas_for_mode("review")}
-    assert review_names == {"read_file", "search", "list_files", "review_diff"}
+    assert review_names == {"read_file", "search", "list_files", "related_files", "review_diff"}
     for schema in TOOL_SCHEMAS:
         assert schema["description"]
         assert schema["input_schema"]["type"] == "object"
@@ -122,6 +122,56 @@ async def test_unknown_tool(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_related_files_finds_source_test_pair_and_references(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_auth.py").write_text("from src.auth import login\n", encoding="utf-8")
+    (tmp_path / "src" / "routes.py").write_text("from src.auth import login\n", encoding="utf-8")
+
+    result = await run_tool("related_files", {"path": "src/auth.py"}, make_context(tmp_path))
+
+    assert result.success
+    paths = [item["path"] for item in result.data["related"]]
+    assert "tests/test_auth.py" in paths
+    assert "src/routes.py" in paths
+    test_item = next(item for item in result.data["related"] if item["path"] == "tests/test_auth.py")
+    assert "source_test_pair" in test_item["reasons"]
+    route_item = next(item for item in result.data["related"] if item["path"] == "src/routes.py")
+    assert "reference" in route_item["reasons"]
+    assert route_item["line"] == 1
+
+
+@pytest.mark.asyncio
+async def test_related_files_from_test_finds_source(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_auth.py").write_text("from src.auth import login\n", encoding="utf-8")
+
+    result = await run_tool("related_files", {"path": "tests/test_auth.py"}, make_context(tmp_path))
+
+    assert result.success
+    paths = [item["path"] for item in result.data["related"]]
+    assert "src/auth.py" in paths
+
+
+@pytest.mark.asyncio
+async def test_related_files_skips_protected_matches(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "secret").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
+    (tmp_path / "secret" / "test_auth.py").write_text("from src.auth import login\n", encoding="utf-8")
+
+    context = ToolContext(workspace=tmp_path, protected_paths=["secret/**"])
+    result = await run_tool("related_files", {"path": "src/auth.py"}, context)
+
+    assert result.success
+    paths = [item["path"] for item in result.data["related"]]
+    assert "secret/test_auth.py" not in paths
+
+
+@pytest.mark.asyncio
 async def test_read_file_reads_configured_read_only_workspace(tmp_path):
     main = tmp_path / "main"
     api = tmp_path / "api"
@@ -182,6 +232,27 @@ async def test_search_searches_configured_read_only_workspace(tmp_path):
     assert "api:" in result.text
     assert "public.py" in result.text
     assert "token.txt" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_related_files_supports_configured_read_only_workspace(tmp_path):
+    main = tmp_path / "main"
+    api = tmp_path / "api"
+    main.mkdir()
+    (api / "src").mkdir(parents=True)
+    (api / "tests").mkdir()
+    (api / "src" / "service.py").write_text("def helper():\n    return 'ok'\n", encoding="utf-8")
+    (api / "tests" / "test_service.py").write_text("from src.service import helper\n", encoding="utf-8")
+
+    context = ToolContext(
+        workspace=main,
+        workspace_refs=[WorkspaceRef(name="api", path=str(api), mode="read_only")],
+    )
+    result = await run_tool("related_files", {"path": "src/service.py", "workspace": "api"}, context)
+
+    assert result.success
+    assert "api:tests/test_service.py" in result.text
+    assert result.data["workspace"] == "api"
 
 
 @pytest.mark.asyncio
