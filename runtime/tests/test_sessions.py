@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.sessions.store import SessionEvents, SessionStore, normalize_event_limit
+from app.sessions.store import SessionEvents, SessionStore, normalize_cache_limit, normalize_event_limit
 
 
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
@@ -278,3 +278,87 @@ def test_normalize_event_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setenv("AICODE_SESSION_EVENT_LIMIT", "bad")
     assert normalize_event_limit() == 2_000
+
+
+def test_idle_sessions_are_evicted_beyond_cache_limit(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=2)
+    first = store.create(workspace="/repo1", language="zh-CN")
+    second = store.create(workspace="/repo2", language="zh-CN")
+    third = store.create(workspace="/repo3", language="zh-CN")
+
+    assert len(store._sessions) == 2
+    assert first.session_id not in store._sessions
+    assert second.session_id in store._sessions
+    assert third.session_id in store._sessions
+
+
+def test_evicted_session_is_still_reachable_via_get(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=1)
+    first = store.create(workspace="/repo1", language="zh-CN")
+    store.create(workspace="/repo2", language="zh-CN")
+
+    assert first.session_id not in store._sessions
+
+    reloaded = store.get(first.session_id)
+
+    assert reloaded is not None
+    assert reloaded.session_id == first.session_id
+    assert reloaded.workspace == "/repo1"
+
+
+def test_get_refreshes_recency_and_protects_from_eviction(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=2)
+    first = store.create(workspace="/repo1", language="zh-CN")
+    store.create(workspace="/repo2", language="zh-CN")
+
+    # 触碰 first，使其成为最近使用
+    store.get(first.session_id)
+
+    store.create(workspace="/repo3", language="zh-CN")
+
+    # first 因为刚被访问过，不应被驱逐；repo2 应被驱逐
+    assert first.session_id in store._sessions
+
+
+def test_session_with_pending_approval_is_never_evicted(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=1)
+    pending = store.create(workspace="/repo1", language="zh-CN")
+    pending.create_approval("edit", {"path": "a.py"})
+
+    idle = store.create(workspace="/repo2", language="zh-CN")
+
+    # cache_limit=1 且 pending 有未决 approval，不可驱逐；idle 是唯一可驱逐的，被驱逐出去
+    assert pending.session_id in store._sessions
+    assert idle.session_id not in store._sessions
+
+
+def test_session_with_active_agent_runner_is_never_evicted(tmp_path: Path) -> None:
+    import asyncio
+
+    async def _never_finishes() -> None:
+        await asyncio.sleep(3600)
+
+    async def run() -> None:
+        store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=1)
+        running = store.create(workspace="/repo1", language="zh-CN")
+        running.agent_runner_task = asyncio.create_task(_never_finishes())
+
+        idle = store.create(workspace="/repo2", language="zh-CN")
+
+        assert running.session_id in store._sessions
+        assert idle.session_id not in store._sessions
+
+        running.agent_runner_task.cancel()
+        try:
+            await running.agent_runner_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+
+
+def test_normalize_cache_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert normalize_cache_limit(0) == 1
+
+    monkeypatch.setenv("AICODE_SESSION_CACHE_LIMIT", "bad")
+    assert normalize_cache_limit() == 200

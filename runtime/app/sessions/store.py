@@ -15,6 +15,7 @@ from uuid import uuid4
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
 EVENT_WRITE_QUEUE_MAXSIZE = 5_000
+DEFAULT_SESSION_CACHE_LIMIT = 200
 
 
 @dataclass(slots=True)
@@ -225,14 +226,44 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, path: Path | None = None, event_limit: int | None = None) -> None:
+    def __init__(self, path: Path | None = None, event_limit: int | None = None, cache_limit: int | None = None) -> None:
         self.path = path or default_session_db_path()
         self.event_limit = normalize_event_limit(event_limit)
+        self._cache_limit = normalize_cache_limit(cache_limit)
         self._sessions: dict[str, Session] = {}
         self._last_session_id: str | None = None
         self._schema_ready = False
         self._write_queue: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
         self._writer_task: asyncio.Task[None] | None = None
+
+    def _touch(self, session: Session) -> None:
+        """把 session 标记为最近使用，并在超出缓存上限时驱逐最久未用的可驱逐 session。
+
+        驱逐只丢弃内存中的 Session 对象（SessionEvents 缓冲、待决 approval 的
+        asyncio.Event、agent_queue）；SQLite 里的 session/message/event 行不受影响。
+        再次 get() 会从数据库重新构建一个新的 Session 对象，行为等同于 daemon 重启后
+        首次访问这个 session——已有的读路径本就支持这种情况。
+        """
+        self._sessions.pop(session.session_id, None)
+        self._sessions[session.session_id] = session
+        self._evict_if_needed()
+
+    def _evict_if_needed(self) -> None:
+        if len(self._sessions) <= self._cache_limit:
+            return
+        for session_id in list(self._sessions.keys()):
+            if len(self._sessions) <= self._cache_limit:
+                return
+            candidate = self._sessions[session_id]
+            if self._is_evictable(candidate):
+                del self._sessions[session_id]
+
+    def _is_evictable(self, session: Session) -> bool:
+        if session.agent_runner_active():
+            return False
+        if any(approval.accepted is None for approval in session.approvals.values()):
+            return False
+        return True
 
     def create(self, workspace: str, language: str) -> Session:
         self._ensure_schema()
@@ -243,15 +274,17 @@ class SessionStore:
         )
         self._attach_events(session)
         session.updated_at = session.created_at
-        self._sessions[session.session_id] = session
+        self._touch(session)
         self._last_session_id = session.session_id
         self._insert_session(session)
         return session
 
     def get(self, session_id: str) -> Session | None:
         self._ensure_schema()
-        if session_id in self._sessions:
-            return self._sessions[session_id]
+        cached = self._sessions.get(session_id)
+        if cached is not None:
+            self._touch(cached)
+            return cached
 
         with self._connect() as conn:
             row = conn.execute(
@@ -263,7 +296,7 @@ class SessionStore:
             session = self._session_from_row(row)
             session.messages = self._load_messages(conn, session.session_id)
             self._attach_events(session, self._load_events(conn, session.session_id))
-            self._sessions[session.session_id] = session
+            self._touch(session)
             return session
 
     def list(self) -> list[dict[str, Any]]:
@@ -279,7 +312,7 @@ class SessionStore:
                     session = self._session_from_row(row)
                     self._attach_events(session, self._load_events(conn, session.session_id))
                 session.messages = self._load_messages(conn, session.session_id)
-                self._sessions[session.session_id] = session
+                self._touch(session)
                 sessions.append(session.to_dict())
             return sessions
 
@@ -299,7 +332,7 @@ class SessionStore:
             session = self._session_from_row(row)
             session.messages = self._load_messages(conn, session.session_id)
             self._attach_events(session, self._load_events(conn, session.session_id))
-            self._sessions[session.session_id] = session
+            self._touch(session)
             self._last_session_id = session.session_id
             return session
 
@@ -542,6 +575,18 @@ def normalize_event_limit(value: int | None = None) -> int:
             value = int(raw)
         except ValueError:
             return DEFAULT_SESSION_EVENT_LIMIT
+    return max(1, int(value))
+
+
+def normalize_cache_limit(value: int | None = None) -> int:
+    if value is None:
+        raw = os.getenv("AICODE_SESSION_CACHE_LIMIT")
+        if not raw:
+            return DEFAULT_SESSION_CACHE_LIMIT
+        try:
+            value = int(raw)
+        except ValueError:
+            return DEFAULT_SESSION_CACHE_LIMIT
     return max(1, int(value))
 
 
