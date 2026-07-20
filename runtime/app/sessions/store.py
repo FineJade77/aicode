@@ -151,6 +151,7 @@ class Session:
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
     agent_queue: asyncio.Queue[QueuedAgentRun] = field(default_factory=asyncio.Queue)
     agent_runner_task: asyncio.Task[Any] | None = None
+    auto_accept_edits: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
