@@ -17,7 +17,7 @@ from app.policy.engine import PolicyEngine
 from app.sessions.store import Session
 from app.tools.base import is_protected_path
 from app.tools.edit import EditError, EditStaleError, apply_edit, build_edit_proposal
-from app.tools.registry import build_tool_context, run_tool, tool_schemas_for_mode
+from app.tools.registry import build_tool_context, run_tool, tool_schemas_for_mode, validate_tool_arguments
 
 
 async def run_turn_safely(session: Session, request: Any, runtime: Any) -> None:
@@ -122,6 +122,24 @@ async def execute_gated(
         )
         await session.events.put({"type": "tool.error", "tool": call.name, "error": message, "data": {"parse_error": parse_error}})
         return f"[工具参数解析失败] {message}", 0
+
+    validation_error = validate_tool_arguments(call.name, call.arguments)
+    if validation_error is not None:
+        message = localized(
+            request.language,
+            f"工具 {call.name} 参数校验失败，已跳过执行。请按工具 schema 重新生成参数。{validation_error}",
+            f"Tool {call.name} arguments failed validation and were not executed. Regenerate arguments that match the tool schema. {validation_error}",
+        ).strip()
+        runtime.audit.record(
+            "tool.argument_validation_error",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"tool": call.name, "validation_error": validation_error, "args": call.arguments},
+        )
+        await session.events.put(
+            {"type": "tool.error", "tool": call.name, "error": message, "data": {"validation_error": validation_error}}
+        )
+        return f"[工具参数校验失败] {message}", 0
 
     gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
     runtime.audit.record(

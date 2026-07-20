@@ -38,6 +38,22 @@ async def test_read_file_missing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_tool_validates_required_arguments(tmp_path):
+    result = await run_tool("read_file", {}, make_context(tmp_path))
+    assert not result.success
+    assert "参数校验失败" in result.error
+    assert result.data["validation_error"] == "缺少必填字段: path"
+
+
+@pytest.mark.asyncio
+async def test_run_tool_validates_argument_types(tmp_path):
+    (tmp_path / "a.py").write_text("line1\n", encoding="utf-8")
+    result = await run_tool("read_file", {"path": "a.py", "offset": "2"}, make_context(tmp_path))
+    assert not result.success
+    assert result.data["validation_error"] == "offset 应为 integer"
+
+
+@pytest.mark.asyncio
 async def test_read_file_protected(tmp_path):
     (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
     result = await run_tool("read_file", {"path": ".env"}, make_context(tmp_path))

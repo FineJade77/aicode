@@ -94,6 +94,18 @@ async def test_non_dict_tool_arguments_do_not_reach_policy(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_invalid_tool_arguments_feed_validation_error_to_model(tmp_path):
+    runtime, fake = make_runtime([tool_turn("edit_file", {"new_text": "x"}), text_turn("我会补 path")], tmp_path)
+    session = make_session(tmp_path)
+    await run_turn(session, Request(tmp_path), runtime)
+    errors = events_of(session, "tool.error")
+    assert errors and errors[0]["data"]["validation_error"] == "缺少必填字段: path"
+    assert not events_of(session, "tool.started")
+    assert not events_of(session, "approval.requested")
+    assert any("工具参数校验失败" in str(m.get("content")) for m in fake.calls[1].messages if m.get("role") == "tool")
+
+
+@pytest.mark.asyncio
 async def test_denied_bash_feeds_reason_to_model(tmp_path):
     runtime, fake = make_runtime(
         [tool_turn("bash", {"command": "rm -rf /"}), text_turn("那我不删了")], tmp_path

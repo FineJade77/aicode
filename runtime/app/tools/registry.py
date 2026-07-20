@@ -112,6 +112,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 READ_ONLY_TOOL_NAMES = {"read_file", "search", "list_files", "review_diff"}
+TOOL_SCHEMAS_BY_NAME = {schema["name"]: schema for schema in TOOL_SCHEMAS}
 
 
 def tool_schemas_for_mode(mode: str) -> list[dict[str, Any]]:
@@ -134,7 +135,47 @@ def build_tool_context(workspace: str, mode: str, language: str) -> ToolContext:
     )
 
 
+def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
+    schema = TOOL_SCHEMAS_BY_NAME.get(name)
+    if schema is None:
+        return None
+    return _validate_schema_value(arguments, schema["input_schema"], path="")
+
+
+def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> str | None:
+    expected_type = schema.get("type")
+    label = path or "参数"
+
+    if expected_type == "object":
+        if not isinstance(value, dict):
+            return f"{label} 应为 object"
+        for key in schema.get("required") or []:
+            if key not in value:
+                return f"缺少必填字段: {key}"
+        properties = schema.get("properties") or {}
+        for key, item in value.items():
+            property_schema = properties.get(key)
+            if property_schema is None:
+                continue
+            error = _validate_schema_value(item, property_schema, path=key if not path else f"{path}.{key}")
+            if error is not None:
+                return error
+        return None
+
+    if expected_type == "string" and not isinstance(value, str):
+        return f"{label} 应为 string"
+    if expected_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        return f"{label} 应为 integer"
+    if expected_type == "boolean" and not isinstance(value, bool):
+        return f"{label} 应为 boolean"
+    return None
+
+
 async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+    validation_error = validate_tool_arguments(name, arguments)
+    if validation_error is not None:
+        return ToolResult(success=False, error=f"参数校验失败: {validation_error}", data={"validation_error": validation_error})
+
     try:
         if name == "read_file":
             return read_file_lines(context, arguments)
