@@ -96,6 +96,11 @@ def test_benign_chained_commands_stay_allowed(engine):
     assert gate_bash(engine, "pytest && echo done").verdict == "allow"
 
 
+def test_background_operator_requires_confirmation(engine):
+    assert gate_bash(engine, "pytest & echo done").verdict == "ask"
+    assert gate_bash(engine, "sleep 60 &").verdict == "ask"
+
+
 def test_remaining_control_and_redirection_tokens_force_ask(engine):
     for command in [
         "ls; pwd",

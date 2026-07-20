@@ -14,6 +14,7 @@ from app.server import main as server
 from app.server.main import (
     MessageRequest,
     bind_message_request_to_session,
+    daemon_status,
     emit_run_queued,
     model_routes,
     process_session_runs,
@@ -162,3 +163,14 @@ async def test_model_routes_endpoint_returns_route_status() -> None:
     assert "summarizer" in data["routes"]
     assert "api_key_env" in data["openai_compatible"]
 
+
+@pytest.mark.asyncio
+async def test_daemon_status_includes_event_writer_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    monkeypatch.setattr(server, "store", store)
+
+    data = await daemon_status()
+
+    assert data["status"] == "ok"
+    assert data["event_writer"]["queue_size"] == 0
+    assert data["event_writer"]["dropped"] == 0

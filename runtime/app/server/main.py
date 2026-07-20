@@ -70,6 +70,7 @@ async def daemon_status() -> dict[str, Any]:
         "name": settings.app_name,
         "version": settings.version,
         "pid": os.getpid(),
+        "event_writer": store.event_writer_status(),
     }
 
 

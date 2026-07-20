@@ -26,11 +26,11 @@ CONTROL_TOKENS = {"|", "&&", "||", ";", ">", ">>", "<", "$(", "`"}
 # restrictive wins" (deny > ask > allow).
 #
 # Some separators are considered safe enough for pure control-flow chaining
-# (`&&`, bare `&`, newlines) — if every sub-command they join is benign the
-# overall command can still be "allow" (e.g. "pytest && echo done").
-# Others (`;`, `||`, `|`) are common vectors for smuggling a fallback/
-# secondary command past review, so their mere presence forces at least
-# "ask" even when every sub-command classifies as benign on its own.
+# (`&&`, newlines) — if every sub-command they join is benign the overall
+# command can still be "allow" (e.g. "pytest && echo done"). Others
+# (`;`, `||`, `|`, bare `&`) can smuggle fallback/secondary/background work
+# past review, so their mere presence forces at least "ask" even when every
+# sub-command classifies as benign on its own.
 # Redirection and command-substitution markers (`>`, `>>`, `<`, `` ` ``,
 # `$(`) are not statement separators we can safely split on, but their
 # presence also forces at least "ask" since they can hide execution that
@@ -41,7 +41,7 @@ CONTROL_TOKENS = {"|", "&&", "||", ";", ">", ">>", "<", "$(", "`"}
 # character that is quoted (`echo "a && b"`) or escaped (`find . -exec rm
 # {} \;`) is kept inside its owning word token instead of being mistaken
 # for a real statement boundary.
-_FLOOR_SEP_CHARS = {";", "|"}
+_FLOOR_SEPARATORS = {";", "|", "||", "&"}
 _INLINE_ASK_FLOOR_TOKENS = (">>", ">", "<", "$(", "`")
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _ENV_WRAPPER_NAMES = {"env", "command"}
@@ -163,7 +163,7 @@ class PolicyEngine:
                 if current:
                     segments.append(current)
                     current = []
-                if any(ch in _FLOOR_SEP_CHARS for ch in token):
+                if token in _FLOOR_SEPARATORS:
                     floor = True
                 continue
             if "&&" in token or "||" in token:

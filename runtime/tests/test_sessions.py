@@ -227,6 +227,7 @@ async def test_flush_waits_for_pending_writes(tmp_path: Path) -> None:
 
     await session.events.put({"type": "tool.started", "tool": "read_file"})
     await store.flush()
+    status = store.event_writer_status()
 
     with sqlite3.connect(db_path) as conn:
         count = conn.execute(
@@ -234,6 +235,10 @@ async def test_flush_waits_for_pending_writes(tmp_path: Path) -> None:
         ).fetchone()[0]
 
     assert count == 1
+    assert status["enqueued"] == 1
+    assert status["written"] == 1
+    assert status["dropped"] == 0
+    assert status["failed"] == 0
 
 
 @pytest.mark.asyncio
@@ -256,6 +261,7 @@ async def test_event_writer_survives_individual_write_failures(tmp_path: Path, m
     await session.events.put({"type": "one"})
     await session.events.put({"type": "two"})
     await store.flush()
+    status = store.event_writer_status()
 
     with sqlite3.connect(db_path) as conn:
         count = conn.execute(
@@ -264,6 +270,9 @@ async def test_event_writer_survives_individual_write_failures(tmp_path: Path, m
 
     # 第一条写入失败被吞掉（不中断写入循环），第二条成功落盘
     assert count == 1
+    assert status["enqueued"] == 2
+    assert status["written"] == 1
+    assert status["failed"] == 1
 
 
 @pytest.mark.asyncio

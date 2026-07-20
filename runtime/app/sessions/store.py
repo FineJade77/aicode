@@ -242,6 +242,10 @@ class SessionStore:
         self._schema_ready = False
         self._write_queue: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
         self._writer_task: asyncio.Task[None] | None = None
+        self._event_writes_enqueued = 0
+        self._event_writes_written = 0
+        self._event_writes_dropped = 0
+        self._event_writes_failed = 0
 
     def _touch(self, session: Session) -> None:
         """把 session 标记为最近使用，并在超出缓存上限时驱逐最久未用的可驱逐 session。
@@ -363,6 +367,17 @@ class SessionStore:
                 (session.updated_at.isoformat(), session.session_id),
             )
 
+    def event_writer_status(self) -> dict[str, Any]:
+        return {
+            "queue_size": self._write_queue.qsize() if self._write_queue is not None else 0,
+            "queue_max_size": EVENT_WRITE_QUEUE_MAXSIZE,
+            "writer_running": self._writer_task is not None and not self._writer_task.done(),
+            "enqueued": self._event_writes_enqueued,
+            "written": self._event_writes_written,
+            "dropped": self._event_writes_dropped,
+            "failed": self._event_writes_failed,
+        }
+
     def _ensure_schema(self) -> None:
         if self._schema_ready:
             return
@@ -444,9 +459,10 @@ class SessionStore:
         assert self._write_queue is not None
         try:
             self._write_queue.put_nowait((session_id, dict(event)))
+            self._event_writes_enqueued += 1
         except asyncio.QueueFull:
             # 事件落盘是尽力而为：队列打满时丢弃这条写入，不阻塞 agent loop。
-            pass
+            self._event_writes_dropped += 1
 
     def _ensure_writer(self) -> None:
         if self._writer_task is not None and not self._writer_task.done():
@@ -461,9 +477,10 @@ class SessionStore:
             session_id, event = await queue.get()
             try:
                 await asyncio.to_thread(self._write_event_sync, session_id, event)
+                self._event_writes_written += 1
             except Exception:
                 # 审计/回放数据丢失不应中断 agent loop；单条写入失败不影响后续事件。
-                pass
+                self._event_writes_failed += 1
             finally:
                 queue.task_done()
 
