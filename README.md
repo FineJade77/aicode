@@ -223,6 +223,14 @@ go run ./cli config test show
 go run ./cli config test unset
 ```
 
+也可以先用 Docker MVP 在隔离环境里跑测试。该模式默认禁网、只读挂载 workspace，且不传入 `.env`：
+
+```bash
+go run ./cli --sandbox docker test
+```
+
+默认镜像会按探测到的测试命令选择；如需自定义，可设置 `AICODE_SANDBOX_DOCKER_IMAGE`。
+
 也可以用 CLI 管理额外只读 workspace：
 
 ```bash
@@ -315,9 +323,10 @@ go run ./cli config unset pricing.openai_compatible.gpt-5.input_per_1m
 go run ./cli config set provider.type anthropic
 go run ./cli config set provider.anthropic.base_url https://api.anthropic.com
 go run ./cli config set provider.anthropic.api_key_env ANTHROPIC_API_KEY
+go run ./cli config set provider.anthropic.timeout_seconds 120
 ```
 
-`models.planner` / `models.coder` 已废弃，仅为兼容旧配置保留读取，Runtime 不再使用；请改用 `models.main`。
+`models.default` / `models.planner` / `models.coder` 已废弃。CLI 会兼容读取旧配置用于迁移，但 `config list`、`config docs`、`config set` 和 Runtime 环境注入不再暴露这些键；请改用 `models.main`。
 
 成本估算只使用本地价格表，不内置也不自动更新官方价格。价格单位是 USD / 1M tokens。
 如果没有为当前 provider/model 配置价格，`estimated_cost` 会保持 `0`。

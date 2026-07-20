@@ -148,6 +148,94 @@ async def test_session_store_persists_events(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_store_expires_unresolved_approval_after_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    await session.events.put(
+        {
+            "type": "approval.requested",
+            "approval_id": "appr_1",
+            "kind": "tool",
+            "tool": "bash",
+            "tool_call_id": "tc_1",
+            "message": "等待确认",
+        }
+    )
+    await store.flush()
+
+    reloaded = SessionStore(db_path)
+    restored = reloaded.get(session.session_id)
+
+    assert restored is not None
+    events = restored.events.events_after(0)
+    assert [event["type"] for event in events] == ["approval.requested", "approval.expired", "tool.rejected"]
+    assert events[1]["approval_id"] == "appr_1"
+    assert events[1]["tool_call_id"] == "tc_1"
+    assert events[2]["tool_call_id"] == "tc_1"
+
+    reloaded_again = SessionStore(db_path)
+    restored_again = reloaded_again.get(session.session_id)
+    assert restored_again is not None
+    assert [event["type"] for event in restored_again.events.events_after(0)].count("approval.expired") == 1
+
+
+@pytest.mark.asyncio
+async def test_session_store_does_not_expire_resolved_approval_after_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    await session.events.put(
+        {
+            "type": "approval.requested",
+            "approval_id": "appr_1",
+            "kind": "tool",
+            "tool": "bash",
+            "tool_call_id": "tc_1",
+            "message": "等待确认",
+        }
+    )
+    await session.events.put({"type": "tool.output", "tool": "bash", "tool_call_id": "tc_1", "text": "ok"})
+    await store.flush()
+
+    reloaded = SessionStore(db_path)
+    restored = reloaded.get(session.session_id)
+
+    assert restored is not None
+    assert [event["type"] for event in restored.events.events_after(0)] == ["approval.requested", "tool.output"]
+
+
+@pytest.mark.asyncio
+async def test_session_store_expires_unresolved_edit_approval_after_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    await session.events.put(
+        {
+            "type": "approval.requested",
+            "approval_id": "appr_1",
+            "kind": "edit",
+            "path": "a.py",
+            "tool_call_id": "tc_edit",
+            "message": "等待确认",
+        }
+    )
+    await store.flush()
+
+    reloaded = SessionStore(db_path)
+    restored = reloaded.get(session.session_id)
+
+    assert restored is not None
+    events = restored.events.events_after(0)
+    assert [event["type"] for event in events] == ["approval.requested", "approval.expired", "edit.rejected"]
+    assert events[2]["path"] == "a.py"
+    assert events[2]["tool_call_id"] == "tc_edit"
+
+
+@pytest.mark.asyncio
 async def test_session_events_trim_retained_events() -> None:
     events = SessionEvents(max_events=3)
     for index in range(5):

@@ -3,9 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +37,15 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	options, commandArgs, err := parseGlobalArgs(args)
+	if err != nil {
+		return err
+	}
+	if options.Sandbox != "" {
+		return runSandboxCommand(options.Sandbox, commandArgs)
+	}
+	args = commandArgs
 
 	if len(args) == 0 {
 		printHelp()
@@ -87,6 +99,7 @@ func printHelp() {
   aicode explain src/foo.ts
   aicode diff
   aicode test
+  aicode --sandbox docker test
   aicode sessions
   aicode resume --last
   aicode resume --last "继续刚才的任务"
@@ -104,6 +117,7 @@ func printHelp() {
   aicode config set models.reviewer gpt-5
   aicode config set models.main gpt-5
   aicode config set provider.type anthropic
+  aicode config set provider.anthropic.timeout_seconds 120
   aicode config unset models.reviewer
   aicode config protected add secrets/local/**
   aicode config protected list
@@ -126,6 +140,195 @@ func printHelp() {
   aicode daemon start
   aicode daemon stop
   aicode daemon status`)
+}
+
+type globalOptions struct {
+	Sandbox string
+}
+
+func parseGlobalArgs(args []string) (globalOptions, []string, error) {
+	options := globalOptions{}
+	for len(args) > 0 {
+		switch args[0] {
+		case "--sandbox":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				return options, nil, fmt.Errorf("用法: aicode --sandbox docker test")
+			}
+			options.Sandbox = args[1]
+			args = args[2:]
+		default:
+			return options, args, nil
+		}
+	}
+	return options, args, nil
+}
+
+func runSandboxCommand(sandbox string, args []string) error {
+	if sandbox != "docker" {
+		return fmt.Errorf("暂只支持: aicode --sandbox docker test")
+	}
+	if len(args) != 1 || args[0] != "test" {
+		return fmt.Errorf("用法: aicode --sandbox docker test")
+	}
+	return runDockerSandboxTest()
+}
+
+func runDockerSandboxTest() error {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return fmt.Errorf("docker 未安装或不在 PATH: %w", err)
+	}
+
+	root, err := workspace.Detect()
+	if err != nil {
+		return err
+	}
+	command, err := detectSandboxTestCommand(root.Path)
+	if err != nil {
+		return err
+	}
+	image := dockerSandboxImage(command)
+	fmt.Printf("Sandbox: docker\nWorkspace: %s\nImage: %s\nCommand: %s\n", root.Path, image, command)
+
+	cmd := exec.Command("docker", dockerSandboxArgs(root.Path, image, command)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func detectSandboxTestCommand(workspacePath string) (string, error) {
+	_, command, configured, err := projectconfig.GetTestCommand(workspacePath)
+	if err != nil {
+		return "", err
+	}
+	if configured && command != "auto" {
+		return command, nil
+	}
+
+	if fileExists(workspacePath, "go.mod") {
+		return "go test ./...", nil
+	}
+	if fileExists(workspacePath, "go.work") {
+		modules, err := parseGoWorkModules(workspacePath)
+		if err != nil {
+			return "", err
+		}
+		if len(modules) > 0 {
+			packages := make([]string, 0, len(modules))
+			for _, module := range modules {
+				packages = append(packages, module+"/...")
+			}
+			return "go test " + strings.Join(packages, " "), nil
+		}
+	}
+	if fileExists(workspacePath, "pyproject.toml") || fileExists(workspacePath, "pytest.ini") || fileExists(workspacePath, "setup.cfg") {
+		return "python3 -m pytest", nil
+	}
+	if fileExists(workspacePath, "package.json") {
+		if command := detectPackageTestCommand(workspacePath); command != "" {
+			return command, nil
+		}
+	}
+	return "", fmt.Errorf("未能自动探测测试命令，请先运行 aicode config test set <command...>")
+}
+
+func detectPackageTestCommand(workspacePath string) string {
+	content, err := os.ReadFile(filepath.Join(workspacePath, "package.json"))
+	if err == nil {
+		var payload map[string]any
+		if json.Unmarshal(content, &payload) == nil {
+			if scripts, ok := payload["scripts"].(map[string]any); ok {
+				if _, ok := scripts["test"]; !ok {
+					return ""
+				}
+			}
+		}
+	}
+	if fileExists(workspacePath, "pnpm-lock.yaml") {
+		return "pnpm test"
+	}
+	if fileExists(workspacePath, "yarn.lock") {
+		return "yarn test"
+	}
+	return "npm test"
+}
+
+func parseGoWorkModules(workspacePath string) ([]string, error) {
+	content, err := os.ReadFile(filepath.Join(workspacePath, "go.work"))
+	if err != nil {
+		return nil, err
+	}
+	modules := []string{}
+	inUseBlock := false
+	for _, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if line == "use (" {
+			inUseBlock = true
+			continue
+		}
+		if inUseBlock && line == ")" {
+			inUseBlock = false
+			continue
+		}
+		if strings.HasPrefix(line, "use ") {
+			module := strings.TrimSpace(strings.TrimPrefix(line, "use "))
+			if strings.HasPrefix(module, "./") {
+				modules = append(modules, module)
+			}
+			continue
+		}
+		if inUseBlock && strings.HasPrefix(line, "./") {
+			modules = append(modules, line)
+		}
+	}
+	return modules, nil
+}
+
+func dockerSandboxImage(command string) string {
+	if image := strings.TrimSpace(os.Getenv("AICODE_SANDBOX_DOCKER_IMAGE")); image != "" {
+		return image
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return "ubuntu:24.04"
+	}
+	switch fields[0] {
+	case "go":
+		return "golang:1.22"
+	case "node", "npm", "pnpm", "yarn":
+		return "node:22"
+	case "python", "python3", "pytest":
+		return "python:3.12-slim"
+	default:
+		return "ubuntu:24.04"
+	}
+}
+
+func dockerSandboxArgs(workspacePath string, image string, command string) []string {
+	return []string{
+		"run",
+		"--rm",
+		"--network",
+		"none",
+		"--env",
+		"AICODE_SANDBOX=1",
+		"--mount",
+		"type=bind,src=" + workspacePath + ",dst=/workspace,readonly",
+		"-w",
+		"/workspace",
+		image,
+		"sh",
+		"-lc",
+		command,
+	}
+}
+
+func fileExists(basePath string, name string) bool {
+	_, err := os.Stat(filepath.Join(basePath, name))
+	return err == nil
 }
 
 func runDaemonCommand(cfg config.Config, args []string) error {

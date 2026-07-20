@@ -222,6 +222,9 @@ class Session:
         approval.decision_event.set()
         return True
 
+    def expire_approval(self, approval_id: str) -> bool:
+        return self.resolve_approval(approval_id, accepted=False)
+
     async def wait_for_approval(self, approval_id: str, timeout_seconds: float = 300.0) -> bool | None:
         approval = self.approvals.get(approval_id)
         if approval is None:
@@ -229,7 +232,8 @@ class Session:
         try:
             await asyncio.wait_for(approval.decision_event.wait(), timeout=timeout_seconds)
         except TimeoutError:
-            return None
+            self.expire_approval(approval_id)
+            return False
         return approval.accepted
 
 
@@ -307,7 +311,7 @@ class SessionStore:
                 return None
             session = self._session_from_row(row)
             session.messages = self._load_messages(conn, session.session_id)
-            self._attach_events(session, self._load_events(conn, session.session_id))
+            self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
             self._touch(session)
             return session
 
@@ -322,7 +326,7 @@ class SessionStore:
                 session = self._sessions.get(row["session_id"])
                 if session is None:
                     session = self._session_from_row(row)
-                    self._attach_events(session, self._load_events(conn, session.session_id))
+                    self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
                 session.messages = self._load_messages(conn, session.session_id)
                 self._touch(session)
                 sessions.append(session.to_dict())
@@ -343,7 +347,7 @@ class SessionStore:
                 return None
             session = self._session_from_row(row)
             session.messages = self._load_messages(conn, session.session_id)
-            self._attach_events(session, self._load_events(conn, session.session_id))
+            self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
             self._touch(session)
             self._last_session_id = session.session_id
             return session
@@ -487,21 +491,26 @@ class SessionStore:
 
     def _write_event_sync(self, session_id: str, event: dict[str, Any]) -> None:
         self._ensure_schema()
-        sequence = int(event.get("event_id") or 0)
         with self._connect() as conn:
-            conn.execute(
-                """
-                insert or ignore into events (session_id, sequence, payload, created_at)
-                values (?, ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    sequence,
-                    json.dumps(event, ensure_ascii=False),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
+            self._write_event_with_connection(conn, session_id, event)
             self._prune_events(conn, session_id)
+
+    def _write_event_with_connection(self, conn: sqlite3.Connection, session_id: str, event: dict[str, Any]) -> None:
+        sequence = int(event.get("event_id") or 0)
+        if sequence <= 0:
+            return
+        conn.execute(
+            """
+            insert or ignore into events (session_id, sequence, payload, created_at)
+            values (?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                sequence,
+                json.dumps(event, ensure_ascii=False),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
 
     async def flush(self) -> None:
         """等待后台写入队列中的所有事件被处理完（成功或失败）。
@@ -550,6 +559,78 @@ class SessionStore:
             except json.JSONDecodeError:
                 continue
         return messages
+
+    def _load_events_with_recovered_approvals(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+        events = self._load_events(conn, session_id)
+        recovered = self._approval_recovery_events(events)
+        for event in recovered:
+            self._write_event_with_connection(conn, session_id, event)
+        return events + recovered
+
+    def _approval_recovery_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        pending: dict[str, dict[str, Any]] = {}
+        by_tool_call_id: dict[str, set[str]] = {}
+        for event in events:
+            event_type = str(event.get("type") or "")
+            approval_id = str(event.get("approval_id") or "")
+            tool_call_id = str(event.get("tool_call_id") or "")
+            if event_type == "approval.requested" and approval_id:
+                pending[approval_id] = event
+                if tool_call_id:
+                    by_tool_call_id.setdefault(tool_call_id, set()).add(approval_id)
+                continue
+            if event_type == "approval.expired" and approval_id:
+                pending.pop(approval_id, None)
+                continue
+            if tool_call_id and event_type in {"tool.output", "tool.error", "tool.rejected", "edit.applied", "edit.rejected"}:
+                for resolved_id in by_tool_call_id.get(tool_call_id, set()):
+                    pending.pop(resolved_id, None)
+
+        next_event_id = max((int(event.get("event_id") or 0) for event in events), default=0) + 1
+        recovered: list[dict[str, Any]] = []
+        for approval in pending.values():
+            approval_id = str(approval.get("approval_id") or "")
+            kind = str(approval.get("kind") or "tool")
+            tool_call_id = str(approval.get("tool_call_id") or "")
+            message = "待确认操作已因 daemon 重启或会话恢复而过期，已按拒绝处理。"
+            expired: dict[str, Any] = {
+                "type": "approval.expired",
+                "approval_id": approval_id,
+                "kind": kind,
+                "message": message,
+                "event_id": next_event_id,
+            }
+            if tool_call_id:
+                expired["tool_call_id"] = tool_call_id
+            recovered.append(expired)
+            next_event_id += 1
+
+            rejected = self._approval_rejected_event(approval, message, next_event_id)
+            if rejected is not None:
+                recovered.append(rejected)
+                next_event_id += 1
+        return recovered
+
+    def _approval_rejected_event(self, approval: dict[str, Any], message: str, event_id: int) -> dict[str, Any] | None:
+        kind = str(approval.get("kind") or "tool")
+        tool_call_id = str(approval.get("tool_call_id") or "")
+        if kind == "edit":
+            event: dict[str, Any] = {
+                "type": "edit.rejected",
+                "path": approval.get("path"),
+                "reason": message,
+                "event_id": event_id,
+            }
+            if tool_call_id:
+                event["tool_call_id"] = tool_call_id
+            return event
+        tool = str(approval.get("tool") or "")
+        if not tool:
+            return None
+        event = {"type": "tool.rejected", "tool": tool, "error": message, "event_id": event_id}
+        if tool_call_id:
+            event["tool_call_id"] = tool_call_id
+        return event
 
     def _load_events(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
         rows = conn.execute(

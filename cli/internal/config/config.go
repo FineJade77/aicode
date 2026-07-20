@@ -45,8 +45,9 @@ type ProviderConfig struct {
 }
 
 type AnthropicConfig struct {
-	BaseURL   string
-	APIKeyEnv string
+	BaseURL        string
+	APIKeyEnv      string
+	TimeoutSeconds float64
 }
 
 type OpenAICompatibleConfig struct {
@@ -94,8 +95,9 @@ func Default() Config {
 			Type: "openai_compatible",
 		},
 		Anthropic: AnthropicConfig{
-			BaseURL:   "https://api.anthropic.com",
-			APIKeyEnv: "ANTHROPIC_API_KEY",
+			BaseURL:        "https://api.anthropic.com",
+			APIKeyEnv:      "ANTHROPIC_API_KEY",
+			TimeoutSeconds: 120.0,
 		},
 		OpenAICompatible: OpenAICompatibleConfig{
 			BaseURL:        "https://api.openai.com/v1",
@@ -169,6 +171,12 @@ func Load() (Config, error) {
 			cfg.Anthropic.BaseURL = value
 		case "provider.anthropic.api_key_env":
 			cfg.Anthropic.APIKeyEnv = value
+		case "provider.anthropic.timeout_seconds":
+			timeout, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.anthropic.timeout_seconds: %w", err)
+			}
+			cfg.Anthropic.TimeoutSeconds = timeout
 		case "provider.openai_compatible.base_url":
 			cfg.OpenAICompatible.BaseURL = value
 		case "provider.openai_compatible.api_key_env":
@@ -226,6 +234,12 @@ func applyEnvOverrides(cfg *Config) {
 	if apiKeyEnv := os.Getenv("AICODE_ANTHROPIC_API_KEY_ENV"); apiKeyEnv != "" {
 		cfg.Anthropic.APIKeyEnv = apiKeyEnv
 	}
+	if timeout := os.Getenv("AICODE_ANTHROPIC_TIMEOUT_SECONDS"); timeout != "" {
+		parsed, err := strconv.ParseFloat(timeout, 64)
+		if err == nil {
+			cfg.Anthropic.TimeoutSeconds = parsed
+		}
+	}
 	if baseURL := os.Getenv("AICODE_OPENAI_BASE_URL"); baseURL != "" {
 		cfg.OpenAICompatible.BaseURL = baseURL
 	}
@@ -244,18 +258,16 @@ func applyEnvOverrides(cfg *Config) {
 }
 
 func (cfg Config) RuntimeEnv() []string {
-	env := os.Environ()
+	env := filteredRuntimeBaseEnv(os.Environ())
 	runtime := []string{
 		"AICODE_DEFAULT_LANGUAGE=" + cfg.UI.Language,
-		"AICODE_MODEL_DEFAULT=" + cfg.Models.Default,
 		"AICODE_MODEL_MAIN=" + cfg.Models.Main,
-		"AICODE_MODEL_PLANNER=" + cfg.Models.Planner,
-		"AICODE_MODEL_CODER=" + cfg.Models.Coder,
 		"AICODE_MODEL_REVIEWER=" + cfg.Models.Reviewer,
 		"AICODE_MODEL_SUMMARIZER=" + cfg.Models.Summarizer,
 		"AICODE_PROVIDER_TYPE=" + cfg.Provider.Type,
 		"AICODE_ANTHROPIC_BASE_URL=" + cfg.Anthropic.BaseURL,
 		"AICODE_ANTHROPIC_API_KEY_ENV=" + cfg.Anthropic.APIKeyEnv,
+		"AICODE_ANTHROPIC_TIMEOUT_SECONDS=" + strconv.FormatFloat(cfg.Anthropic.TimeoutSeconds, 'f', -1, 64),
 		"AICODE_OPENAI_BASE_URL=" + cfg.OpenAICompatible.BaseURL,
 		"AICODE_OPENAI_API_KEY_ENV=" + cfg.OpenAICompatible.APIKeyEnv,
 		"AICODE_OPENAI_TIMEOUT_SECONDS=" + strconv.FormatFloat(cfg.OpenAICompatible.TimeoutSeconds, 'f', -1, 64),
@@ -268,21 +280,48 @@ func (cfg Config) RuntimeEnv() []string {
 	return append(env, runtime...)
 }
 
+func filteredRuntimeBaseEnv(env []string) []string {
+	managed := map[string]bool{
+		"AICODE_DEFAULT_LANGUAGE":          true,
+		"AICODE_MODEL_DEFAULT":             true,
+		"AICODE_MODEL_MAIN":                true,
+		"AICODE_MODEL_PLANNER":             true,
+		"AICODE_MODEL_CODER":               true,
+		"AICODE_MODEL_REVIEWER":            true,
+		"AICODE_MODEL_SUMMARIZER":          true,
+		"AICODE_PROVIDER_TYPE":             true,
+		"AICODE_ANTHROPIC_BASE_URL":        true,
+		"AICODE_ANTHROPIC_API_KEY_ENV":     true,
+		"AICODE_ANTHROPIC_TIMEOUT_SECONDS": true,
+		"AICODE_OPENAI_BASE_URL":           true,
+		"AICODE_OPENAI_API_KEY_ENV":        true,
+		"AICODE_OPENAI_TIMEOUT_SECONDS":    true,
+		"AICODE_MODEL_PRICES_JSON":         true,
+	}
+	filtered := make([]string, 0, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok || managed[key] {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 func (cfg Config) Entries() []Entry {
 	entries := []Entry{
 		{"ui.language", cfg.UI.Language},
 		{"ui.style", cfg.UI.Style},
 		{"runtime.url", cfg.Runtime.URL},
 		{"runtime.port", strconv.Itoa(cfg.Runtime.Port)},
-		{"models.default", cfg.Models.Default},
 		{"models.main", cfg.Models.Main},
-		{"models.planner", cfg.Models.Planner},
-		{"models.coder", cfg.Models.Coder},
 		{"models.reviewer", cfg.Models.Reviewer},
 		{"models.summarizer", cfg.Models.Summarizer},
 		{"provider.type", cfg.Provider.Type},
 		{"provider.anthropic.base_url", cfg.Anthropic.BaseURL},
 		{"provider.anthropic.api_key_env", cfg.Anthropic.APIKeyEnv},
+		{"provider.anthropic.timeout_seconds", formatFloat(cfg.Anthropic.TimeoutSeconds)},
 		{"provider.openai_compatible.base_url", cfg.OpenAICompatible.BaseURL},
 		{"provider.openai_compatible.api_key_env", cfg.OpenAICompatible.APIKeyEnv},
 		{"provider.openai_compatible.timeout_seconds", formatFloat(cfg.OpenAICompatible.TimeoutSeconds)},
@@ -335,28 +374,10 @@ func KeyDocs() []KeyDoc {
 			Description: "CLI 自动启动 Runtime daemon 时使用的端口。",
 		},
 		{
-			Key:         "models.default",
-			Default:     defaults.Models.Default,
-			Env:         "AICODE_MODEL_DEFAULT",
-			Description: "未命中专用路由时使用的模型。",
-		},
-		{
 			Key:         "models.main",
 			Default:     defaults.Models.Main,
 			Env:         "AICODE_MODEL_MAIN",
 			Description: "v2 agent loop 主模型（唯一路由）。",
-		},
-		{
-			Key:         "models.planner",
-			Default:     defaults.Models.Planner,
-			Env:         "AICODE_MODEL_PLANNER",
-			Description: "已废弃，由 models.main 取代；Runtime 已忽略此配置。",
-		},
-		{
-			Key:         "models.coder",
-			Default:     defaults.Models.Coder,
-			Env:         "AICODE_MODEL_CODER",
-			Description: "已废弃，由 models.main 取代；Runtime 已忽略此配置。",
 		},
 		{
 			Key:         "models.reviewer",
@@ -387,6 +408,12 @@ func KeyDocs() []KeyDoc {
 			Default:     defaults.Anthropic.APIKeyEnv,
 			Env:         "AICODE_ANTHROPIC_API_KEY_ENV",
 			Description: "Runtime 从哪个环境变量读取 Anthropic provider API key。",
+		},
+		{
+			Key:         "provider.anthropic.timeout_seconds",
+			Default:     formatFloat(defaults.Anthropic.TimeoutSeconds),
+			Env:         "AICODE_ANTHROPIC_TIMEOUT_SECONDS",
+			Description: "Anthropic provider 请求超时时间，单位秒。",
 		},
 		{
 			Key:         "provider.openai_compatible.base_url",
@@ -521,21 +548,19 @@ func configKeyTarget(key string) (string, string, error) {
 	}
 
 	supported := map[string][2]string{
-		"ui.language":                            {"ui", "language"},
-		"ui.style":                               {"ui", "style"},
-		"runtime.url":                            {"runtime", "url"},
-		"runtime.port":                           {"runtime", "port"},
-		"models.default":                         {"models", "default"},
-		"models.main":                            {"models", "main"},
-		"models.planner":                         {"models", "planner"},
-		"models.coder":                           {"models", "coder"},
-		"models.reviewer":                        {"models", "reviewer"},
-		"models.summarizer":                      {"models", "summarizer"},
-		"provider.type":                          {"provider", "type"},
-		"provider.anthropic.base_url":            {"provider.anthropic", "base_url"},
-		"provider.anthropic.api_key_env":         {"provider.anthropic", "api_key_env"},
-		"provider.openai_compatible.base_url":    {"provider.openai_compatible", "base_url"},
-		"provider.openai_compatible.api_key_env": {"provider.openai_compatible", "api_key_env"},
+		"ui.language":                                {"ui", "language"},
+		"ui.style":                                   {"ui", "style"},
+		"runtime.url":                                {"runtime", "url"},
+		"runtime.port":                               {"runtime", "port"},
+		"models.main":                                {"models", "main"},
+		"models.reviewer":                            {"models", "reviewer"},
+		"models.summarizer":                          {"models", "summarizer"},
+		"provider.type":                              {"provider", "type"},
+		"provider.anthropic.base_url":                {"provider.anthropic", "base_url"},
+		"provider.anthropic.api_key_env":             {"provider.anthropic", "api_key_env"},
+		"provider.anthropic.timeout_seconds":         {"provider.anthropic", "timeout_seconds"},
+		"provider.openai_compatible.base_url":        {"provider.openai_compatible", "base_url"},
+		"provider.openai_compatible.api_key_env":     {"provider.openai_compatible", "api_key_env"},
 		"provider.openai_compatible.timeout_seconds": {"provider.openai_compatible", "timeout_seconds"},
 	}
 	target, ok := supported[key]
@@ -557,7 +582,7 @@ func formatConfigLine(section string, key string, value string) (string, error) 
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
-	if (section == "provider.openai_compatible" && key == "timeout_seconds") ||
+	if ((section == "provider.openai_compatible" || section == "provider.anthropic") && key == "timeout_seconds") ||
 		strings.HasPrefix(section, "pricing.") {
 		if _, err := strconv.ParseFloat(value, 64); err != nil {
 			return "", fmt.Errorf("%s.%s 必须是数字: %w", section, key, err)
@@ -792,10 +817,7 @@ url = "http://127.0.0.1:8765"
 port = 8765
 
 [models]
-default = "gpt-5"
 main = "gpt-5"
-planner = "gpt-5-high"
-coder = "gpt-5"
 reviewer = "gpt-5"
 summarizer = "gpt-5-mini"
 
@@ -805,6 +827,7 @@ type = "openai_compatible"
 [provider.anthropic]
 base_url = "https://api.anthropic.com"
 api_key_env = "ANTHROPIC_API_KEY"
+timeout_seconds = 120
 
 [provider.openai_compatible]
 base_url = "https://api.openai.com/v1"

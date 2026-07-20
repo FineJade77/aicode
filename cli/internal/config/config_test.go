@@ -31,6 +31,11 @@ base_url = "https://api.example.com/v1"
 api_key_env = "EXAMPLE_API_KEY"
 timeout_seconds = 12.5
 
+[provider.anthropic]
+base_url = "https://anthropic.example.com"
+api_key_env = "ANTHROPIC_TEST_KEY"
+timeout_seconds = 42
+
 [pricing.openai_compatible.gpt-5]
 input_per_1m = 1.25
 output_per_1m = 10
@@ -59,6 +64,12 @@ output_per_1m = 10
 	if cfg.OpenAICompatible.TimeoutSeconds != 12.5 {
 		t.Fatalf("timeout = %v", cfg.OpenAICompatible.TimeoutSeconds)
 	}
+	if cfg.Anthropic.BaseURL != "https://anthropic.example.com" || cfg.Anthropic.APIKeyEnv != "ANTHROPIC_TEST_KEY" {
+		t.Fatalf("anthropic = %#v", cfg.Anthropic)
+	}
+	if cfg.Anthropic.TimeoutSeconds != 42 {
+		t.Fatalf("anthropic timeout = %v", cfg.Anthropic.TimeoutSeconds)
+	}
 	price := cfg.Pricing["openai_compatible/gpt-5"]
 	if price.InputPer1M != 1.25 || price.OutputPer1M != 10 {
 		t.Fatalf("price = %#v", price)
@@ -83,6 +94,9 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := SetValue("provider.openai_compatible.timeout_seconds", "7.5"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.anthropic.timeout_seconds", "31.5"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := SetValue("pricing.openai_compatible.gpt-5.input_per_1m", "1.25"); err != nil {
@@ -112,6 +126,9 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	if cfg.OpenAICompatible.TimeoutSeconds != 7.5 {
 		t.Fatalf("timeout = %v", cfg.OpenAICompatible.TimeoutSeconds)
 	}
+	if cfg.Anthropic.TimeoutSeconds != 31.5 {
+		t.Fatalf("anthropic timeout = %v", cfg.Anthropic.TimeoutSeconds)
+	}
 	price := cfg.Pricing["openai_compatible/gpt-5"]
 	if price.InputPer1M != 1.25 || price.OutputPer1M != 10 {
 		t.Fatalf("price = %#v", price)
@@ -122,6 +139,9 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "timeout_seconds = 7.5") {
+		t.Fatalf("config content = %s", content)
+	}
+	if !strings.Contains(string(content), "[provider.anthropic]") || !strings.Contains(string(content), "timeout_seconds = 31.5") {
 		t.Fatalf("config content = %s", content)
 	}
 	if !strings.Contains(string(content), "port = 9999") {
@@ -235,11 +255,16 @@ func TestUnsetValueNoopWhenMissing(t *testing.T) {
 }
 
 func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
+	t.Setenv("AICODE_MODEL_DEFAULT", "legacy-default")
+	t.Setenv("AICODE_MODEL_PLANNER", "legacy-planner")
+	t.Setenv("AICODE_MODEL_CODER", "legacy-coder")
+
 	cfg := Default()
 	cfg.Models.Reviewer = "review-model"
 	cfg.OpenAICompatible.BaseURL = "https://api.example.com/v1"
 	cfg.OpenAICompatible.APIKeyEnv = "EXAMPLE_API_KEY"
 	cfg.OpenAICompatible.TimeoutSeconds = 17.5
+	cfg.Anthropic.TimeoutSeconds = 88
 	cfg.Pricing["openai_compatible/gpt-5"] = ModelPriceConfig{InputPer1M: 1.25, OutputPer1M: 10}
 
 	env := envMap(cfg.RuntimeEnv())
@@ -256,11 +281,19 @@ func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	if env["AICODE_OPENAI_TIMEOUT_SECONDS"] != "17.5" {
 		t.Fatalf("AICODE_OPENAI_TIMEOUT_SECONDS = %q", env["AICODE_OPENAI_TIMEOUT_SECONDS"])
 	}
+	if env["AICODE_ANTHROPIC_TIMEOUT_SECONDS"] != "88" {
+		t.Fatalf("AICODE_ANTHROPIC_TIMEOUT_SECONDS = %q", env["AICODE_ANTHROPIC_TIMEOUT_SECONDS"])
+	}
 	if !strings.Contains(env["AICODE_MODEL_PRICES_JSON"], `"openai_compatible/gpt-5"`) {
 		t.Fatalf("AICODE_MODEL_PRICES_JSON = %q", env["AICODE_MODEL_PRICES_JSON"])
 	}
 	if !strings.Contains(env["AICODE_MODEL_PRICES_JSON"], `"input_per_1m":1.25`) {
 		t.Fatalf("AICODE_MODEL_PRICES_JSON = %q", env["AICODE_MODEL_PRICES_JSON"])
+	}
+	for _, key := range []string{"AICODE_MODEL_DEFAULT", "AICODE_MODEL_PLANNER", "AICODE_MODEL_CODER"} {
+		if containsEnvKey(cfg.RuntimeEnv(), key) {
+			t.Fatalf("legacy key leaked into runtime env: %s", key)
+		}
 	}
 }
 
@@ -283,6 +316,9 @@ func TestEntriesAndGetValueIncludePricing(t *testing.T) {
 
 	entries := cfg.Entries()
 	assertEntryOrder(t, entries, "pricing.openai_compatible.gpt-5.input_per_1m", "pricing.stub.stub.input_per_1m")
+	if _, ok := cfg.GetValue("models.coder"); ok {
+		t.Fatal("legacy models.coder should not appear in config entries")
+	}
 }
 
 func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
@@ -304,6 +340,12 @@ func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
 	if _, ok := findDoc(docs, "runtime.port"); !ok {
 		t.Fatal("missing runtime.port")
 	}
+	if _, ok := findDoc(docs, "provider.anthropic.timeout_seconds"); !ok {
+		t.Fatal("missing anthropic timeout doc")
+	}
+	if _, ok := findDoc(docs, "models.coder"); ok {
+		t.Fatal("legacy models.coder should not appear in docs")
+	}
 }
 
 func TestModelsMainAndProviderTypeKeys(t *testing.T) {
@@ -318,6 +360,9 @@ func TestModelsMainAndProviderTypeKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := SetValue("provider.anthropic.api_key_env", "MY_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.anthropic.timeout_seconds", "33"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -336,6 +381,9 @@ func TestModelsMainAndProviderTypeKeys(t *testing.T) {
 	if env["AICODE_ANTHROPIC_API_KEY_ENV"] != "MY_KEY" {
 		t.Fatalf("AICODE_ANTHROPIC_API_KEY_ENV = %q", env["AICODE_ANTHROPIC_API_KEY_ENV"])
 	}
+	if env["AICODE_ANTHROPIC_TIMEOUT_SECONDS"] != "33" {
+		t.Fatalf("AICODE_ANTHROPIC_TIMEOUT_SECONDS = %q", env["AICODE_ANTHROPIC_TIMEOUT_SECONDS"])
+	}
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -352,6 +400,7 @@ func clearConfigEnv(t *testing.T) {
 		"AICODE_PROVIDER_TYPE",
 		"AICODE_ANTHROPIC_BASE_URL",
 		"AICODE_ANTHROPIC_API_KEY_ENV",
+		"AICODE_ANTHROPIC_TIMEOUT_SECONDS",
 		"AICODE_OPENAI_BASE_URL",
 		"AICODE_OPENAI_API_KEY_ENV",
 		"AICODE_OPENAI_TIMEOUT_SECONDS",
@@ -396,4 +445,14 @@ func envMap(env []string) map[string]string {
 		}
 	}
 	return values
+}
+
+func containsEnvKey(env []string, target string) bool {
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && key == target {
+			return true
+		}
+	}
+	return false
 }

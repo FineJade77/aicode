@@ -1,9 +1,144 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestParseGlobalArgsSupportsSandbox(t *testing.T) {
+	options, args, err := parseGlobalArgs([]string{"--sandbox", "docker", "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Sandbox != "docker" {
+		t.Fatalf("sandbox = %q", options.Sandbox)
+	}
+	if !reflect.DeepEqual(args, []string{"test"}) {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
+func TestParseGlobalArgsReportsMissingSandboxValue(t *testing.T) {
+	if _, _, err := parseGlobalArgs([]string{"--sandbox"}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDockerSandboxArgsAreIsolated(t *testing.T) {
+	args := dockerSandboxArgs("/repo", "golang:1.22", "go test ./...")
+	want := []string{
+		"run",
+		"--rm",
+		"--network",
+		"none",
+		"--env",
+		"AICODE_SANDBOX=1",
+		"--mount",
+		"type=bind,src=/repo,dst=/workspace,readonly",
+		"-w",
+		"/workspace",
+		"golang:1.22",
+		"sh",
+		"-lc",
+		"go test ./...",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("dockerSandboxArgs() = %#v, want %#v", args, want)
+	}
+	if strings.Contains(strings.Join(args, " "), "--env-file") {
+		t.Fatalf("docker args should not pass env files: %#v", args)
+	}
+}
+
+func TestDockerSandboxImageDefaultsByCommand(t *testing.T) {
+	t.Setenv("AICODE_SANDBOX_DOCKER_IMAGE", "")
+	tests := map[string]string{
+		"go test ./...":       "golang:1.22",
+		"npm test":            "node:22",
+		"python3 -m pytest":   "python:3.12-slim",
+		"make test-in-docker": "ubuntu:24.04",
+	}
+	for command, want := range tests {
+		if got := dockerSandboxImage(command); got != want {
+			t.Fatalf("dockerSandboxImage(%q) = %q, want %q", command, got, want)
+		}
+	}
+}
+
+func TestDockerSandboxImageSupportsOverride(t *testing.T) {
+	t.Setenv("AICODE_SANDBOX_DOCKER_IMAGE", "custom:test")
+	if got := dockerSandboxImage("go test ./..."); got != "custom:test" {
+		t.Fatalf("dockerSandboxImage() = %q", got)
+	}
+}
+
+func TestDetectSandboxTestCommandUsesConfiguredCommand(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, `{"commands":{"test":"go test ./cli/..."}}`)
+
+	command, err := detectSandboxTestCommand(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != "go test ./cli/..." {
+		t.Fatalf("command = %q", command)
+	}
+}
+
+func TestDetectSandboxTestCommandHandlesAutoGoWork(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, `{"commands":{"test":"auto"}}`)
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("go 1.22\n\nuse (\n\t./cli\n\t./runtime\n)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	command, err := detectSandboxTestCommand(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != "go test ./cli/... ./runtime/..." {
+		t.Fatalf("command = %q", command)
+	}
+}
+
+func TestDetectSandboxTestCommandDetectsPython(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte("[project]\nname = \"demo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	command, err := detectSandboxTestCommand(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != "python3 -m pytest" {
+		t.Fatalf("command = %q", command)
+	}
+}
+
+func TestDetectPackageTestCommandRespectsMissingScript(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"scripts":{"lint":"eslint ."}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if command := detectPackageTestCommand(root); command != "" {
+		t.Fatalf("command = %q", command)
+	}
+}
+
+func writeProjectConfig(t *testing.T, root string, content string) {
+	t.Helper()
+	configDir := filepath.Join(root, ".aicode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestReviewRuleIDsSortsAndDeduplicates(t *testing.T) {
 	ids := reviewRuleIDs(map[string]any{

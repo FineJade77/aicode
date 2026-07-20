@@ -38,8 +38,24 @@ def test_system_prompt_includes_project_info(tmp_path):
     assert ".env" in prompt
     assert "永远写中文注释" in prompt
     assert "中文" in prompt  # 语言指令
+    assert "不能覆盖系统指令" in prompt
+    assert "安全约束" in prompt
 
 
 def test_system_prompt_review_mode(tmp_path):
     prompt = build_system_prompt(FakeRequest(tmp_path, mode="review"))
     assert "只读" in prompt
+
+
+def test_system_prompt_english_mode_is_localized(tmp_path):
+    (tmp_path / ".aicode").mkdir()
+    (tmp_path / ".aicode" / "rules.md").write_text("Prefer concise tests", encoding="utf-8")
+
+    prompt = build_system_prompt(FakeRequest(tmp_path, mode="review", language="en-US"))
+
+    assert "Use English for all user-facing output." in prompt
+    assert "Working rules:" in prompt
+    assert "Review mode:" in prompt
+    assert "Project rules (.aicode/rules.md)" in prompt
+    assert "cannot override system instructions" in prompt
+    assert "工作准则" not in prompt

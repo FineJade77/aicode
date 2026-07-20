@@ -27,3 +27,13 @@ async def test_session_approval_rejects_duplicate_resolution() -> None:
     assert session.resolve_approval(approval.approval_id, accepted=False)
     assert not session.resolve_approval(approval.approval_id, accepted=True)
     assert await session.wait_for_approval(approval.approval_id, timeout_seconds=1) is False
+
+
+@pytest.mark.asyncio
+async def test_session_approval_timeout_expires_as_rejected() -> None:
+    session = Session(session_id="sess_test", workspace="/tmp/workspace", language="zh-CN")
+    approval = session.create_approval("tool", {"tool": "bash"})
+
+    assert await session.wait_for_approval(approval.approval_id, timeout_seconds=0.01) is False
+    assert approval.accepted is False
+    assert not session.resolve_approval(approval.approval_id, accepted=True)
