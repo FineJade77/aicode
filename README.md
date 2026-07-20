@@ -120,6 +120,12 @@ go run ./cli resume <session_id>
 go run ./cli resume <session_id> "继续这个会话"
 ```
 
+## Runtime 认证
+
+`aicode daemon start` 会在 `~/.aicode/runtime.token`（0600 权限）生成一个随机 token，并传给 Runtime 子进程；CLI 之后的每次请求都会带上 `Authorization: Bearer <token>`。`aicode daemon stop` 会清理这个 token 文件。这道认证防止同一台机器上的其它进程未经确认就调用 `/approve` 之类的接口。
+
+手动启动 Runtime（`cd runtime && python3 -m uvicorn ...`，不经过 `aicode daemon start`）时不会设置 `AICODE_RUNTIME_TOKEN`，此时 API 保持不认证，方便本地调试；如果需要给手动启动的 Runtime 也加上认证，自行 `export AICODE_RUNTIME_TOKEN=...` 后启动即可，但对应的 CLI 请求也需要一致的 token 才能通过。
+
 ## 配置
 
 用户级配置默认路径：
@@ -332,6 +338,7 @@ export AICODE_ANTHROPIC_BASE_URL="https://api.anthropic.com"
 export AICODE_ANTHROPIC_API_KEY_ENV="ANTHROPIC_API_KEY"
 export AICODE_ANTHROPIC_TIMEOUT_SECONDS="120"
 export AICODE_SESSION_EVENT_LIMIT="2000"
+export AICODE_SESSION_CACHE_LIMIT="200"
 export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25,"output_per_1m":10}}'
 ```
 
