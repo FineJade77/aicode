@@ -1,22 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aicode.dev/schemas/tools.schema.json",
-  "title": "aicode Tool Call",
+  "title": "aicode Tool Definition (v2)",
+  "description": "Canonical tool definition advertised to the model for native function calling. The Runtime translates this into each provider's tool format (OpenAI `tools`, Anthropic `tool_use`). Policy risk (allow/ask/deny) is decided at execution time by the Policy gate, not carried on the definition.",
   "type": "object",
-  "required": ["name", "args", "risk_level", "requires_approval"],
+  "required": ["name", "description", "input_schema"],
   "properties": {
     "name": {
+      "type": "string",
+      "enum": ["read_file", "search", "list_files", "bash", "edit_file", "review_diff"]
+    },
+    "description": {
       "type": "string"
     },
-    "args": {
-      "type": "object"
-    },
-    "risk_level": {
-      "type": "string",
-      "enum": ["low", "medium", "high"]
-    },
-    "requires_approval": {
-      "type": "boolean"
+    "input_schema": {
+      "type": "object",
+      "description": "JSON Schema for the tool's arguments object.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "object"
+        }
+      }
     }
   },
   "additionalProperties": false
