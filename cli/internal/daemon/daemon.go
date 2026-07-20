@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,32 @@ import (
 
 	"github.com/aicode-dev/aicode/cli/internal/config"
 )
+
+func tokenPath(home string) string {
+	return filepath.Join(home, "runtime.token")
+}
+
+func generateToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// Token 返回当前持久化的 Runtime 认证 token；找不到或读取失败时返回空字符串，
+// 与"未配置认证"视为同一种情况——真正的拒绝逻辑在 Runtime 侧强制执行。
+func Token() string {
+	home, err := config.Home()
+	if err != nil {
+		return ""
+	}
+	content, err := os.ReadFile(tokenPath(home))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
+}
 
 func Status(ctx context.Context, baseURL string) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/daemon/status", nil)
@@ -56,6 +84,14 @@ func Start(cfg config.Config) error {
 		return err
 	}
 
+	token, err := generateToken()
+	if err != nil {
+		return fmt.Errorf("生成认证 token 失败: %w", err)
+	}
+	if err := os.WriteFile(tokenPath(home), []byte(token), 0o600); err != nil {
+		return fmt.Errorf("写入认证 token 失败: %w", err)
+	}
+
 	logFile, err := os.OpenFile(filepath.Join(home, "runtime.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
@@ -73,7 +109,7 @@ func Start(cfg config.Config) error {
 		strconv.Itoa(cfg.Runtime.Port),
 	)
 	cmd.Dir = runtimeDir
-	cmd.Env = cfg.RuntimeEnv()
+	cmd.Env = append(cfg.RuntimeEnv(), "AICODE_RUNTIME_TOKEN="+token)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -117,6 +153,9 @@ func Stop() error {
 		}
 	}
 	if err := os.Remove(pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(tokenPath(home)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
