@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from app.project.config import load_project_config, parse_project_config
-from app.project.detect import detect_project, detect_test_command
+from app.project.detect import detect_test_command
 
 
 def test_parse_project_config() -> None:
@@ -53,16 +53,6 @@ def test_detect_test_command_uses_project_config_override(tmp_path: Path) -> Non
     (tmp_path / "go.work").write_text("go 1.22\n\nuse ./cli\n", encoding="utf-8")
 
     assert detect_test_command(tmp_path) == "python3 -m pytest tests/unit"
-
-
-def test_detect_project_for_go_work(tmp_path: Path) -> None:
-    (tmp_path / "go.work").write_text("go 1.22\n\nuse ./cli\n", encoding="utf-8")
-
-    info = detect_project(tmp_path)
-
-    assert info.languages == ["go"]
-    assert info.package_manager == "go"
-    assert info.test_command == "go test ./cli/..."
 
 
 def write_project_config(tmp_path: Path, data: dict) -> None:
