@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.project.config import WorkspaceRef
 from app.tools.base import ToolContext
+from app.tools.command import CommandResult
 from app.tools.registry import TOOL_SCHEMAS, run_tool, tool_schemas_for_mode
 
 
@@ -95,6 +96,20 @@ async def test_search_no_match(tmp_path):
     result = await run_tool("search", {"query": "zzz_not_found"}, make_context(tmp_path))
     assert result.success
     assert "没有匹配" in result.text
+
+
+@pytest.mark.asyncio
+async def test_search_reports_rg_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.tools.registry.shutil.which", lambda name: "/fake/rg")
+
+    async def fake_run_command(command, *, cwd, timeout):
+        return CommandResult(command=list(command), returncode=-9, stderr="命令超时: 30s", timed_out=True)
+
+    monkeypatch.setattr("app.tools.registry.run_command", fake_run_command)
+    result = await run_tool("search", {"query": "needle"}, make_context(tmp_path))
+
+    assert not result.success
+    assert "搜索超时" in result.error
 
 
 @pytest.mark.asyncio

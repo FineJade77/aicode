@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import asyncio
-import os
 import re
 import shutil
-import signal
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -21,12 +18,14 @@ from app.tools.base import (
     resolve_workspace_path,
     scoped_display_path,
 )
+from app.tools.command import run_command, run_shell_command
 from app.tools.file import ListFilesTool
 from app.tools.review import ReviewDiffTool
 
 MAX_READ_LINES = 500
 DEFAULT_READ_LINES = 200
 MAX_SEARCH_RESULTS = 40
+DEFAULT_SEARCH_TIMEOUT = 30
 DEFAULT_BASH_TIMEOUT = 120
 MAX_BASH_TIMEOUT = 600
 
@@ -263,24 +262,20 @@ async def _search_with_rg(
         command.extend(["--glob", glob_pattern])
     command.extend(["-e", query])
 
-    proc = await asyncio.create_subprocess_exec(
-        *command,
-        cwd=str(root),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout_bytes, stderr_bytes = await proc.communicate()
+    proc = await run_command(command, cwd=root, timeout=DEFAULT_SEARCH_TIMEOUT)
     returncode = proc.returncode if proc.returncode is not None else -1
 
     prefix = f"{workspace_name}: " if workspace_name else ""
+    if proc.timed_out:
+        raise ToolError(f"搜索超时（{DEFAULT_SEARCH_TIMEOUT}s）: {query}")
     if returncode == 1:
         return ToolResult(success=True, text=f"{prefix}没有匹配: {query}", data={"query": query, "matches": 0})
     if returncode != 0:
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        stderr_text = proc.stderr.strip()
         raise ToolError(stderr_text or "rg 执行失败")
 
     matches: list[str] = []
-    for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+    for line in proc.stdout.splitlines():
         if len(matches) >= limit:
             break
         rel_path = line.split(":", 1)[0].replace("\\", "/")
@@ -348,27 +343,18 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
     if not command:
         raise ToolError("command 不能为空")
     timeout = max(1, min(int(arguments.get("timeout") or DEFAULT_BASH_TIMEOUT), MAX_BASH_TIMEOUT))
-    process = await asyncio.create_subprocess_shell(
-        command,
-        cwd=context.workspace,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        start_new_session=True,
-    )
-    try:
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except TimeoutError:
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            process.kill()
-        await process.wait()
-        return ToolResult(success=False, error=f"命令超时（{timeout}s）: {command}", risk_level="medium", data={"command": command})
-    output = stdout.decode(errors="replace")
-    text = f"exit={process.returncode}\n{output}".rstrip()
+    result = await run_shell_command(command, cwd=context.workspace, timeout=timeout, stderr_to_stdout=True)
+    if result.timed_out:
+        return ToolResult(
+            success=False,
+            error=f"命令超时（{timeout}s）: {command}",
+            risk_level="medium",
+            data={"command": command, "exit_code": result.returncode, "timed_out": True},
+        )
+    text = f"exit={result.returncode}\n{result.stdout}".rstrip()
     return ToolResult(
-        success=process.returncode == 0,
+        success=result.returncode == 0,
         text=text,
-        error="" if process.returncode == 0 else text,
-        data={"command": command, "exit_code": process.returncode},
+        error="" if result.returncode == 0 else text,
+        data={"command": command, "exit_code": result.returncode},
     )
