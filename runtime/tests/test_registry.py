@@ -1,5 +1,7 @@
 import pytest
+from pathlib import Path
 
+from app.project.config import WorkspaceRef
 from app.tools.base import ToolContext
 from app.tools.registry import TOOL_SCHEMAS, run_tool, tool_schemas_for_mode
 
@@ -83,3 +85,99 @@ async def test_search_no_match(tmp_path):
 async def test_unknown_tool(tmp_path):
     result = await run_tool("mystery", {}, make_context(tmp_path))
     assert not result.success
+
+
+@pytest.mark.asyncio
+async def test_read_file_reads_configured_read_only_workspace(tmp_path):
+    main = tmp_path / "main"
+    api = tmp_path / "api"
+    main.mkdir()
+    (api / "src").mkdir(parents=True)
+    (api / "src" / "service.py").write_text("def helper():\n    return 'ok'\n", encoding="utf-8")
+
+    context = ToolContext(
+        workspace=main,
+        workspace_refs=[WorkspaceRef(name="api", path=str(api), mode="read_only")],
+    )
+    result = await run_tool("read_file", {"path": "src/service.py", "workspace": "api"}, context)
+
+    assert result.success
+    assert "src/service.py" in result.text
+    assert "api:" in result.text
+    assert "return 'ok'" in result.text
+
+
+@pytest.mark.asyncio
+async def test_list_files_lists_configured_read_only_workspace(tmp_path):
+    main = tmp_path / "main"
+    api = tmp_path / "api"
+    main.mkdir()
+    (api / "src").mkdir(parents=True)
+    (api / "src" / "service.py").write_text("print('ok')\n", encoding="utf-8")
+
+    context = ToolContext(
+        workspace=main,
+        workspace_refs=[WorkspaceRef(name="api", path=str(api), mode="read_only")],
+    )
+    result = await run_tool("list_files", {"workspace": "api", "max_depth": 2}, context)
+
+    assert result.success
+    assert "api:" in result.text
+    assert "src" in result.text
+    assert "service.py" in result.text
+
+
+@pytest.mark.asyncio
+async def test_search_searches_configured_read_only_workspace(tmp_path):
+    main = tmp_path / "main"
+    api = tmp_path / "api"
+    main.mkdir()
+    api.mkdir()
+    (api / "public.py").write_text("needle = 'visible'\n", encoding="utf-8")
+    (api / "secret").mkdir()
+    (api / "secret" / "token.txt").write_text("needle = 'hidden'\n", encoding="utf-8")
+
+    context = ToolContext(
+        workspace=main,
+        protected_paths=["secret/**"],
+        workspace_refs=[WorkspaceRef(name="api", path=str(api), mode="read_only")],
+    )
+    result = await run_tool("search", {"query": "needle", "workspace": "api"}, context)
+
+    assert result.success
+    assert "api:" in result.text
+    assert "public.py" in result.text
+    assert "token.txt" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_read_file_blocks_path_escape_from_configured_workspace(tmp_path):
+    main = tmp_path / "main"
+    api = tmp_path / "api"
+    main.mkdir()
+    api.mkdir()
+    (main / "secret.txt").write_text("secret\n", encoding="utf-8")
+
+    context = ToolContext(
+        workspace=main,
+        workspace_refs=[WorkspaceRef(name="api", path=str(api), mode="read_only")],
+    )
+    result = await run_tool("read_file", {"path": "../main/secret.txt", "workspace": "api"}, context)
+
+    assert not result.success
+    assert "workspace 边界" in result.error or "路径越过" in result.error
+
+
+@pytest.mark.asyncio
+async def test_unknown_workspace_rejected(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+
+    context = ToolContext(
+        workspace=main,
+        workspace_refs=[WorkspaceRef(name="api", path=str(tmp_path / "api"), mode="read_only")],
+    )
+    result = await run_tool("read_file", {"path": "x.py", "workspace": "nope"}, context)
+
+    assert not result.success
+    assert "未知 workspace" in result.error
