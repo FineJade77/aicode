@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.sessions.store import Session, store
+from app.sessions.store import Session
 
 HISTORY_TOKEN_BUDGET = 60_000
 HARD_BUDGET_FACTOR = 1.5
@@ -25,7 +25,7 @@ def load_history(session: Session) -> list[dict[str, Any]]:
 
 
 def persist_message(session: Session, message: dict[str, Any]) -> None:
-    store.append_message(session, message)
+    session.append_message(message)
 
 
 def truncate_tool_output(tool_name: str, text: str) -> str:

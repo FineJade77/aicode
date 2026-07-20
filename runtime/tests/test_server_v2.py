@@ -1,6 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
+from app.audit.logger import AuditLogger
 from app.server import main as server
 
 
@@ -11,6 +12,7 @@ async def test_approve_accept_all_sets_session_flag(tmp_path, monkeypatch):
 
     store = SessionStore(path=tmp_path / "s.sqlite")
     monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
     session = store.create(workspace=str(tmp_path), language="zh-CN")
     approval = session.create_approval("edit", {"path": "a.py"})
 

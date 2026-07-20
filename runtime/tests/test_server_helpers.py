@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from app.agent.types import AgentRuntime
+from app.audit.logger import AuditLogger
+from app.config.settings import Settings
+from app.models.router import ModelRouter
+from app.policy.engine import PolicyEngine
 from app.project.detect import detect_test_command
+from app.server import main as server
 from app.server.main import (
     MessageRequest,
     bind_message_request_to_session,
@@ -14,6 +20,8 @@ from app.server.main import (
     review_rules,
 )
 from app.sessions.store import Session
+from app.sessions.store import SessionStore
+from tests.fakes import FakeProvider, text_turn
 
 
 def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
@@ -76,6 +84,41 @@ async def test_process_session_runs_serializes_queued_messages(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_queued_run_history_does_not_include_future_message(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(server, "ensure_session_runner", lambda session: None)
+
+    fake = FakeProvider([text_turn("first done"), text_turn("second done")])
+    runtime = AgentRuntime(
+        model_router=ModelRouter(primary=fake, settings=Settings()),
+        audit=AuditLogger(path=tmp_path / "agent-audit.jsonl"),
+        policy=PolicyEngine(),
+    )
+    monkeypatch.setattr(server, "agent_runtime", runtime)
+
+    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    await server.send_message(
+        session.session_id,
+        MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN"),
+    )
+    await server.send_message(
+        session.session_id,
+        MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN"),
+    )
+
+    await process_session_runs(session)
+
+    first_user_messages = [str(message.get("content")) for message in fake.calls[0].messages if message.get("role") == "user"]
+    second_user_messages = [str(message.get("content")) for message in fake.calls[1].messages if message.get("role") == "user"]
+
+    assert first_user_messages == ["first"]
+    assert second_user_messages[-1] == "second"
+    assert "first" in second_user_messages
+
+
+@pytest.mark.asyncio
 async def test_emit_run_queued_marks_queued_run(tmp_path: Path) -> None:
     session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
     request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="zh-CN")
@@ -118,5 +161,4 @@ async def test_model_routes_endpoint_returns_route_status() -> None:
     assert "reviewer" in data["routes"]
     assert "summarizer" in data["routes"]
     assert "api_key_env" in data["openai_compatible"]
-
 

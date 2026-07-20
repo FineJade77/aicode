@@ -42,10 +42,6 @@ async def test_full_fix_flow(tmp_path):
     store = SessionStore(path=tmp_path / "s.sqlite")
     session = store.create(workspace=str(tmp_path), language="zh-CN")
 
-    # Append initial message to session so it's in history for multi-turn
-    initial_request = Request(tmp_path)
-    store.append_message(session, {"message": initial_request.message, "mode": initial_request.mode, "workspace": initial_request.workspace, "language": initial_request.language})
-
     async def approve_all_pending():
         """Background task that approves all pending edits."""
         try:
@@ -79,7 +75,6 @@ async def test_full_fix_flow(tmp_path):
 
     # 多轮记忆：再来一条消息，history 应包含上一轮内容
     fake.turns.append(text_turn("基于上一轮继续"))
-    store.append_message(session, {"message": "继续", "mode": "default", "workspace": str(tmp_path), "language": "zh-CN"})
     await run_turn_safely(session, Request(tmp_path, message="继续"), runtime)
 
     # 验证上一轮的消息出现在第二轮的模型调用中

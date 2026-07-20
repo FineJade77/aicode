@@ -5,7 +5,7 @@ from typing import Any
 
 from app.agent.history import compact_if_needed, load_history, persist_message, truncate_tool_output
 from app.agent.prompts import BUDGET_NOTE_EN, BUDGET_NOTE_ZH, VERIFY_NOTE_EN, VERIFY_NOTE_ZH, build_system_prompt
-from app.agent.turn import TurnBudget, assistant_message, tool_message, user_note
+from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.agent.utils import localized
 from app.models.provider import CompletionResult, ToolCallRequest
 from app.policy.engine import PolicyEngine
@@ -34,6 +34,10 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
     policy: PolicyEngine = runtime.policy or PolicyEngine()
     system = build_system_prompt(request)
     history = load_history(session)
+    # Persist only the run that is starting, so queued future prompts do not leak into this history.
+    current_user_message = user_message(str(request.message))
+    history.append(current_user_message)
+    persist_message(session, current_user_message)
     tools = tool_schemas_for_mode(request.mode)
     context = build_tool_context(request.workspace, request.mode, request.language)
     purpose = "reviewer" if request.mode == "review" else "main"

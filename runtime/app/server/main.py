@@ -119,7 +119,6 @@ async def send_message(session_id: str, request: MessageRequest) -> dict[str, st
     session.events.set_default_after(session.events.last_event_id())
     queued = session.enqueue_agent_run(effective_request)
     session.events.set_default_run_id(queued.run_id)
-    store.append_message(session, effective_request.model_dump())
     queue_position = session.agent_queue.qsize()
     audit.record(
         "message.received",

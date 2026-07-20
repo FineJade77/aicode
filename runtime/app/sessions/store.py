@@ -164,6 +164,7 @@ class Session:
     agent_queue: asyncio.Queue[QueuedAgentRun] = field(default_factory=asyncio.Queue)
     agent_runner_task: asyncio.Task[Any] | None = None
     auto_accept_edits: bool = False
+    message_appender: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +185,12 @@ class Session:
         queued = QueuedAgentRun(run_id=f"run_{uuid4().hex[:12]}", request=request)
         self.agent_queue.put_nowait(queued)
         return queued
+
+    def append_message(self, message: dict[str, Any]) -> None:
+        if self.message_appender is not None:
+            self.message_appender(message)
+            return
+        self.messages.append(message)
 
     def next_agent_run(self) -> QueuedAgentRun | None:
         try:
@@ -427,6 +434,7 @@ class SessionStore:
             on_event=lambda event: self._append_event(session.session_id, event),
             max_events=self.event_limit,
         )
+        session.message_appender = lambda message: self.append_message(session, message)
 
     def _append_event(self, session_id: str, event: dict[str, Any]) -> None:
         sequence = int(event.get("event_id") or 0)
