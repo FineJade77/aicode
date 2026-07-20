@@ -33,6 +33,8 @@ async def lifespan(_app: FastAPI):
     yield
     # 关闭时释放模型 provider 的 HTTP 连接池，避免长驻 daemon 连接泄漏
     await model_router.aclose()
+    # 排空事件写入队列，避免刚发生但还没落盘的事件在进程退出时丢失
+    await store.flush()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)

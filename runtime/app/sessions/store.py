@@ -14,6 +14,7 @@ from uuid import uuid4
 
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
+EVENT_WRITE_QUEUE_MAXSIZE = 5_000
 
 
 @dataclass(slots=True)
@@ -230,6 +231,8 @@ class SessionStore:
         self._sessions: dict[str, Session] = {}
         self._last_session_id: str | None = None
         self._schema_ready = False
+        self._write_queue: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
+        self._writer_task: asyncio.Task[None] | None = None
 
     def create(self, workspace: str, language: str) -> Session:
         self._ensure_schema()
@@ -393,10 +396,39 @@ class SessionStore:
         )
 
     def _append_event(self, session_id: str, event: dict[str, Any]) -> None:
-        self._ensure_schema()
         sequence = int(event.get("event_id") or 0)
         if sequence <= 0:
             return
+        self._ensure_writer()
+        assert self._write_queue is not None
+        try:
+            self._write_queue.put_nowait((session_id, dict(event)))
+        except asyncio.QueueFull:
+            # 事件落盘是尽力而为：队列打满时丢弃这条写入，不阻塞 agent loop。
+            pass
+
+    def _ensure_writer(self) -> None:
+        if self._writer_task is not None and not self._writer_task.done():
+            return
+        self._write_queue = asyncio.Queue(maxsize=EVENT_WRITE_QUEUE_MAXSIZE)
+        self._writer_task = asyncio.get_running_loop().create_task(self._event_writer_loop())
+
+    async def _event_writer_loop(self) -> None:
+        queue = self._write_queue
+        assert queue is not None
+        while True:
+            session_id, event = await queue.get()
+            try:
+                await asyncio.to_thread(self._write_event_sync, session_id, event)
+            except Exception:
+                # 审计/回放数据丢失不应中断 agent loop；单条写入失败不影响后续事件。
+                pass
+            finally:
+                queue.task_done()
+
+    def _write_event_sync(self, session_id: str, event: dict[str, Any]) -> None:
+        self._ensure_schema()
+        sequence = int(event.get("event_id") or 0)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -411,6 +443,15 @@ class SessionStore:
                 ),
             )
             self._prune_events(conn, session_id)
+
+    async def flush(self) -> None:
+        """等待后台写入队列中的所有事件被处理完（成功或失败）。
+
+        测试用它来确定性地等待异步落盘完成；FastAPI 的 lifespan shutdown 钩子
+        用它在进程退出前排空队列，避免丢失刚发生但还没来得及落盘的事件。
+        """
+        if self._write_queue is not None:
+            await self._write_queue.join()
 
     def _prune_events(self, conn: sqlite3.Connection, session_id: str) -> None:
         conn.execute(

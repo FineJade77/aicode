@@ -136,6 +136,7 @@ async def test_session_store_persists_events(tmp_path: Path) -> None:
 
     await session.events.put({"type": "plan.created"})
     await session.events.put({"type": "final", "summary": "done"})
+    await store.flush()
 
     reloaded = SessionStore(db_path)
     restored = reloaded.get(session.session_id)
@@ -205,6 +206,7 @@ async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
 
     for index in range(4):
         await session.events.put({"type": f"event.{index}"})
+    await store.flush()
 
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("select count(*) from events where session_id = ?", (session.session_id,)).fetchone()[0]
@@ -215,6 +217,60 @@ async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
     assert count == 2
     assert restored is not None
     assert [event["event_id"] for event in restored.events.events_after(0)] == [3, 4]
+
+
+@pytest.mark.asyncio
+async def test_flush_waits_for_pending_writes(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    await session.events.put({"type": "tool.started", "tool": "read_file"})
+    await store.flush()
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute(
+            "select count(*) from events where session_id = ?", (session.session_id,)
+        ).fetchone()[0]
+
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_event_writer_survives_individual_write_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "sessions.sqlite"
+    store = SessionStore(db_path)
+    session = store.create(workspace="/repo", language="zh-CN")
+
+    original_write = store._write_event_sync
+    call_count = {"value": 0}
+
+    def flaky_write(session_id: str, event: dict) -> None:
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise RuntimeError("simulated disk error")
+        original_write(session_id, event)
+
+    monkeypatch.setattr(store, "_write_event_sync", flaky_write)
+
+    await session.events.put({"type": "one"})
+    await session.events.put({"type": "two"})
+    await store.flush()
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute(
+            "select count(*) from events where session_id = ?", (session.session_id,)
+        ).fetchone()[0]
+
+    # 第一条写入失败被吞掉（不中断写入循环），第二条成功落盘
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_is_a_noop_when_nothing_was_ever_written(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    # 从未 put 过事件，writer 从未启动；flush 不应抛错或挂起
+    await store.flush()
 
 
 def test_normalize_event_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch) -> None:
