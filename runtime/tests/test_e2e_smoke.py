@@ -72,9 +72,10 @@ async def test_full_fix_flow(tmp_path):
     for expected in ["tool.started", "approval.requested", "edit.applied", "usage.recorded", "final"]:
         assert expected in types, f"missing event {expected}"
 
-    # 验证 final 事件包含最后的总结内容
+    # 验证 final 事件的总结内容恰为验证轮（verify note 注入后）模型输出，
+    # 而非编辑轮的文本——确保 final 绑定到正确的控制流轮次，能捕获"提前 finalize"回归。
     finals = [e for e in events if e["type"] == "final"]
-    assert finals and len(finals[-1]["summary"]) > 0
+    assert finals and finals[-1]["summary"] == "已验证完毕"
 
     # 多轮记忆：再来一条消息，history 应包含上一轮内容
     fake.turns.append(text_turn("基于上一轮继续"))
