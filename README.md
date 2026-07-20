@@ -21,7 +21,7 @@
 - Policy Engine 三态分级闸门（allow/ask/deny），并修复了 `sed -i`、`git push` 等历史分级漏洞
 - 对话 history 作为唯一状态并跨消息持久化，支持多轮修正（如"不对，改成 X"）
 - `aicode test` 自动执行低风险测试命令
-- `aicode review` 对当前 git diff 执行只读规则审查，并用模型（main 角色）汇总结果
+- `aicode review` 对当前 git diff 执行只读规则审查，并用模型（reviewer 角色）汇总结果
 - `aicode review-rules` 查看 review 规则和项目配置后的生效状态
 - 本地 JSONL 审计日志
 - SQLite session/message 持久化
