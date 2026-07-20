@@ -15,6 +15,7 @@ from app.models.provider import (
     StreamEvent,
     ToolCallRequest,
     Usage,
+    tool_argument_parse_error,
 )
 
 
@@ -148,10 +149,13 @@ class OpenAICompatibleProvider:
                 slot["arguments"] += str(function.get("arguments") or "")
         for index in sorted(pending):
             slot = pending[index]
+            raw_arguments = str(slot["arguments"] or "")
             try:
-                arguments = json.loads(slot["arguments"] or "{}")
-            except json.JSONDecodeError:
-                arguments = {}
+                arguments = json.loads(raw_arguments or "{}")
+            except json.JSONDecodeError as exc:
+                arguments = tool_argument_parse_error(raw_arguments, exc)
+            if not isinstance(arguments, dict):
+                arguments = tool_argument_parse_error(raw_arguments, ValueError("tool arguments JSON must be an object"))
             yield StreamEvent(type="tool_call", tool_call=ToolCallRequest(id=slot["id"] or f"tc_{index}", name=slot["name"], arguments=arguments))
         yield StreamEvent(type="done", usage=usage, model=model)
 

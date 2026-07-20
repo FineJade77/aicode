@@ -3,7 +3,7 @@ import pytest
 
 from app.config.settings import AnthropicSettings
 from app.models.anthropic import AnthropicProvider, to_anthropic_messages
-from app.models.provider import CompletionRequest, ProviderError
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ProviderError
 
 
 def sse(event: str, data: str) -> str:
@@ -81,7 +81,7 @@ async def test_no_retry_on_400(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_malformed_tool_input_json_fallback(monkeypatch):
+async def test_malformed_tool_input_json_reports_parse_error(monkeypatch):
     monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
     # Build an SSE body with malformed input_json_delta
     malformed_body = (
@@ -98,8 +98,29 @@ async def test_malformed_tool_input_json_fallback(monkeypatch):
     events = [event async for event in provider.stream_complete(request)]
     assert [e.type for e in events] == ["tool_call", "done"]
     assert events[0].tool_call.name == "broken"
-    assert events[0].tool_call.arguments == {}
+    parse_error = events[0].tool_call.arguments[TOOL_ARGUMENT_PARSE_ERROR_KEY]
+    assert "Expecting property name" in parse_error["error"]
+    assert parse_error["raw_arguments"] == "{bad"
     assert events[0].tool_call.id == "tu_bad"
+
+
+@pytest.mark.asyncio
+async def test_non_object_tool_input_json_reports_parse_error(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    malformed_body = (
+        sse("message_start", '{"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":5}}}')
+        + sse("content_block_start", '{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_bad","name":"broken"}}')
+        + sse("content_block_delta", '{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"[]"}}')
+        + sse("content_block_stop", '{"type":"content_block_stop","index":0}')
+        + sse("message_stop", '{"type":"message_stop"}')
+    ).encode()
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=malformed_body))))
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    events = [event async for event in provider.stream_complete(request)]
+    parse_error = events[0].tool_call.arguments[TOOL_ARGUMENT_PARSE_ERROR_KEY]
+    assert parse_error["error"] == "tool arguments JSON must be an object"
+    assert parse_error["raw_arguments"] == "[]"
 
 
 def test_message_mapping_tool_roundtrip():

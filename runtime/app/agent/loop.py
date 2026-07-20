@@ -7,7 +7,12 @@ from app.agent.history import compact_if_needed, load_history, persist_message, 
 from app.agent.prompts import BUDGET_NOTE_EN, BUDGET_NOTE_ZH, VERIFY_NOTE_EN, VERIFY_NOTE_ZH, build_system_prompt
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.agent.utils import localized
-from app.models.provider import CompletionResult, ToolCallRequest
+from app.models.provider import (
+    TOOL_ARGUMENT_PARSE_ERROR_KEY,
+    CompletionResult,
+    ToolCallRequest,
+    tool_argument_parse_error,
+)
 from app.policy.engine import PolicyEngine
 from app.sessions.store import Session
 from app.tools.base import is_protected_path
@@ -96,6 +101,28 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
 async def execute_gated(
     session: Session, request: Any, call: ToolCallRequest, runtime: Any, policy: PolicyEngine, context: Any
 ) -> tuple[str, int]:
+    parse_error = None
+    if not isinstance(call.arguments, dict):
+        parse_error_payload = tool_argument_parse_error(repr(call.arguments), ValueError("tool arguments JSON must be an object"))
+        parse_error = parse_error_payload[TOOL_ARGUMENT_PARSE_ERROR_KEY]
+    elif TOOL_ARGUMENT_PARSE_ERROR_KEY in call.arguments:
+        parse_error = call.arguments[TOOL_ARGUMENT_PARSE_ERROR_KEY]
+    if parse_error is not None:
+        detail = parse_error.get("error", "") if isinstance(parse_error, dict) else str(parse_error)
+        message = localized(
+            request.language,
+            f"工具 {call.name} 的参数不是合法 JSON，已跳过执行。请重新生成合法 JSON 参数后再调用该工具。{detail}",
+            f"Tool {call.name} received invalid JSON arguments and was not executed. Regenerate valid JSON arguments before calling it again. {detail}",
+        ).strip()
+        runtime.audit.record(
+            "tool.argument_parse_error",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"tool": call.name, "parse_error": parse_error},
+        )
+        await session.events.put({"type": "tool.error", "tool": call.name, "error": message, "data": {"parse_error": parse_error}})
+        return f"[工具参数解析失败] {message}", 0
+
     gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
     runtime.audit.record(
         "tool.started",

@@ -6,6 +6,7 @@ from app.agent.loop import run_turn
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
 from app.config.settings import Settings
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.sessions.store import SessionStore
@@ -59,6 +60,37 @@ async def test_tool_loop_executes_and_feeds_back(tmp_path):
     # 第二次模型调用的 messages 里包含 tool 结果
     second_call = fake.calls[1]
     assert any(m.get("role") == "tool" and "x = 1" in str(m.get("content")) for m in second_call.messages)
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_arguments_feed_parse_error_to_model(tmp_path):
+    runtime, fake = make_runtime(
+        [
+            tool_turn(
+                "read_file",
+                {TOOL_ARGUMENT_PARSE_ERROR_KEY: {"error": "Expecting value", "raw_arguments": "{bad", "truncated": False}},
+            ),
+            text_turn("我会重试合法 JSON"),
+        ],
+        tmp_path,
+    )
+    session = make_session(tmp_path)
+    await run_turn(session, Request(tmp_path), runtime)
+    errors = events_of(session, "tool.error")
+    assert errors and errors[0]["data"]["parse_error"]["raw_arguments"] == "{bad"
+    assert not events_of(session, "tool.started")
+    second_call = fake.calls[1]
+    assert any("工具参数解析失败" in str(m.get("content")) for m in second_call.messages if m.get("role") == "tool")
+
+
+@pytest.mark.asyncio
+async def test_non_dict_tool_arguments_do_not_reach_policy(tmp_path):
+    runtime, fake = make_runtime([tool_turn("read_file", [], call_id="tc_bad"), text_turn("我会重试")], tmp_path)
+    session = make_session(tmp_path)
+    await run_turn(session, Request(tmp_path), runtime)
+    assert not events_of(session, "tool.started")
+    assert events_of(session, "tool.error")[0]["data"]["parse_error"]["raw_arguments"] == "[]"
+    assert any("tool arguments JSON must be an object" in str(m.get("content")) for m in fake.calls[1].messages if m.get("role") == "tool")
 
 
 @pytest.mark.asyncio

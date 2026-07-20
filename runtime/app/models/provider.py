@@ -5,6 +5,18 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+TOOL_ARGUMENT_PARSE_ERROR_KEY = "__aicode_tool_argument_parse_error__"
+TOOL_ARGUMENT_PARSE_ERROR_RAW_LIMIT = 1_000
+
+
+def tool_argument_parse_error(raw_arguments: str, error: BaseException) -> dict[str, Any]:
+    return {
+        TOOL_ARGUMENT_PARSE_ERROR_KEY: {
+            "error": str(error),
+            "raw_arguments": raw_arguments[:TOOL_ARGUMENT_PARSE_ERROR_RAW_LIMIT],
+            "truncated": len(raw_arguments) > TOOL_ARGUMENT_PARSE_ERROR_RAW_LIMIT,
+        }
+    }
 
 
 @dataclass(slots=True)

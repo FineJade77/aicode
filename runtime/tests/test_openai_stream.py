@@ -5,7 +5,7 @@ import pytest
 
 from app.config.settings import OpenAICompatibleSettings
 from app.models.openai_compatible import OpenAICompatibleProvider, to_openai_messages, to_openai_tools
-from app.models.provider import CompletionRequest, ProviderError
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ProviderError
 
 
 def sse_bytes(*chunks: str) -> bytes:
@@ -130,8 +130,25 @@ async def test_malformed_tool_call_arguments(monkeypatch):
     events = [event async for event in provider.stream_complete(request)]
     assert [e.type for e in events] == ["tool_call", "done"]
     assert events[0].tool_call.name == "broken"
-    assert events[0].tool_call.arguments == {}
+    parse_error = events[0].tool_call.arguments[TOOL_ARGUMENT_PARSE_ERROR_KEY]
+    assert "Expecting value" in parse_error["error"]
+    assert parse_error["raw_arguments"] == "not valid json {{{{"
     assert events[1].type == "done"
+
+
+@pytest.mark.asyncio
+async def test_non_object_tool_call_arguments_reports_parse_error(monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "sk-test")
+    malformed_body = sse_bytes(
+        '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc_1","function":{"name":"broken","arguments":"[]"}}]}}]}',
+        '{"choices":[{"delta":{}}],"usage":{"prompt_tokens":5,"completion_tokens":2},"model":"m1"}',
+    )
+    provider = make_provider(lambda request: httpx.Response(200, content=malformed_body))
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
+    events = [event async for event in provider.stream_complete(request)]
+    parse_error = events[0].tool_call.arguments[TOOL_ARGUMENT_PARSE_ERROR_KEY]
+    assert parse_error["error"] == "tool arguments JSON must be an object"
+    assert parse_error["raw_arguments"] == "[]"
 
 
 def test_message_and_tool_mapping():

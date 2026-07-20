@@ -15,6 +15,7 @@ from app.models.provider import (
     StreamEvent,
     ToolCallRequest,
     Usage,
+    tool_argument_parse_error,
 )
 
 ANTHROPIC_VERSION = "2023-06-01"
@@ -131,10 +132,13 @@ class AnthropicProvider:
                 elif delta.get("type") == "input_json_delta" and current_tool is not None:
                     current_tool["json"] += str(delta.get("partial_json") or "")
             elif kind == "content_block_stop" and current_tool is not None:
+                raw_arguments = current_tool["json"]
                 try:
-                    arguments = json.loads(current_tool["json"] or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
+                    arguments = json.loads(raw_arguments or "{}")
+                except json.JSONDecodeError as exc:
+                    arguments = tool_argument_parse_error(raw_arguments, exc)
+                if not isinstance(arguments, dict):
+                    arguments = tool_argument_parse_error(raw_arguments, ValueError("tool arguments JSON must be an object"))
                 yield StreamEvent(type="tool_call", tool_call=ToolCallRequest(id=current_tool["id"], name=current_tool["name"], arguments=arguments))
                 current_tool = None
             elif kind == "message_delta":
