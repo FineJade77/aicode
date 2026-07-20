@@ -119,9 +119,18 @@ async def execute_gated(
             "tool.argument_parse_error",
             session_id=session.session_id,
             workspace=session.workspace,
-            data={"tool": call.name, "parse_error": parse_error},
+            data={"tool": call.name, "tool_call_id": call.id, "parse_error": parse_error},
         )
-        await session.events.put(tool_event("tool.error", call.name, error=message, data={"parse_error": parse_error}, duration_ms=0))
+        await session.events.put(
+            tool_event(
+                "tool.error",
+                call.name,
+                tool_call_id=call.id,
+                error=message,
+                data={"parse_error": parse_error},
+                duration_ms=0,
+            )
+        )
         return f"[工具参数解析失败] {message}", 0
 
     validation_error = validate_tool_arguments(call.name, call.arguments)
@@ -135,9 +144,23 @@ async def execute_gated(
             "tool.argument_validation_error",
             session_id=session.session_id,
             workspace=session.workspace,
-            data={"tool": call.name, "validation_error": validation_error, "args": call.arguments},
+            data={
+                "tool": call.name,
+                "tool_call_id": call.id,
+                "validation_error": validation_error,
+                "args": call.arguments,
+            },
         )
-        await session.events.put(tool_event("tool.error", call.name, error=message, data={"validation_error": validation_error}, duration_ms=0))
+        await session.events.put(
+            tool_event(
+                "tool.error",
+                call.name,
+                tool_call_id=call.id,
+                error=message,
+                data={"validation_error": validation_error},
+                duration_ms=0,
+            )
+        )
         return f"[工具参数校验失败] {message}", 0
 
     gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
@@ -145,22 +168,57 @@ async def execute_gated(
         "tool.started",
         session_id=session.session_id,
         workspace=session.workspace,
-        data={"tool": call.name, "args": call.arguments, "verdict": gate.verdict, "risk_level": gate.risk_level},
+        data={
+            "tool": call.name,
+            "tool_call_id": call.id,
+            "args": call.arguments,
+            "verdict": gate.verdict,
+            "risk_level": gate.risk_level,
+        },
     )
-    await session.events.put({"type": "tool.started", "tool": call.name, "args": call.arguments, "risk_level": gate.risk_level})
+    await session.events.put(
+        {
+            "type": "tool.started",
+            "tool": call.name,
+            "tool_call_id": call.id,
+            "args": call.arguments,
+            "risk_level": gate.risk_level,
+        }
+    )
 
     if gate.verdict == "deny":
-        await session.events.put({"type": "tool.denied", "tool": call.name, "error": gate.reason, "risk_level": gate.risk_level})
+        await session.events.put(
+            {
+                "type": "tool.denied",
+                "tool": call.name,
+                "tool_call_id": call.id,
+                "error": gate.reason,
+                "risk_level": gate.risk_level,
+            }
+        )
         return f"[被策略拒绝] {gate.reason}", 0
 
     if call.name == "edit_file":
         return await execute_edit(session, request, call, runtime, context)
 
     if gate.verdict == "ask":
-        accepted = await request_approval(session, request, "tool", {"tool": call.name, "args": call.arguments, "reason": gate.reason})
+        accepted = await request_approval(
+            session,
+            request,
+            "tool",
+            {"tool": call.name, "tool_call_id": call.id, "args": call.arguments, "reason": gate.reason},
+        )
         if accepted is not True:
             reason = localized(request.language, "用户拒绝执行该命令", "user rejected the command")
-            await session.events.put({"type": "tool.rejected", "tool": call.name, "error": reason, "risk_level": gate.risk_level})
+            await session.events.put(
+                {
+                    "type": "tool.rejected",
+                    "tool": call.name,
+                    "tool_call_id": call.id,
+                    "error": reason,
+                    "risk_level": gate.risk_level,
+                }
+            )
             return f"[{reason}]", 0
 
     result = await run_tool(call.name, call.arguments, context)
@@ -170,19 +228,35 @@ async def execute_gated(
             "tool.finished",
             session_id=session.session_id,
             workspace=session.workspace,
-            data=tool_finish_audit_data(call.name, result),
+            data=tool_finish_audit_data(call.name, result, tool_call_id=call.id),
         )
         await session.events.put(
-            tool_event("tool.output", call.name, text=result.text[:2000], data=result.data, duration_ms=result.duration_ms)
+            tool_event(
+                "tool.output",
+                call.name,
+                tool_call_id=call.id,
+                text=result.text[:2000],
+                data=result.data,
+                duration_ms=result.duration_ms,
+            )
         )
         return output, 0
     runtime.audit.record(
         "tool.finished",
         session_id=session.session_id,
         workspace=session.workspace,
-        data=tool_finish_audit_data(call.name, result),
+        data=tool_finish_audit_data(call.name, result, tool_call_id=call.id),
     )
-    await session.events.put(tool_event("tool.error", call.name, error=result.error, data=result.data, duration_ms=result.duration_ms))
+    await session.events.put(
+        tool_event(
+            "tool.error",
+            call.name,
+            tool_call_id=call.id,
+            error=result.error,
+            data=result.data,
+            duration_ms=result.duration_ms,
+        )
+    )
     return f"[错误] {truncate_tool_output(call.name, result.error)}", 0
 
 
@@ -192,39 +266,51 @@ async def execute_edit(session: Session, request: Any, call: ToolCallRequest, ru
     try:
         proposal = build_edit_proposal(workspace, call.arguments, context.protected_paths)
     except EditError as exc:
-        await session.events.put(tool_event("tool.error", "edit_file", error=str(exc), duration_ms=elapsed_ms(started)))
+        await session.events.put(
+            tool_event("tool.error", "edit_file", tool_call_id=call.id, error=str(exc), duration_ms=elapsed_ms(started))
+        )
         return f"[编辑失败] {exc}", 0
 
     auto = session.auto_accept_edits and not is_protected_path(proposal.path, context.protected_paths)
     if auto:
-        await session.events.put({"type": "edit.auto_approved", "path": proposal.path})
+        await session.events.put({"type": "edit.auto_approved", "path": proposal.path, "tool_call_id": call.id})
         accepted = True
     else:
         accepted = await request_approval(
             session,
             request,
             "edit",
-            {"path": proposal.path, "kind": proposal.kind, "diff": proposal.diff},
+            {"path": proposal.path, "kind": proposal.kind, "diff": proposal.diff, "tool_call_id": call.id},
         )
 
     if accepted is not True:
         reason = localized(request.language, "用户拒绝了此编辑", "user rejected this edit")
-        await session.events.put({"type": "edit.rejected", "path": proposal.path})
+        await session.events.put({"type": "edit.rejected", "path": proposal.path, "tool_call_id": call.id})
         return f"[{reason}] {proposal.path}", 0
 
     try:
         apply_edit(workspace, proposal)
     except EditStaleError as exc:
-        await session.events.put(tool_event("tool.error", "edit_file", error=str(exc), duration_ms=elapsed_ms(started)))
+        await session.events.put(
+            tool_event("tool.error", "edit_file", tool_call_id=call.id, error=str(exc), duration_ms=elapsed_ms(started))
+        )
         return f"[编辑失败·stale] {exc}", 0
     duration_ms = elapsed_ms(started)
     runtime.audit.record(
         "edit.applied",
         session_id=session.session_id,
         workspace=session.workspace,
-        data={"path": proposal.path, "kind": proposal.kind, "diff_bytes": len(proposal.diff), "duration_ms": duration_ms},
+        data={
+            "path": proposal.path,
+            "kind": proposal.kind,
+            "tool_call_id": call.id,
+            "diff_bytes": len(proposal.diff),
+            "duration_ms": duration_ms,
+        },
     )
-    await session.events.put({"type": "edit.applied", "path": proposal.path, "kind": proposal.kind, "duration_ms": duration_ms})
+    await session.events.put(
+        {"type": "edit.applied", "path": proposal.path, "kind": proposal.kind, "tool_call_id": call.id, "duration_ms": duration_ms}
+    )
     return f"已应用编辑 {proposal.path}:\n{proposal.diff}", 1
 
 
@@ -232,6 +318,7 @@ def tool_event(
     event_type: str,
     tool: str,
     *,
+    tool_call_id: str = "",
     text: str = "",
     error: str = "",
     data: dict[str, Any] | None = None,
@@ -239,6 +326,8 @@ def tool_event(
 ) -> dict[str, Any]:
     payload = dict(data or {})
     event: dict[str, Any] = {"type": event_type, "tool": tool, "data": payload}
+    if tool_call_id:
+        event["tool_call_id"] = tool_call_id
     if text:
         event["text"] = text
     if error:
@@ -257,8 +346,10 @@ def tool_observability_fields(data: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-def tool_finish_audit_data(tool: str, result: ToolResult) -> dict[str, Any]:
+def tool_finish_audit_data(tool: str, result: ToolResult, *, tool_call_id: str = "") -> dict[str, Any]:
     data = {"tool": tool, "success": result.success, "duration_ms": result.duration_ms, "risk_level": result.risk_level}
+    if tool_call_id:
+        data["tool_call_id"] = tool_call_id
     data.update(tool_observability_fields(result.data))
     return data
 

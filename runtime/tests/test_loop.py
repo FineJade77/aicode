@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -58,7 +59,10 @@ async def test_tool_loop_executes_and_feeds_back(tmp_path):
     await run_turn(session, Request(tmp_path), runtime)
     output_events = events_of(session, "tool.output")
     assert output_events
+    assert output_events[0]["tool_call_id"] == "tc_1"
     assert isinstance(output_events[0]["duration_ms"], int)
+    started_events = events_of(session, "tool.started")
+    assert started_events and started_events[0]["tool_call_id"] == "tc_1"
     # 第二次模型调用的 messages 里包含 tool 结果
     second_call = fake.calls[1]
     assert any(m.get("role") == "tool" and "x = 1" in str(m.get("content")) for m in second_call.messages)
@@ -70,9 +74,14 @@ async def test_tool_output_exposes_command_observability_fields(tmp_path):
     session = make_session(tmp_path)
     await run_turn(session, Request(tmp_path), runtime)
     output = events_of(session, "tool.output")[0]
+    assert output["tool_call_id"] == "tc_1"
     assert output["exit_code"] == 0
     assert output["data"]["exit_code"] == 0
     assert isinstance(output["duration_ms"], int)
+    await runtime.audit.flush()
+    records = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    finished = [record for record in records if record["event_type"] == "tool.finished"]
+    assert finished and finished[0]["data"]["tool_call_id"] == "tc_1"
 
 
 @pytest.mark.asyncio
@@ -91,6 +100,7 @@ async def test_malformed_tool_arguments_feed_parse_error_to_model(tmp_path):
     await run_turn(session, Request(tmp_path), runtime)
     errors = events_of(session, "tool.error")
     assert errors and errors[0]["data"]["parse_error"]["raw_arguments"] == "{bad"
+    assert errors[0]["tool_call_id"] == "tc_1"
     assert errors[0]["parse_error"]["raw_arguments"] == "{bad"
     assert errors[0]["duration_ms"] == 0
     assert not events_of(session, "tool.started")
@@ -106,6 +116,7 @@ async def test_non_dict_tool_arguments_do_not_reach_policy(tmp_path):
     assert not events_of(session, "tool.started")
     error = events_of(session, "tool.error")[0]
     assert error["data"]["parse_error"]["raw_arguments"] == "[]"
+    assert error["tool_call_id"] == "tc_bad"
     assert error["parse_error"]["raw_arguments"] == "[]"
     assert any("tool arguments JSON must be an object" in str(m.get("content")) for m in fake.calls[1].messages if m.get("role") == "tool")
 
@@ -117,6 +128,7 @@ async def test_invalid_tool_arguments_feed_validation_error_to_model(tmp_path):
     await run_turn(session, Request(tmp_path), runtime)
     errors = events_of(session, "tool.error")
     assert errors and errors[0]["data"]["validation_error"] == "缺少必填字段: path"
+    assert errors[0]["tool_call_id"] == "tc_1"
     assert errors[0]["validation_error"] == "缺少必填字段: path"
     assert errors[0]["duration_ms"] == 0
     assert not events_of(session, "tool.started")
@@ -131,7 +143,8 @@ async def test_denied_bash_feeds_reason_to_model(tmp_path):
     )
     session = make_session(tmp_path)
     await run_turn(session, Request(tmp_path), runtime)
-    assert events_of(session, "tool.denied")
+    denied = events_of(session, "tool.denied")
+    assert denied and denied[0]["tool_call_id"] == "tc_1"
     second_call = fake.calls[1]
     assert any("被策略拒绝" in str(m.get("content")) for m in second_call.messages if m.get("role") == "tool")
 
@@ -160,9 +173,11 @@ async def test_edit_approval_flow_applies_after_accept(tmp_path):
     _task = asyncio.create_task(approve_soon())
     await run_turn(session, Request(tmp_path), runtime)
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 2\n"
-    assert events_of(session, "approval.requested")
+    approvals = events_of(session, "approval.requested")
+    assert approvals and approvals[0]["tool_call_id"] == "tc_1"
     applied_events = events_of(session, "edit.applied")
     assert applied_events
+    assert applied_events[0]["tool_call_id"] == "tc_1"
     assert isinstance(applied_events[0]["duration_ms"], int)
 
 
@@ -186,6 +201,8 @@ async def test_edit_rejected_reported_to_model(tmp_path):
     _task = asyncio.create_task(reject_soon())
     await run_turn(session, Request(tmp_path), runtime)
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    rejected = events_of(session, "edit.rejected")
+    assert rejected and rejected[0]["tool_call_id"] == "tc_1"
     assert any("拒绝" in str(m.get("content")) for m in fake.calls[1].messages if m.get("role") == "tool")
 
 
@@ -204,7 +221,8 @@ async def test_accept_all_skips_approval(tmp_path):
     session.auto_accept_edits = True
     await run_turn(session, Request(tmp_path), runtime)
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 2\n"
-    assert events_of(session, "edit.auto_approved")
+    auto_approved = events_of(session, "edit.auto_approved")
+    assert auto_approved and auto_approved[0]["tool_call_id"] == "tc_1"
     assert not events_of(session, "approval.requested")
 
 
