@@ -10,16 +10,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.agent.commands import detect_append_request, detect_create_request, detect_replace_request, detect_shell_request
-from app.agent.loop import run_agent_safely as agent_run_agent_safely
-from app.agent.patch_flow import run_post_patch_verification as agent_run_post_patch_verification
-from app.agent.summary import build_model_messages, final_summary_text, model_purpose_for_mode
-from app.agent.tool_flow import execute_tool as agent_execute_tool
+from app.agent.loop_v2 import run_turn_safely
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import settings
 from app.events.sse import encode_sse
 from app.models.router import ModelRouter
+from app.policy.engine import PolicyEngine
 from app.project.config import load_project_config
 from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
@@ -30,7 +27,7 @@ app = FastAPI(title=settings.app_name, version=settings.version)
 model_router = ModelRouter.from_settings(settings)
 tools = ToolRouter()
 audit = AuditLogger.from_env()
-agent_runtime = AgentRuntime(model_router=model_router, tools=tools, audit=audit)
+agent_runtime = AgentRuntime(model_router=model_router, tools=tools, audit=audit, policy=PolicyEngine())
 
 
 class CreateSessionRequest(BaseModel):
@@ -51,6 +48,7 @@ class MessageRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     approval_id: str
+    accept_all: bool = False
 
 
 @app.get("/v1/daemon/status")
@@ -102,6 +100,9 @@ async def get_session(session_id: str) -> dict[str, Any]:
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
     effective_request = bind_message_request_to_session(session, request)
+    is_configured = getattr(agent_runtime.model_router.primary, "is_configured", None)
+    if callable(is_configured) and not is_configured():
+        raise HTTPException(status_code=400, detail="模型 provider 未配置，请设置 API key（如 OPENAI_API_KEY 或 ANTHROPIC_API_KEY）后重试")
     was_running = session.agent_runner_active() or session.agent_queue.qsize() > 0
     session.events.set_default_after(session.events.last_event_id())
     queued = session.enqueue_agent_run(effective_request)
@@ -149,6 +150,14 @@ async def stream_events(session_id: str, request: Request, after: int | None = N
 @app.post("/v1/sessions/{session_id}/approve")
 async def approve(session_id: str, request: ApprovalRequest) -> dict[str, str]:
     session = require_session(session_id)
+    if request.accept_all:
+        session.auto_accept_edits = True
+        audit.record(
+            "approval.accept_all_enabled",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"approval_id": request.approval_id},
+        )
     if not session.resolve_approval(request.approval_id, accepted=True):
         raise HTTPException(status_code=404, detail="approval not found or already resolved")
     audit.record(
@@ -236,7 +245,7 @@ def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
 
 
 async def run_agent(session: Session, request: MessageRequest) -> None:
-    await agent_run_agent_safely(session, request, agent_runtime)
+    await run_turn_safely(session, request, agent_runtime)
 
 
 def ensure_session_runner(session: Session) -> None:
@@ -287,14 +296,6 @@ async def emit_run_started(session: Session, queued: QueuedAgentRun) -> None:
             "message": "开始执行当前任务。",
         }
     )
-
-
-async def execute_tool(session: Session, request: MessageRequest, name: str, args: dict[str, Any]):
-    return await agent_execute_tool(session, request, name, args, agent_runtime)
-
-
-async def run_post_patch_verification(session: Session, request: MessageRequest) -> dict[str, Any]:
-    return await agent_run_post_patch_verification(session, request, agent_runtime)
 
 
 def datetime_utc_today():
