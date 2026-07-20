@@ -146,3 +146,17 @@ def test_message_and_tool_mapping():
     assert mapped[3] == {"role": "tool", "tool_call_id": "tc_1", "content": "result"}
     tools = to_openai_tools([{"name": "search", "description": "d", "input_schema": {"type": "object"}}])
     assert tools[0]["function"]["parameters"] == {"type": "object"}
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_client(monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "sk-test")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=STREAM_BODY)))
+    provider = make_provider(lambda request: httpx.Response(200, content=STREAM_BODY))
+    provider._client = client
+    assert not client.is_closed
+    await provider.aclose()
+    assert client.is_closed
+    assert provider._client is None
+    # 再次 aclose 幂等，不报错
+    await provider.aclose()

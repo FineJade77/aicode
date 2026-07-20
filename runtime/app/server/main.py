@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,10 +23,19 @@ from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
 from app.usage.store import summarize_usage
 
-app = FastAPI(title=settings.app_name, version=settings.version)
 model_router = ModelRouter.from_settings(settings)
 audit = AuditLogger.from_env()
 agent_runtime = AgentRuntime(model_router=model_router, audit=audit, policy=PolicyEngine())
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    # 关闭时释放模型 provider 的 HTTP 连接池，避免长驻 daemon 连接泄漏
+    await model_router.aclose()
+
+
+app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
 
 
 class CreateSessionRequest(BaseModel):

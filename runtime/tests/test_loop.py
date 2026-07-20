@@ -170,6 +170,18 @@ async def test_review_mode_has_no_write_tools(tmp_path):
     tool_names = {t["name"] for t in fake.calls[0].tools}
     assert "edit_file" not in tool_names
     assert "bash" not in tool_names
+    # review 模式的模型调用走 reviewer 路由，而非 main
+    assert fake.calls[0].purpose == "reviewer"
+    assert fake.calls[0].model == Settings().models.reviewer
+
+
+@pytest.mark.asyncio
+async def test_default_mode_uses_main_route(tmp_path):
+    runtime, fake = make_runtime([text_turn("完成")], tmp_path)
+    session = make_session(tmp_path)
+    await run_turn(session, Request(tmp_path), runtime)
+    assert fake.calls[0].purpose == "main"
+    assert fake.calls[0].model == Settings().models.main
 
 
 @pytest.mark.asyncio

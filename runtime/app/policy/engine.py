@@ -59,6 +59,11 @@ _STATEMENT_PUNCTUATION = "();<>|&\n"
 _SEP_OPERATOR_CHARS = set(";&|\n")
 
 
+def _reason(language: str, zh: str, en: str) -> str:
+    """Pick a localized reason string. Defaults to Chinese (the default UI language)."""
+    return en if str(language).startswith("en") else zh
+
+
 @dataclass(slots=True)
 class GateDecision:
     verdict: str  # allow | ask | deny
@@ -69,21 +74,21 @@ class GateDecision:
 class PolicyEngine:
     """Small, conservative policy layer for Phase 1 tool execution."""
 
-    def gate(self, tool_name: str, args: dict[str, Any], mode: str = "default") -> GateDecision:
+    def gate(self, tool_name: str, args: dict[str, Any], mode: str = "default", language: str = "zh-CN") -> GateDecision:
         if tool_name in READ_ONLY_TOOLS_V2:
             return GateDecision("allow", "low")
         if mode == "review":
-            return GateDecision("deny", "high", "review 模式只允许只读工具")
+            return GateDecision("deny", "high", _reason(language, "review 模式只允许只读工具", "review mode only permits read-only tools"))
         if tool_name == "edit_file":
-            return GateDecision("ask", "medium", "文件写入需要 inline diff 确认")
+            return GateDecision("ask", "medium", _reason(language, "文件写入需要 inline diff 确认", "file writes require inline diff confirmation"))
         if tool_name == "bash":
-            return self.gate_bash(str(args.get("command", "")))
-        return GateDecision("deny", "high", f"未知工具: {tool_name}")
+            return self.gate_bash(str(args.get("command", "")), language=language)
+        return GateDecision("deny", "high", _reason(language, f"未知工具: {tool_name}", f"unknown tool: {tool_name}"))
 
-    def gate_bash(self, command: str) -> GateDecision:
+    def gate_bash(self, command: str, language: str = "zh-CN") -> GateDecision:
         command = command.strip()
         if not command:
-            return GateDecision("deny", "low", "空命令")
+            return GateDecision("deny", "low", _reason(language, "空命令", "empty command"))
 
         ask_floor = any(token in command for token in _INLINE_ASK_FLOOR_TOKENS)
 
@@ -93,11 +98,11 @@ class PolicyEngine:
             return GateDecision("deny", "high", str(exc))
         ask_floor = ask_floor or sep_floor
 
-        decisions = [self._classify_single(segment) for segment in segments]
+        decisions = [self._classify_single(segment, language) for segment in segments]
         decisions = [decision for decision in decisions if decision is not None]
 
         if not decisions:
-            return GateDecision("deny", "low", "空命令")
+            return GateDecision("deny", "low", _reason(language, "空命令", "empty command"))
 
         for decision in decisions:
             if decision.verdict == "deny":
@@ -107,7 +112,7 @@ class PolicyEngine:
         if ask_decision is not None:
             return ask_decision
         if ask_floor:
-            return GateDecision("ask", "high", "包含 shell 控制符，需要确认后执行")
+            return GateDecision("ask", "high", _reason(language, "包含 shell 控制符，需要确认后执行", "contains shell control characters; needs confirmation"))
         return GateDecision("allow", "low")
 
     def _tokenize(self, command: str) -> list[str]:
@@ -194,39 +199,39 @@ class PolicyEngine:
                     parts = parts[1:]
         return parts
 
-    def _classify_single(self, parts: list[str]) -> GateDecision | None:
+    def _classify_single(self, parts: list[str], language: str = "zh-CN") -> GateDecision | None:
         if not parts:
             return None
         parts = self._normalize_parts(parts)
         if not parts:
-            return GateDecision("ask", "medium", "命令需要确认后执行")
+            return GateDecision("ask", "medium", _reason(language, "命令需要确认后执行", "command needs confirmation before running"))
         executable = parts[0]
         basename = os.path.basename(executable)
         if executable in DENY_EXECUTABLES or basename in DENY_EXECUTABLES:
-            return GateDecision("deny", "high", f"禁止执行高风险命令: {executable}")
+            return GateDecision("deny", "high", _reason(language, f"禁止执行高风险命令: {executable}", f"high-risk command is not allowed: {executable}"))
         if executable == "git" or basename == "git":
-            return self._gate_git(parts)
+            return self._gate_git(parts, language)
         if self._is_low_risk_test(parts):
             return GateDecision("allow", "low")
         if executable in ALLOW_EXECUTABLES:
             return GateDecision("allow", "low")
-        return GateDecision("ask", "medium", f"命令需要确认后执行: {executable}")
+        return GateDecision("ask", "medium", _reason(language, f"命令需要确认后执行: {executable}", f"command needs confirmation before running: {executable}"))
 
-    def _gate_git(self, parts: list[str]) -> GateDecision:
+    def _gate_git(self, parts: list[str], language: str = "zh-CN") -> GateDecision:
         subcommand = parts[1] if len(parts) > 1 else ""
         if subcommand in DENY_GIT_SUBCOMMANDS:
-            return GateDecision("deny", "high", f"禁止执行破坏性 git 命令: git {subcommand}")
+            return GateDecision("deny", "high", _reason(language, f"禁止执行破坏性 git 命令: git {subcommand}", f"destructive git command is not allowed: git {subcommand}"))
         if subcommand == "checkout" and "--" in parts:
-            return GateDecision("deny", "high", "禁止 git checkout -- 丢弃改动")
+            return GateDecision("deny", "high", _reason(language, "禁止 git checkout -- 丢弃改动", "git checkout -- (discarding changes) is not allowed"))
         if subcommand == "push" and any(flag in parts for flag in ("--force", "-f", "--force-with-lease", "--delete")):
-            return GateDecision("deny", "high", "禁止强制/删除式 git push")
+            return GateDecision("deny", "high", _reason(language, "禁止强制/删除式 git push", "force/delete git push is not allowed"))
         if subcommand == "branch" and any(flag in parts for flag in ("-D", "-d", "-M", "-m")):
-            return GateDecision("deny", "high", "禁止删除/重命名分支")
+            return GateDecision("deny", "high", _reason(language, "禁止删除/重命名分支", "deleting/renaming branches is not allowed"))
         if subcommand == "stash" and "drop" in parts:
-            return GateDecision("deny", "high", "禁止 git stash drop")
+            return GateDecision("deny", "high", _reason(language, "禁止 git stash drop", "git stash drop is not allowed"))
         if subcommand in ALLOW_GIT_SUBCOMMANDS:
             return GateDecision("allow", "low")
-        return GateDecision("ask", "medium", f"git {subcommand} 需要确认后执行")
+        return GateDecision("ask", "medium", _reason(language, f"git {subcommand} 需要确认后执行", f"git {subcommand} needs confirmation before running"))
 
     def _is_low_risk_test(self, parts: list[str]) -> bool:
         if parts[0] == "pytest":

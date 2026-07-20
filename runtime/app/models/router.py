@@ -37,6 +37,11 @@ class ModelRouter:
             return self.settings.models.summarizer
         return self.settings.models.main
 
+    async def aclose(self) -> None:
+        aclose = getattr(self.primary, "aclose", None)
+        if callable(aclose):
+            await aclose()
+
     async def stream_complete(
         self,
         *,

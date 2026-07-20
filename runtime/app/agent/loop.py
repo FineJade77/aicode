@@ -36,6 +36,7 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
     history = load_history(session)
     tools = tool_schemas_for_mode(request.mode)
     context = build_tool_context(request.workspace, request.mode, request.language)
+    purpose = "reviewer" if request.mode == "review" else "main"
     budget = TurnBudget()
     applied_edits = 0
     verify_note_sent = False
@@ -46,10 +47,10 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
 
     for _step in range(budget.max_steps):
         result = await runtime.model_router.stream_complete(
-            purpose="main", system=system, messages=history, tools=tools,
+            purpose=purpose, system=system, messages=history, tools=tools,
             on_text_delta=on_delta, max_tokens=budget.max_tokens_per_call,
         )
-        await record_usage(session, result, "main", runtime)
+        await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
         history.append(message)
         persist_message(session, message)
@@ -76,9 +77,9 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
         history.append(note)
         persist_message(session, note)
         result = await runtime.model_router.stream_complete(
-            purpose="main", system=system, messages=history, tools=[], on_text_delta=on_delta,
+            purpose=purpose, system=system, messages=history, tools=[], on_text_delta=on_delta,
         )
-        await record_usage(session, result, "main", runtime)
+        await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
         history.append(message)
         persist_message(session, message)
@@ -91,7 +92,7 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
 async def execute_gated(
     session: Session, request: Any, call: ToolCallRequest, runtime: Any, policy: PolicyEngine, context: Any
 ) -> tuple[str, int]:
-    gate = policy.gate(call.name, call.arguments, mode=request.mode)
+    gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
     runtime.audit.record(
         "tool.started",
         session_id=session.session_id,

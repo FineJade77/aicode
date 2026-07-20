@@ -148,3 +148,23 @@ def test_env_and_command_wrappers_do_not_bypass_deny_list(engine):
 def test_prior_bypass_inputs_still_deny_after_quote_aware_split(engine):
     assert gate_bash(engine, "ls\nrm -rf /").verdict == "deny"
     assert gate_bash(engine, "rm -rf / && true").verdict == "deny"
+
+
+def test_gate_reason_localized_english(engine):
+    # 默认（中文）
+    zh = engine.gate("bash", {"command": "rm -rf /"})
+    assert "禁止" in zh.reason
+    # 英文会话
+    en = engine.gate("bash", {"command": "rm -rf /"}, language="en-US")
+    assert en.verdict == "deny"
+    assert "not allowed" in en.reason and all(ord(c) < 128 for c in en.reason)
+    # review 模式英文
+    en_review = engine.gate("edit_file", {"path": "a.py"}, mode="review", language="en-US")
+    assert en_review.verdict == "deny"
+    assert "read-only" in en_review.reason
+
+
+def test_gate_verdict_unaffected_by_language(engine):
+    # 语言只影响 reason 文本，不影响判定
+    for cmd in ["ls", "sed -i s/a/b/ f", "git push origin main", "rm -rf /"]:
+        assert engine.gate("bash", {"command": cmd}).verdict == engine.gate("bash", {"command": cmd}, language="en-US").verdict
