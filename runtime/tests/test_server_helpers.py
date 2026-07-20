@@ -168,9 +168,12 @@ async def test_model_routes_endpoint_returns_route_status() -> None:
 async def test_daemon_status_includes_event_writer_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
     monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
 
     data = await daemon_status()
 
     assert data["status"] == "ok"
+    assert data["audit_writer"]["queue_size"] == 0
+    assert data["audit_writer"]["failed"] == 0
     assert data["event_writer"]["queue_size"] == 0
     assert data["event_writer"]["dropped"] == 0

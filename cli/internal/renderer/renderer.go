@@ -53,6 +53,11 @@ func DaemonStatusTable(value any) string {
 		out.WriteString(fmt.Sprintf("pid: %s\n", pid))
 	}
 
+	if writer, ok := root["audit_writer"].(map[string]any); ok {
+		out.WriteString("\nAudit Writer\n")
+		writeKeyValueTable(&out, writer, "METRIC", "VALUE")
+	}
+
 	if writer, ok := root["event_writer"].(map[string]any); ok {
 		out.WriteString("\nEvent Writer\n")
 		writeKeyValueTable(&out, writer, "METRIC", "VALUE")

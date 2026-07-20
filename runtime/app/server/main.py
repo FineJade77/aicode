@@ -34,6 +34,8 @@ async def lifespan(_app: FastAPI):
     yield
     # 关闭时释放模型 provider 的 HTTP 连接池，避免长驻 daemon 连接泄漏
     await model_router.aclose()
+    # 排空审计日志队列，避免 usage/final 等刚记录的事件在进程退出时丢失
+    await audit.aclose()
     # 排空事件写入队列，避免刚发生但还没落盘的事件在进程退出时丢失
     await store.aclose()
 
@@ -70,6 +72,7 @@ async def daemon_status() -> dict[str, Any]:
         "name": settings.app_name,
         "version": settings.version,
         "pid": os.getpid(),
+        "audit_writer": audit.status(),
         "event_writer": store.event_writer_status(),
     }
 
@@ -198,11 +201,13 @@ async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
 @app.get("/v1/usage")
 async def usage(today: bool = False, session_id: str | None = None) -> dict[str, Any]:
     day = datetime_utc_today() if today else None
+    await audit.flush()
     return summarize_usage(audit.path, session_id=session_id, day=day)
 
 
 @app.get("/v1/usage/sessions/{session_id}")
 async def usage_for_session(session_id: str) -> dict[str, Any]:
+    await audit.flush()
     return summarize_usage(audit.path, session_id=session_id)
 
 

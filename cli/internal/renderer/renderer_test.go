@@ -181,6 +181,15 @@ func TestDaemonStatusTable(t *testing.T) {
 		"name":    "aicode-runtime",
 		"version": "0.1.0",
 		"pid":     float64(1234),
+		"audit_writer": map[string]any{
+			"queue_size":     float64(0),
+			"queue_max_size": float64(5000),
+			"writer_running": true,
+			"enqueued":       float64(7),
+			"written":        float64(7),
+			"dropped":        float64(0),
+			"failed":         float64(0),
+		},
 		"event_writer": map[string]any{
 			"queue_size":     float64(0),
 			"queue_max_size": float64(5000),
@@ -194,6 +203,7 @@ func TestDaemonStatusTable(t *testing.T) {
 
 	assertContains(t, table, "Daemon Status")
 	assertContains(t, table, "status: ok")
+	assertContains(t, table, "Audit Writer")
 	assertContains(t, table, "Event Writer")
 	assertContains(t, table, "queue_size")
 	assertContains(t, table, "dropped")
