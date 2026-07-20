@@ -13,6 +13,7 @@ from uuid import uuid4
 
 
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
+MAX_TRANSIENT_RETAINED_EVENTS = 200
 
 
 @dataclass(slots=True)
@@ -67,7 +68,7 @@ class SessionEvents:
         else:
             self._next_sequence = max(self._next_sequence, int(event["event_id"]) + 1)
 
-        if self._on_event is not None:
+        if self._on_event is not None and event.get("type") != "assistant.delta":
             try:
                 self._on_event(event)
             except Exception:
@@ -134,9 +135,18 @@ class SessionEvents:
         return None
 
     def _trim_retained_events(self) -> None:
+        self._trim_transient_events()
         if len(self._events) <= self._max_events:
             return
         del self._events[: len(self._events) - self._max_events]
+
+    def _trim_transient_events(self) -> None:
+        transient_indexes = [index for index, event in enumerate(self._events) if event.get("type") == "assistant.delta"]
+        excess = len(transient_indexes) - MAX_TRANSIENT_RETAINED_EVENTS
+        if excess <= 0:
+            return
+        drop = set(transient_indexes[:excess])
+        self._events = [event for index, event in enumerate(self._events) if index not in drop]
 
 
 @dataclass(slots=True)

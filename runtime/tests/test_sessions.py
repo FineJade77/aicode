@@ -160,6 +160,44 @@ async def test_session_events_trim_retained_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_assistant_delta_is_not_persisted() -> None:
+    persisted: list[dict] = []
+    events = SessionEvents(on_event=persisted.append)
+
+    await events.put({"type": "assistant.delta", "text": "他"})
+    await events.put({"type": "final", "summary": "done"})
+
+    assert [call["type"] for call in persisted] == ["final"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_delta_still_delivered_to_live_subscribers() -> None:
+    events = SessionEvents()
+
+    await events.put({"type": "assistant.delta", "text": "你"})
+    await events.put({"type": "assistant.delta", "text": "好"})
+
+    retained = events.events_after(0)
+
+    assert [event.get("text") for event in retained] == ["你", "好"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_delta_flood_does_not_evict_real_events() -> None:
+    events = SessionEvents(max_events=250)
+    await events.put({"type": "tool.started", "tool": "read_file"})
+
+    for _ in range(300):
+        await events.put({"type": "assistant.delta", "text": "x"})
+
+    retained = events.events_after(0)
+    types = [event["type"] for event in retained]
+
+    assert "tool.started" in types
+    assert types.count("assistant.delta") <= 200
+
+
+@pytest.mark.asyncio
 async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path, event_limit=2)
