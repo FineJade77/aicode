@@ -15,6 +15,8 @@ type Config struct {
 	UI               UIConfig
 	Runtime          RuntimeConfig
 	Models           ModelsConfig
+	Provider         ProviderConfig
+	Anthropic        AnthropicConfig
 	OpenAICompatible OpenAICompatibleConfig
 	Pricing          map[string]ModelPriceConfig
 }
@@ -31,10 +33,20 @@ type RuntimeConfig struct {
 
 type ModelsConfig struct {
 	Default    string
+	Main       string
 	Planner    string
 	Coder      string
 	Reviewer   string
 	Summarizer string
+}
+
+type ProviderConfig struct {
+	Type string
+}
+
+type AnthropicConfig struct {
+	BaseURL   string
+	APIKeyEnv string
 }
 
 type OpenAICompatibleConfig struct {
@@ -72,10 +84,18 @@ func Default() Config {
 		},
 		Models: ModelsConfig{
 			Default:    "gpt-5",
+			Main:       "gpt-5",
 			Planner:    "gpt-5-high",
 			Coder:      "gpt-5",
 			Reviewer:   "gpt-5",
 			Summarizer: "gpt-5-mini",
+		},
+		Provider: ProviderConfig{
+			Type: "openai_compatible",
+		},
+		Anthropic: AnthropicConfig{
+			BaseURL:   "https://api.anthropic.com",
+			APIKeyEnv: "ANTHROPIC_API_KEY",
 		},
 		OpenAICompatible: OpenAICompatibleConfig{
 			BaseURL:        "https://api.openai.com/v1",
@@ -133,6 +153,8 @@ func Load() (Config, error) {
 			cfg.Runtime.Port = port
 		case "models.default":
 			cfg.Models.Default = value
+		case "models.main":
+			cfg.Models.Main = value
 		case "models.planner":
 			cfg.Models.Planner = value
 		case "models.coder":
@@ -141,6 +163,12 @@ func Load() (Config, error) {
 			cfg.Models.Reviewer = value
 		case "models.summarizer":
 			cfg.Models.Summarizer = value
+		case "provider.type":
+			cfg.Provider.Type = value
+		case "provider.anthropic.base_url":
+			cfg.Anthropic.BaseURL = value
+		case "provider.anthropic.api_key_env":
+			cfg.Anthropic.APIKeyEnv = value
 		case "provider.openai_compatible.base_url":
 			cfg.OpenAICompatible.BaseURL = value
 		case "provider.openai_compatible.api_key_env":
@@ -174,6 +202,9 @@ func applyEnvOverrides(cfg *Config) {
 	if model := os.Getenv("AICODE_MODEL_DEFAULT"); model != "" {
 		cfg.Models.Default = model
 	}
+	if model := os.Getenv("AICODE_MODEL_MAIN"); model != "" {
+		cfg.Models.Main = model
+	}
 	if model := os.Getenv("AICODE_MODEL_PLANNER"); model != "" {
 		cfg.Models.Planner = model
 	}
@@ -185,6 +216,15 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if model := os.Getenv("AICODE_MODEL_SUMMARIZER"); model != "" {
 		cfg.Models.Summarizer = model
+	}
+	if providerType := os.Getenv("AICODE_PROVIDER_TYPE"); providerType != "" {
+		cfg.Provider.Type = providerType
+	}
+	if baseURL := os.Getenv("AICODE_ANTHROPIC_BASE_URL"); baseURL != "" {
+		cfg.Anthropic.BaseURL = baseURL
+	}
+	if apiKeyEnv := os.Getenv("AICODE_ANTHROPIC_API_KEY_ENV"); apiKeyEnv != "" {
+		cfg.Anthropic.APIKeyEnv = apiKeyEnv
 	}
 	if baseURL := os.Getenv("AICODE_OPENAI_BASE_URL"); baseURL != "" {
 		cfg.OpenAICompatible.BaseURL = baseURL
@@ -208,10 +248,14 @@ func (cfg Config) RuntimeEnv() []string {
 	runtime := []string{
 		"AICODE_DEFAULT_LANGUAGE=" + cfg.UI.Language,
 		"AICODE_MODEL_DEFAULT=" + cfg.Models.Default,
+		"AICODE_MODEL_MAIN=" + cfg.Models.Main,
 		"AICODE_MODEL_PLANNER=" + cfg.Models.Planner,
 		"AICODE_MODEL_CODER=" + cfg.Models.Coder,
 		"AICODE_MODEL_REVIEWER=" + cfg.Models.Reviewer,
 		"AICODE_MODEL_SUMMARIZER=" + cfg.Models.Summarizer,
+		"AICODE_PROVIDER_TYPE=" + cfg.Provider.Type,
+		"AICODE_ANTHROPIC_BASE_URL=" + cfg.Anthropic.BaseURL,
+		"AICODE_ANTHROPIC_API_KEY_ENV=" + cfg.Anthropic.APIKeyEnv,
 		"AICODE_OPENAI_BASE_URL=" + cfg.OpenAICompatible.BaseURL,
 		"AICODE_OPENAI_API_KEY_ENV=" + cfg.OpenAICompatible.APIKeyEnv,
 		"AICODE_OPENAI_TIMEOUT_SECONDS=" + strconv.FormatFloat(cfg.OpenAICompatible.TimeoutSeconds, 'f', -1, 64),
@@ -231,10 +275,14 @@ func (cfg Config) Entries() []Entry {
 		{"runtime.url", cfg.Runtime.URL},
 		{"runtime.port", strconv.Itoa(cfg.Runtime.Port)},
 		{"models.default", cfg.Models.Default},
+		{"models.main", cfg.Models.Main},
 		{"models.planner", cfg.Models.Planner},
 		{"models.coder", cfg.Models.Coder},
 		{"models.reviewer", cfg.Models.Reviewer},
 		{"models.summarizer", cfg.Models.Summarizer},
+		{"provider.type", cfg.Provider.Type},
+		{"provider.anthropic.base_url", cfg.Anthropic.BaseURL},
+		{"provider.anthropic.api_key_env", cfg.Anthropic.APIKeyEnv},
 		{"provider.openai_compatible.base_url", cfg.OpenAICompatible.BaseURL},
 		{"provider.openai_compatible.api_key_env", cfg.OpenAICompatible.APIKeyEnv},
 		{"provider.openai_compatible.timeout_seconds", formatFloat(cfg.OpenAICompatible.TimeoutSeconds)},
@@ -293,16 +341,22 @@ func KeyDocs() []KeyDoc {
 			Description: "未命中专用路由时使用的模型。",
 		},
 		{
+			Key:         "models.main",
+			Default:     defaults.Models.Main,
+			Env:         "AICODE_MODEL_MAIN",
+			Description: "v2 agent loop 主模型（唯一路由）。",
+		},
+		{
 			Key:         "models.planner",
 			Default:     defaults.Models.Planner,
 			Env:         "AICODE_MODEL_PLANNER",
-			Description: "规划任务使用的模型。",
+			Description: "已废弃，由 models.main 取代；Runtime 已忽略此配置。",
 		},
 		{
 			Key:         "models.coder",
 			Default:     defaults.Models.Coder,
 			Env:         "AICODE_MODEL_CODER",
-			Description: "代码生成和修改任务使用的模型。",
+			Description: "已废弃，由 models.main 取代；Runtime 已忽略此配置。",
 		},
 		{
 			Key:         "models.reviewer",
@@ -315,6 +369,24 @@ func KeyDocs() []KeyDoc {
 			Default:     defaults.Models.Summarizer,
 			Env:         "AICODE_MODEL_SUMMARIZER",
 			Description: "普通 chat/diff/test 汇总使用的模型。",
+		},
+		{
+			Key:         "provider.type",
+			Default:     defaults.Provider.Type,
+			Env:         "AICODE_PROVIDER_TYPE",
+			Description: "主模型使用的 provider 类型，支持 openai_compatible 或 anthropic。",
+		},
+		{
+			Key:         "provider.anthropic.base_url",
+			Default:     defaults.Anthropic.BaseURL,
+			Env:         "AICODE_ANTHROPIC_BASE_URL",
+			Description: "Anthropic provider 的 API base URL。",
+		},
+		{
+			Key:         "provider.anthropic.api_key_env",
+			Default:     defaults.Anthropic.APIKeyEnv,
+			Env:         "AICODE_ANTHROPIC_API_KEY_ENV",
+			Description: "Runtime 从哪个环境变量读取 Anthropic provider API key。",
 		},
 		{
 			Key:         "provider.openai_compatible.base_url",
@@ -454,10 +526,14 @@ func configKeyTarget(key string) (string, string, error) {
 		"runtime.url":                            {"runtime", "url"},
 		"runtime.port":                           {"runtime", "port"},
 		"models.default":                         {"models", "default"},
+		"models.main":                            {"models", "main"},
 		"models.planner":                         {"models", "planner"},
 		"models.coder":                           {"models", "coder"},
 		"models.reviewer":                        {"models", "reviewer"},
 		"models.summarizer":                      {"models", "summarizer"},
+		"provider.type":                          {"provider", "type"},
+		"provider.anthropic.base_url":            {"provider.anthropic", "base_url"},
+		"provider.anthropic.api_key_env":         {"provider.anthropic", "api_key_env"},
 		"provider.openai_compatible.base_url":    {"provider.openai_compatible", "base_url"},
 		"provider.openai_compatible.api_key_env": {"provider.openai_compatible", "api_key_env"},
 		"provider.openai_compatible.timeout_seconds": {"provider.openai_compatible", "timeout_seconds"},
@@ -717,10 +793,18 @@ port = 8765
 
 [models]
 default = "gpt-5"
+main = "gpt-5"
 planner = "gpt-5-high"
 coder = "gpt-5"
 reviewer = "gpt-5"
 summarizer = "gpt-5-mini"
+
+[provider]
+type = "openai_compatible"
+
+[provider.anthropic]
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
 
 [provider.openai_compatible]
 base_url = "https://api.openai.com/v1"

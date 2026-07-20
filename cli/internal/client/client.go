@@ -46,6 +46,11 @@ type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
 }
 
+type ApproveRequest struct {
+	ApprovalID string `json:"approval_id"`
+	AcceptAll  bool   `json:"accept_all"`
+}
+
 func New(baseURL string) Client {
 	return Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -95,8 +100,8 @@ func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendM
 	return out, nil
 }
 
-func (c Client) Approve(ctx context.Context, sessionID string, approvalID string) error {
-	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApprovalRequest{ApprovalID: approvalID}, nil)
+func (c Client) Approve(ctx context.Context, sessionID string, approvalID string, acceptAll bool) error {
+	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
 }
 
 func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {

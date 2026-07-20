@@ -2,9 +2,11 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -132,6 +134,24 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 
 	if response.Status != "queued" || response.RunID != "run_123" {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestApproveSendsAcceptAll(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	if err := c.Approve(context.Background(), "sess_1", "appr_1", true); err != nil {
+		t.Fatalf("Approve failed: %v", err)
+	}
+	if got["accept_all"] != true {
+		t.Fatalf("expected accept_all=true, got %v", got)
 	}
 }
 

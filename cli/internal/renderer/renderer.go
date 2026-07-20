@@ -280,30 +280,8 @@ func RenderEvent(event map[string]any) {
 		fmt.Println(stringValue(event["message"]))
 	case "run.started":
 		fmt.Println(stringValue(event["message"]))
-	case "plan.created":
-		fmt.Println("\n计划:")
-		if items, ok := event["items"].([]any); ok {
-			for _, item := range items {
-				if m, ok := item.(map[string]any); ok {
-					fmt.Printf("  - %s\n", stringField(m, "text"))
-				}
-			}
-		}
-	case "plan.updated":
-		fmt.Printf("计划更新: %s -> %s\n", stringValue(event["item_id"]), stringValue(event["status"]))
-	case "agent.step":
-		if line := contextStepLine(event); line != "" {
-			fmt.Println(line)
-			break
-		}
-		action := stringValue(event["action"])
-		if action == "tool" {
-			fmt.Printf("Agent step %v: %s (%s)\n", event["index"], stringValue(event["tool"]), stringValue(event["source"]))
-		} else {
-			fmt.Printf("Agent step %v: finish (%s)\n", event["index"], stringValue(event["source"]))
-		}
-	case "agent.loop.max_steps":
-		fmt.Println(stringValue(event["message"]))
+	case "assistant.delta":
+		fmt.Print(stringValue(event["text"]))
 	case "tool.started":
 		fmt.Printf("工具: %s\n", stringValue(event["tool"]))
 	case "tool.output":
@@ -325,42 +303,13 @@ func RenderEvent(event map[string]any) {
 	case "tool.error":
 		fmt.Printf("工具失败: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "approval.requested":
-		if stringValue(event["kind"]) == "patch" {
-			fmt.Println(patchStatusLine("等待确认", event, ""))
-		} else {
-			fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
-		}
-	case "patch.preview":
-		if line := patchPreviewLine(event); line != "" {
-			fmt.Println(line)
-		}
-		fmt.Println(stringValue(event["diff"]))
-	case "patch.applied":
-		fmt.Println(patchStatusLine("已应用", event, ""))
-	case "patch.rejected":
-		fmt.Println(patchStatusLine("已拒绝", event, stringValue(event["reason"])))
-	case "patch.stale":
-		fmt.Println(patchStatusLine("已过期", event, patchStaleDetail(event)))
-	case "patch.rebuild.started":
-		fmt.Println(patchStatusLine("重新生成 diff", event, ""))
-	case "verification.started":
-		fmt.Println(verificationStatusLine("运行", stringValue(event["command"])))
-	case "verification.skipped":
-		fmt.Println(verificationStatusLine("跳过", stringValue(event["reason"])))
-	case "verification.denied":
-		fmt.Println(verificationStatusLine("未运行", stringValue(event["reason"])))
-	case "verification.analysis":
-		if line := verificationAnalysisLine(event); line != "" {
-			fmt.Println(line)
-		}
-	case "verification.repair.started":
-		fmt.Println(verificationStatusLine("失败后生成修复 patch", ""))
-	case "verification.completed":
-		status := "通过"
-		if !boolValue(event["success"]) {
-			status = "失败"
-		}
-		fmt.Println(verificationStatusLine(status, stringValue(event["command"])))
+		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
+	case "edit.applied":
+		fmt.Printf("\n已应用编辑: %v (%v)\n", event["path"], event["kind"])
+	case "edit.rejected":
+		fmt.Printf("\n已拒绝编辑: %v\n", event["path"])
+	case "edit.auto_approved":
+		fmt.Printf("\n[本会话已允许] 自动应用编辑: %v\n", event["path"])
 	case "usage.recorded":
 		fmt.Println(usageLine(event))
 	case "final":
@@ -370,34 +319,6 @@ func RenderEvent(event map[string]any) {
 			PrintJSON(event)
 		}
 	}
-}
-
-func contextStepLine(event map[string]any) string {
-	if stringValue(event["action"]) != "tool" {
-		return ""
-	}
-	context := mapValue(event["context"])
-	kind := stringValue(context["kind"])
-	if kind == "" {
-		return ""
-	}
-	sourcePath := stringValue(context["source_path"])
-	query := stringValue(context["query"])
-	switch kind {
-	case "test_mapping":
-		return fmt.Sprintf("上下文: 定位相关测试 %s -> %s", sourcePath, query)
-	case "dependency_mapping":
-		return fmt.Sprintf("上下文: 定位依赖 %s -> %s", sourcePath, query)
-	case "search_result":
-		if query != "" {
-			return fmt.Sprintf("上下文: 读取搜索命中候选 query=%s", query)
-		}
-	case "file_lookup":
-		if query != "" {
-			return fmt.Sprintf("上下文: 读取文件定位候选 query=%s", query)
-		}
-	}
-	return ""
 }
 
 func contextOutputLine(event map[string]any) string {
@@ -493,90 +414,6 @@ func contextKindLabel(kind string) string {
 	}
 }
 
-func patchPreviewLine(event map[string]any) string {
-	diff := strings.TrimSpace(stringValue(event["diff"]))
-	if diff == "" {
-		return ""
-	}
-	return patchStatusLine("diff 预览", event, "")
-}
-
-func patchStatusLine(status string, event map[string]any, detail string) string {
-	line := "Patch: " + status
-	if files := filesLabel(event["files"]); files != "" {
-		line += " " + files
-	}
-	detail = strings.TrimSpace(detail)
-	if detail != "" {
-		line += " - " + detail
-	}
-	return line
-}
-
-func patchStaleDetail(event map[string]any) string {
-	reason := strings.TrimSpace(stringValue(event["reason"]))
-	if reason == "" {
-		reason = strings.TrimSpace(stringValue(event["message"]))
-	}
-	reason = strings.TrimSpace(strings.TrimPrefix(reason, "patch 已过期:"))
-	reason = strings.TrimSuffix(reason, "，请重新生成 diff")
-	for _, file := range stringList(event["files"]) {
-		reason = strings.TrimSpace(strings.TrimPrefix(reason, file))
-	}
-	return strings.TrimSpace(reason)
-}
-
-func verificationStatusLine(status string, detail string) string {
-	line := "验证: " + status
-	detail = strings.TrimSpace(detail)
-	if detail != "" {
-		line += " - " + detail
-	}
-	return line
-}
-
-func verificationAnalysisLine(event map[string]any) string {
-	analysis, ok := event["analysis"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	summary := stringValue(analysis["summary"])
-	if summary != "" {
-		return verificationStatusLine("分析", summary)
-	}
-	failures, ok := analysis["failures"].([]any)
-	if !ok || len(failures) == 0 {
-		return ""
-	}
-	first, ok := failures[0].(map[string]any)
-	if !ok {
-		return ""
-	}
-	name := stringValue(first["name"])
-	message := stringValue(first["message"])
-	if name != "" && message != "" {
-		return verificationStatusLine("分析", fmt.Sprintf("%s: %s", name, message))
-	}
-	if name != "" {
-		return verificationStatusLine("分析", name)
-	}
-	if message != "" {
-		return verificationStatusLine("分析", message)
-	}
-	return ""
-}
-
-func filesLabel(value any) string {
-	files := stringList(value)
-	if len(files) == 0 {
-		return ""
-	}
-	if len(files) == 1 {
-		return files[0]
-	}
-	return strings.Join(files, ", ")
-}
-
 func usageLine(event map[string]any) string {
 	purpose := stringValue(event["purpose"])
 	if purpose == "" {
@@ -629,30 +466,8 @@ func sliceValue(value any) []any {
 	return []any{}
 }
 
-func stringList(value any) []string {
-	switch v := value.(type) {
-	case []string:
-		return v
-	case []any:
-		items := make([]string, 0, len(v))
-		for _, item := range v {
-			text := strings.TrimSpace(stringValue(item))
-			if text != "" {
-				items = append(items, text)
-			}
-		}
-		return items
-	default:
-		return nil
-	}
-}
-
 func escapeMarkdownTable(value string) string {
 	return strings.ReplaceAll(value, "|", "\\|")
-}
-
-func stringField(m map[string]any, key string) string {
-	return stringValue(m[key])
 }
 
 func stringValue(value any) string {

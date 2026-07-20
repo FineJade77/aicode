@@ -102,6 +102,8 @@ func printHelp() {
   aicode config get models.reviewer
   aicode config set ui.language en-US
   aicode config set models.reviewer gpt-5
+  aicode config set models.main gpt-5
+  aicode config set provider.type anthropic
   aicode config unset models.reviewer
   aicode config protected add secrets/local/**
   aicode config protected list
@@ -948,21 +950,17 @@ func handleInteractiveEvent(api client.Client, sessionID string, event map[strin
 	eventType, _ := event["type"].(string)
 	switch eventType {
 	case "approval.requested":
-		kind, _ := event["kind"].(string)
-		if kind == "patch" {
-			return nil
-		}
 		approvalID, _ := event["approval_id"].(string)
 		if approvalID == "" {
 			return fmt.Errorf("approval.requested 缺少 approval_id")
 		}
-		return resolveApprovalWithPrompt(api, sessionID, approvalID, "允许执行这个工具操作吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
-	case "patch.preview":
-		approvalID, _ := event["approval_id"].(string)
-		if approvalID == "" {
-			return fmt.Errorf("patch.preview 缺少 approval_id")
+		if kind, _ := event["kind"].(string); kind == "edit" {
+			if diff, _ := event["diff"].(string); diff != "" {
+				fmt.Println(diff)
+			}
+			return resolveEditApproval(api, sessionID, approvalID)
 		}
-		return resolveApprovalWithPrompt(api, sessionID, approvalID, "应用这个 patch 吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
+		return resolveApprovalWithPrompt(api, sessionID, approvalID, "允许执行这个工具操作吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
 	default:
 		return nil
 	}
@@ -980,9 +978,26 @@ func resolveApprovalWithPrompt(api client.Client, sessionID string, approvalID s
 	defer cancel()
 
 	if strings.EqualFold(strings.TrimSpace(answer), "y") {
-		return api.Approve(ctx, sessionID, approvalID)
+		return api.Approve(ctx, sessionID, approvalID, false)
 	}
 	return api.Reject(ctx, sessionID, approvalID)
+}
+
+func resolveEditApproval(api client.Client, sessionID string, approvalID string) error {
+	fmt.Print("应用这个编辑吗？[y=应用 / a=应用并允许本会话后续编辑 / 其它=拒绝]: ")
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	switch answer {
+	case "y", "yes":
+		return api.Approve(ctx, sessionID, approvalID, false)
+	case "a", "all":
+		return api.Approve(ctx, sessionID, approvalID, true)
+	default:
+		return api.Reject(ctx, sessionID, approvalID)
+	}
 }
 
 func ensureDaemon(cfg config.Config) error {

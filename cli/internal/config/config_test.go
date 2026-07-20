@@ -306,16 +306,52 @@ func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
 	}
 }
 
+func TestModelsMainAndProviderTypeKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AICODE_HOME", home)
+	clearConfigEnv(t)
+
+	if _, err := SetValue("models.main", "m-x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.type", "anthropic"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.anthropic.api_key_env", "MY_KEY"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	env := envMap(cfg.RuntimeEnv())
+	if env["AICODE_MODEL_MAIN"] != "m-x" {
+		t.Fatalf("AICODE_MODEL_MAIN = %q", env["AICODE_MODEL_MAIN"])
+	}
+	if env["AICODE_PROVIDER_TYPE"] != "anthropic" {
+		t.Fatalf("AICODE_PROVIDER_TYPE = %q", env["AICODE_PROVIDER_TYPE"])
+	}
+	if env["AICODE_ANTHROPIC_API_KEY_ENV"] != "MY_KEY" {
+		t.Fatalf("AICODE_ANTHROPIC_API_KEY_ENV = %q", env["AICODE_ANTHROPIC_API_KEY_ENV"])
+	}
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"AICODE_RUNTIME_URL",
 		"AICODE_DEFAULT_LANGUAGE",
 		"AICODE_MODEL_DEFAULT",
+		"AICODE_MODEL_MAIN",
 		"AICODE_MODEL_PLANNER",
 		"AICODE_MODEL_CODER",
 		"AICODE_MODEL_REVIEWER",
 		"AICODE_MODEL_SUMMARIZER",
+		"AICODE_PROVIDER_TYPE",
+		"AICODE_ANTHROPIC_BASE_URL",
+		"AICODE_ANTHROPIC_API_KEY_ENV",
 		"AICODE_OPENAI_BASE_URL",
 		"AICODE_OPENAI_API_KEY_ENV",
 		"AICODE_OPENAI_TIMEOUT_SECONDS",
