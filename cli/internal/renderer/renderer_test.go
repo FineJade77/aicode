@@ -63,6 +63,32 @@ func TestRenderEventPrintsReadFileContextStatus(t *testing.T) {
 	assertContains(t, output, "# src/utils.py")
 }
 
+func TestRenderEventPrintsToolObservability(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":        "tool.output",
+		"tool":        "bash",
+		"text":        "exit=0\nok",
+		"duration_ms": float64(12),
+		"exit_code":   float64(0),
+	})
+
+	assertContains(t, output, "工具完成: bash [12ms, exit=0]")
+	assertContains(t, output, "exit=0")
+}
+
+func TestRenderEventPrintsToolErrorObservability(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":        "tool.error",
+		"tool":        "bash",
+		"error":       "命令超时",
+		"duration_ms": float64(1000),
+		"exit_code":   float64(-9),
+		"timed_out":   true,
+	})
+
+	assertContains(t, output, "工具失败: bash [1000ms, exit=-9, timeout] (命令超时)")
+}
+
 func TestRenderAssistantDelta(t *testing.T) {
 	output := captureRenderEvent(map[string]any{"type": "assistant.delta", "text": "你好"})
 	assertContains(t, output, "你好")

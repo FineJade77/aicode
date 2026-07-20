@@ -317,6 +317,9 @@ func RenderEvent(event map[string]any) {
 	case "tool.started":
 		fmt.Printf("工具: %s\n", stringValue(event["tool"]))
 	case "tool.output":
+		if detail := toolDetailLine("工具完成", event); detail != "" {
+			fmt.Println(detail)
+		}
 		if line := contextOutputLine(event); line != "" {
 			fmt.Println(line)
 		}
@@ -333,7 +336,11 @@ func RenderEvent(event map[string]any) {
 	case "tool.rejected":
 		fmt.Printf("工具执行已拒绝: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.error":
-		fmt.Printf("工具失败: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		detail := toolDetailLine("工具失败", event)
+		if detail == "" {
+			detail = fmt.Sprintf("工具失败: %s", stringValue(event["tool"]))
+		}
+		fmt.Printf("%s (%s)\n", detail, stringValue(event["error"]))
 	case "approval.requested":
 		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
 	case "edit.applied":
@@ -351,6 +358,27 @@ func RenderEvent(event map[string]any) {
 			PrintJSON(event)
 		}
 	}
+}
+
+func toolDetailLine(label string, event map[string]any) string {
+	tool := stringValue(event["tool"])
+	if tool == "" {
+		return ""
+	}
+	parts := []string{}
+	if event["duration_ms"] != nil {
+		parts = append(parts, fmt.Sprintf("%sms", stringValue(event["duration_ms"])))
+	}
+	if event["exit_code"] != nil {
+		parts = append(parts, fmt.Sprintf("exit=%s", stringValue(event["exit_code"])))
+	}
+	if boolValue(event["timed_out"]) {
+		parts = append(parts, "timeout")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s [%s]", label, tool, strings.Join(parts, ", "))
 }
 
 func contextOutputLine(event map[string]any) string {

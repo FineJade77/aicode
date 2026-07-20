@@ -11,6 +11,7 @@ async def test_bash_runs_command(tmp_path):
     (tmp_path / "hello.txt").write_text("x", encoding="utf-8")
     result = await run_tool("bash", {"command": "ls"}, ToolContext(workspace=tmp_path))
     assert result.success
+    assert isinstance(result.duration_ms, int)
     assert result.text.startswith("exit=0")
     assert "hello.txt" in result.text
 
@@ -27,6 +28,8 @@ async def test_bash_timeout(tmp_path):
     result = await run_tool("bash", {"command": "sleep 5", "timeout": 1}, ToolContext(workspace=tmp_path))
     assert not result.success
     assert "超时" in result.error
+    assert result.data["timed_out"] is True
+    assert isinstance(result.duration_ms, int)
 
 
 @pytest.mark.asyncio

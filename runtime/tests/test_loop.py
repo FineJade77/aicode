@@ -56,10 +56,23 @@ async def test_tool_loop_executes_and_feeds_back(tmp_path):
     )
     session = make_session(tmp_path)
     await run_turn(session, Request(tmp_path), runtime)
-    assert events_of(session, "tool.output")
+    output_events = events_of(session, "tool.output")
+    assert output_events
+    assert isinstance(output_events[0]["duration_ms"], int)
     # 第二次模型调用的 messages 里包含 tool 结果
     second_call = fake.calls[1]
     assert any(m.get("role") == "tool" and "x = 1" in str(m.get("content")) for m in second_call.messages)
+
+
+@pytest.mark.asyncio
+async def test_tool_output_exposes_command_observability_fields(tmp_path):
+    runtime, _ = make_runtime([tool_turn("bash", {"command": "ls"}), text_turn("列完了")], tmp_path)
+    session = make_session(tmp_path)
+    await run_turn(session, Request(tmp_path), runtime)
+    output = events_of(session, "tool.output")[0]
+    assert output["exit_code"] == 0
+    assert output["data"]["exit_code"] == 0
+    assert isinstance(output["duration_ms"], int)
 
 
 @pytest.mark.asyncio
@@ -78,6 +91,8 @@ async def test_malformed_tool_arguments_feed_parse_error_to_model(tmp_path):
     await run_turn(session, Request(tmp_path), runtime)
     errors = events_of(session, "tool.error")
     assert errors and errors[0]["data"]["parse_error"]["raw_arguments"] == "{bad"
+    assert errors[0]["parse_error"]["raw_arguments"] == "{bad"
+    assert errors[0]["duration_ms"] == 0
     assert not events_of(session, "tool.started")
     second_call = fake.calls[1]
     assert any("工具参数解析失败" in str(m.get("content")) for m in second_call.messages if m.get("role") == "tool")
@@ -89,7 +104,9 @@ async def test_non_dict_tool_arguments_do_not_reach_policy(tmp_path):
     session = make_session(tmp_path)
     await run_turn(session, Request(tmp_path), runtime)
     assert not events_of(session, "tool.started")
-    assert events_of(session, "tool.error")[0]["data"]["parse_error"]["raw_arguments"] == "[]"
+    error = events_of(session, "tool.error")[0]
+    assert error["data"]["parse_error"]["raw_arguments"] == "[]"
+    assert error["parse_error"]["raw_arguments"] == "[]"
     assert any("tool arguments JSON must be an object" in str(m.get("content")) for m in fake.calls[1].messages if m.get("role") == "tool")
 
 
@@ -100,6 +117,8 @@ async def test_invalid_tool_arguments_feed_validation_error_to_model(tmp_path):
     await run_turn(session, Request(tmp_path), runtime)
     errors = events_of(session, "tool.error")
     assert errors and errors[0]["data"]["validation_error"] == "缺少必填字段: path"
+    assert errors[0]["validation_error"] == "缺少必填字段: path"
+    assert errors[0]["duration_ms"] == 0
     assert not events_of(session, "tool.started")
     assert not events_of(session, "approval.requested")
     assert any("工具参数校验失败" in str(m.get("content")) for m in fake.calls[1].messages if m.get("role") == "tool")
@@ -142,7 +161,9 @@ async def test_edit_approval_flow_applies_after_accept(tmp_path):
     await run_turn(session, Request(tmp_path), runtime)
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 2\n"
     assert events_of(session, "approval.requested")
-    assert events_of(session, "edit.applied")
+    applied_events = events_of(session, "edit.applied")
+    assert applied_events
+    assert isinstance(applied_events[0]["duration_ms"], int)
 
 
 @pytest.mark.asyncio

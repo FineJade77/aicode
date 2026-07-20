@@ -26,6 +26,7 @@ async def test_read_file_returns_numbered_lines(tmp_path):
     (tmp_path / "a.py").write_text("line1\nline2\nline3\n", encoding="utf-8")
     result = await run_tool("read_file", {"path": "a.py", "offset": 2, "limit": 1}, make_context(tmp_path))
     assert result.success
+    assert isinstance(result.duration_ms, int)
     assert "2\tline2" in result.text
     assert "line1" not in result.text
     assert "共 3 行" in result.text
@@ -44,6 +45,7 @@ async def test_run_tool_validates_required_arguments(tmp_path):
     assert not result.success
     assert "参数校验失败" in result.error
     assert result.data["validation_error"] == "缺少必填字段: path"
+    assert isinstance(result.duration_ms, int)
 
 
 @pytest.mark.asyncio
@@ -110,6 +112,7 @@ async def test_search_reports_rg_timeout(tmp_path, monkeypatch):
 
     assert not result.success
     assert "搜索超时" in result.error
+    assert isinstance(result.duration_ms, int)
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ class ToolResult:
     error: str = ""
     risk_level: str = "low"
     requires_approval: bool = False
+    duration_ms: int = 0
 
 
 class Tool(Protocol):

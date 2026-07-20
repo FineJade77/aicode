@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from app.models.provider import (
 )
 from app.policy.engine import PolicyEngine
 from app.sessions.store import Session
-from app.tools.base import is_protected_path
+from app.tools.base import ToolResult, is_protected_path
 from app.tools.edit import EditError, EditStaleError, apply_edit, build_edit_proposal
 from app.tools.registry import build_tool_context, run_tool, tool_schemas_for_mode, validate_tool_arguments
 
@@ -120,7 +121,7 @@ async def execute_gated(
             workspace=session.workspace,
             data={"tool": call.name, "parse_error": parse_error},
         )
-        await session.events.put({"type": "tool.error", "tool": call.name, "error": message, "data": {"parse_error": parse_error}})
+        await session.events.put(tool_event("tool.error", call.name, error=message, data={"parse_error": parse_error}, duration_ms=0))
         return f"[工具参数解析失败] {message}", 0
 
     validation_error = validate_tool_arguments(call.name, call.arguments)
@@ -136,9 +137,7 @@ async def execute_gated(
             workspace=session.workspace,
             data={"tool": call.name, "validation_error": validation_error, "args": call.arguments},
         )
-        await session.events.put(
-            {"type": "tool.error", "tool": call.name, "error": message, "data": {"validation_error": validation_error}}
-        )
+        await session.events.put(tool_event("tool.error", call.name, error=message, data={"validation_error": validation_error}, duration_ms=0))
         return f"[工具参数校验失败] {message}", 0
 
     gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
@@ -167,18 +166,33 @@ async def execute_gated(
     result = await run_tool(call.name, call.arguments, context)
     if result.success:
         output = truncate_tool_output(call.name, result.text)
-        await session.events.put({"type": "tool.output", "tool": call.name, "text": result.text[:2000], "data": result.data})
+        runtime.audit.record(
+            "tool.finished",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data=tool_finish_audit_data(call.name, result),
+        )
+        await session.events.put(
+            tool_event("tool.output", call.name, text=result.text[:2000], data=result.data, duration_ms=result.duration_ms)
+        )
         return output, 0
-    await session.events.put({"type": "tool.error", "tool": call.name, "error": result.error, "data": result.data})
+    runtime.audit.record(
+        "tool.finished",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data=tool_finish_audit_data(call.name, result),
+    )
+    await session.events.put(tool_event("tool.error", call.name, error=result.error, data=result.data, duration_ms=result.duration_ms))
     return f"[错误] {truncate_tool_output(call.name, result.error)}", 0
 
 
 async def execute_edit(session: Session, request: Any, call: ToolCallRequest, runtime: Any, context: Any) -> tuple[str, int]:
+    started = time.perf_counter()
     workspace = Path(request.workspace)
     try:
         proposal = build_edit_proposal(workspace, call.arguments, context.protected_paths)
     except EditError as exc:
-        await session.events.put({"type": "tool.error", "tool": "edit_file", "error": str(exc)})
+        await session.events.put(tool_event("tool.error", "edit_file", error=str(exc), duration_ms=elapsed_ms(started)))
         return f"[编辑失败] {exc}", 0
 
     auto = session.auto_accept_edits and not is_protected_path(proposal.path, context.protected_paths)
@@ -201,16 +215,56 @@ async def execute_edit(session: Session, request: Any, call: ToolCallRequest, ru
     try:
         apply_edit(workspace, proposal)
     except EditStaleError as exc:
-        await session.events.put({"type": "tool.error", "tool": "edit_file", "error": str(exc)})
+        await session.events.put(tool_event("tool.error", "edit_file", error=str(exc), duration_ms=elapsed_ms(started)))
         return f"[编辑失败·stale] {exc}", 0
+    duration_ms = elapsed_ms(started)
     runtime.audit.record(
         "edit.applied",
         session_id=session.session_id,
         workspace=session.workspace,
-        data={"path": proposal.path, "kind": proposal.kind, "diff_bytes": len(proposal.diff)},
+        data={"path": proposal.path, "kind": proposal.kind, "diff_bytes": len(proposal.diff), "duration_ms": duration_ms},
     )
-    await session.events.put({"type": "edit.applied", "path": proposal.path, "kind": proposal.kind})
+    await session.events.put({"type": "edit.applied", "path": proposal.path, "kind": proposal.kind, "duration_ms": duration_ms})
     return f"已应用编辑 {proposal.path}:\n{proposal.diff}", 1
+
+
+def tool_event(
+    event_type: str,
+    tool: str,
+    *,
+    text: str = "",
+    error: str = "",
+    data: dict[str, Any] | None = None,
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    payload = dict(data or {})
+    event: dict[str, Any] = {"type": event_type, "tool": tool, "data": payload}
+    if text:
+        event["text"] = text
+    if error:
+        event["error"] = error
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    event.update(tool_observability_fields(payload))
+    return event
+
+
+def tool_observability_fields(data: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in ("exit_code", "timed_out", "validation_error", "parse_error"):
+        if key in data:
+            fields[key] = data[key]
+    return fields
+
+
+def tool_finish_audit_data(tool: str, result: ToolResult) -> dict[str, Any]:
+    data = {"tool": tool, "success": result.success, "duration_ms": result.duration_ms, "risk_level": result.risk_level}
+    data.update(tool_observability_fields(result.data))
+    return data
+
+
+def elapsed_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
 
 
 async def request_approval(session: Session, request: Any, kind: str, payload: dict[str, Any]) -> bool | None:

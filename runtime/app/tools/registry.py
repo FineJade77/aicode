@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
@@ -171,28 +172,37 @@ def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> str
 
 
 async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+    started = time.perf_counter()
     validation_error = validate_tool_arguments(name, arguments)
     if validation_error is not None:
-        return ToolResult(success=False, error=f"参数校验失败: {validation_error}", data={"validation_error": validation_error})
+        return with_duration(
+            ToolResult(success=False, error=f"参数校验失败: {validation_error}", data={"validation_error": validation_error}),
+            started,
+        )
 
     try:
         if name == "read_file":
-            return read_file_lines(context, arguments)
+            return with_duration(read_file_lines(context, arguments), started)
         if name == "search":
-            return await run_search(context, arguments)
+            return with_duration(await run_search(context, arguments), started)
         if name == "list_files":
-            return await ListFilesTool().run(arguments, context)
+            return with_duration(await ListFilesTool().run(arguments, context), started)
         if name == "review_diff":
-            return await ReviewDiffTool().run(arguments, context)
+            return with_duration(await ReviewDiffTool().run(arguments, context), started)
         if name == "bash":
-            return await run_bash(context, arguments)
+            return with_duration(await run_bash(context, arguments), started)
         if name == "edit_file":
-            return ToolResult(success=False, error="edit_file 由 agent loop 单独处理", risk_level="medium")
-        return ToolResult(success=False, error=f"未知工具: {name}", risk_level="high")
+            return with_duration(ToolResult(success=False, error="edit_file 由 agent loop 单独处理", risk_level="medium"), started)
+        return with_duration(ToolResult(success=False, error=f"未知工具: {name}", risk_level="high"), started)
     except ToolError as exc:
-        return ToolResult(success=False, error=str(exc))
+        return with_duration(ToolResult(success=False, error=str(exc)), started)
     except Exception as exc:  # 工具异常回给模型，不中断循环
-        return ToolResult(success=False, error=f"{exc.__class__.__name__}: {exc}", risk_level="high")
+        return with_duration(ToolResult(success=False, error=f"{exc.__class__.__name__}: {exc}", risk_level="high"), started)
+
+
+def with_duration(result: ToolResult, started: float) -> ToolResult:
+    result.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+    return result
 
 
 def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
