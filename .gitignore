@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .venv/
+.pytest_cache
 __pycache__/
 *.pyc
 node_modules/
@@ -9,3 +10,4 @@ build/
 coverage/
 runtime/.pytest_cache/
 cli/aicode
+docs/
