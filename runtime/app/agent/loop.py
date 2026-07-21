@@ -8,6 +8,7 @@ from app.agent.history import compact_if_needed, load_history, persist_message, 
 from app.agent.prompts import BUDGET_NOTE_EN, BUDGET_NOTE_ZH, VERIFY_NOTE_EN, VERIFY_NOTE_ZH, build_system_prompt
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.agent.utils import localized
+from app.audit.logger import stable_hash
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     CompletionResult,
@@ -296,6 +297,7 @@ async def execute_edit(session: Session, request: Any, call: ToolCallRequest, ru
         )
         return f"[编辑失败·stale] {exc}", 0
     duration_ms = elapsed_ms(started)
+    patch_hash = stable_hash(proposal.diff)
     runtime.audit.record(
         "edit.applied",
         session_id=session.session_id,
@@ -305,11 +307,19 @@ async def execute_edit(session: Session, request: Any, call: ToolCallRequest, ru
             "kind": proposal.kind,
             "tool_call_id": call.id,
             "diff_bytes": len(proposal.diff),
+            "patch_hash": patch_hash,
             "duration_ms": duration_ms,
         },
     )
     await session.events.put(
-        {"type": "edit.applied", "path": proposal.path, "kind": proposal.kind, "tool_call_id": call.id, "duration_ms": duration_ms}
+        {
+            "type": "edit.applied",
+            "path": proposal.path,
+            "kind": proposal.kind,
+            "tool_call_id": call.id,
+            "patch_hash": patch_hash,
+            "duration_ms": duration_ms,
+        }
     )
     return f"已应用编辑 {proposal.path}:\n{proposal.diff}", 1
 

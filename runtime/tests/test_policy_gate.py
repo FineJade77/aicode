@@ -23,6 +23,12 @@ def test_write_tools_denied_in_review(engine):
     assert gate_bash(engine, "ls", mode="review").verdict == "deny"
 
 
+def test_write_tools_denied_in_commit_message_mode(engine):
+    assert engine.gate("read_file", {"path": "a.py"}, mode="commit_message").verdict == "allow"
+    assert engine.gate("edit_file", {"path": "a.py"}, mode="commit_message").verdict == "deny"
+    assert gate_bash(engine, "git diff", mode="commit_message").verdict == "deny"
+
+
 def test_edit_file_always_asks(engine):
     assert engine.gate("edit_file", {"path": "a.py"}).verdict == "ask"
 

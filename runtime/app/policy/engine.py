@@ -8,6 +8,7 @@ from typing import Any
 
 
 READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "related_files", "review_diff"}
+READ_ONLY_MODES = {"review", "commit_message"}
 
 DENY_EXECUTABLES = {"rm", "sudo", "su", "shutdown", "reboot", "mkfs", "dd"}
 ALLOW_EXECUTABLES = {"pwd", "ls", "rg", "grep", "head", "tail", "wc", "cat", "which", "echo"}
@@ -77,8 +78,12 @@ class PolicyEngine:
     def gate(self, tool_name: str, args: dict[str, Any], mode: str = "default", language: str = "zh-CN") -> GateDecision:
         if tool_name in READ_ONLY_TOOLS_V2:
             return GateDecision("allow", "low")
-        if mode == "review":
-            return GateDecision("deny", "high", _reason(language, "review 模式只允许只读工具", "review mode only permits read-only tools"))
+        if mode in READ_ONLY_MODES:
+            return GateDecision(
+                "deny",
+                "high",
+                _reason(language, f"{mode} 模式只允许只读工具", f"{mode} mode only permits read-only tools"),
+            )
         if tool_name == "edit_file":
             return GateDecision("ask", "medium", _reason(language, "文件写入需要 inline diff 确认", "file writes require inline diff confirmation"))
         if tool_name == "bash":

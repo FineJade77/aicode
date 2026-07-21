@@ -226,7 +226,7 @@ session.auto_accept_edits 且非 protected？
 apply_edit  ← 应用前校验文件内容 hash 未被外部修改（stale 检测），否则报错让模型重读
   |
   v
-edit.applied（写入 history 供后续验证）
+edit.applied（写入 history 供后续验证；audit 记录 diff_bytes 与 patch_hash，不记录完整 diff）
 ```
 
 ## 10. Context 管理（history）
@@ -327,7 +327,7 @@ SQLite 存 session / message / event。message 的 role 为 user/assistant/tool�
 
 ## 15. 审计日志
 
-从第一版记录到本地 JSONL（`~/.aicode/audit.jsonl`，或 `$AICODE_HOME/audit.jsonl`）：session 创建、消息、工具调用、approval、edit（含 diff 大小）、usage、final、error。敏感内容脱敏（`.env`/password/token/secret/api_key/private_key）。
+从第一版记录到本地 JSONL（`~/.aicode/audit.jsonl`，或 `$AICODE_HOME/audit.jsonl`）：session 创建、消息、工具调用、approval、edit（含 diff 大小与 patch hash）、usage、final、error。敏感内容脱敏（`.env`/password/token/secret/api_key/private_key）。
 
 ## 16. 多仓库 Workspace
 

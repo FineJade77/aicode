@@ -422,7 +422,7 @@ Docker Sandbox：
 审计增强：
 
 - audit event schema
-- patch hash
+- 已完成：patch hash（`edit.applied` 审计记录 diff SHA-256）
 - 已完成：sandbox command hash
 - sensitive redaction
 - protected path enforcement
@@ -497,7 +497,7 @@ aicode "删除这些废弃文件"
 
 开发者效率：
 
-- `aicode commit-message`
+- 已完成：`aicode commit-message`
 - `aicode pr-description`
 - `aicode explain <file>`
 - `aicode explain <symbol>`

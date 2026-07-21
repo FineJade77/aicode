@@ -66,6 +66,7 @@ go run ./cli review
 go run ./cli review-rules
 go run ./cli models
 go run ./cli test
+go run ./cli commit-message
 go run ./cli usage
 go run ./cli usage --today
 go run ./cli usage --session <session_id>
@@ -80,7 +81,7 @@ CLI 会在实时事件流中展示紧凑 workflow 状态，包括工具调用、
 
 ## 审计日志
 
-Runtime 会把 session、tool call、edit、usage 等事件记录到本地 JSONL：
+Runtime 会把 session、tool call、edit、usage 等事件记录到本地 JSONL；`edit.applied` 会记录 diff 大小和 `patch_hash`，不把完整 diff 写入审计日志：
 
 ```text
 ~/.aicode/audit.jsonl

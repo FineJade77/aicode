@@ -126,10 +126,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 READ_ONLY_TOOL_NAMES = {"read_file", "search", "list_files", "related_files", "review_diff"}
+NO_TOOL_MODES = {"commit_message"}
 TOOL_SCHEMAS_BY_NAME = {schema["name"]: schema for schema in TOOL_SCHEMAS}
 
 
 def tool_schemas_for_mode(mode: str) -> list[dict[str, Any]]:
+    if mode in NO_TOOL_MODES:
+        return []
     if mode == "review":
         return [schema for schema in TOOL_SCHEMAS if schema["name"] in READ_ONLY_TOOL_NAMES]
     return list(TOOL_SCHEMAS)

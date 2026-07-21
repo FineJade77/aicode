@@ -5,7 +5,7 @@ import pytest
 
 from app.agent.loop import run_turn
 from app.agent.types import AgentRuntime
-from app.audit.logger import AuditLogger
+from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import Settings
 from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY
 from app.models.router import ModelRouter
@@ -178,7 +178,13 @@ async def test_edit_approval_flow_applies_after_accept(tmp_path):
     applied_events = events_of(session, "edit.applied")
     assert applied_events
     assert applied_events[0]["tool_call_id"] == "tc_1"
+    assert applied_events[0]["patch_hash"] == stable_hash(approvals[0]["diff"])
     assert isinstance(applied_events[0]["duration_ms"], int)
+    await runtime.audit.flush()
+    records = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    applied_audit = next(record for record in records if record["event_type"] == "edit.applied")
+    assert applied_audit["data"]["patch_hash"] == stable_hash(approvals[0]["diff"])
+    assert "diff" not in applied_audit["data"]
 
 
 @pytest.mark.asyncio

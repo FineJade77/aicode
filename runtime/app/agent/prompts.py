@@ -18,6 +18,7 @@ MODE_INSTRUCTIONS_ZH = {
     "diff": "查看当前 git diff（bash: git diff）并总结变更要点。",
     "test": "发现并运行本项目的测试命令，报告结果；如有失败，定位原因。",
     "explain": "解释用户指定的文件或符号，先定位再阅读，不要修改任何文件。",
+    "commit_message": "当前是 commit-message 模式：只根据用户提供的 git status/diff 生成提交信息。不要调用工具，不要修改文件，只输出提交信息本身。",
 }
 
 MODE_INSTRUCTIONS_EN = {
@@ -25,6 +26,7 @@ MODE_INSTRUCTIONS_EN = {
     "diff": "Inspect the current git diff (bash: git diff) and summarize the changes.",
     "test": "Discover and run this project's tests. Report results; if tests fail, identify the cause.",
     "explain": "Explain the requested file or symbol. Locate and read it first, and do not modify files.",
+    "commit_message": "Commit-message mode: generate a commit message only from the git status/diff supplied by the user. Do not call tools, do not modify files, and output only the commit message.",
 }
 
 
