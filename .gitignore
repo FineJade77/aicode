@@ -3,6 +3,7 @@
 .venv/
 .cache/
 .pytest_cache
+.claude/
 __pycache__/
 *.pyc
 node_modules/
