@@ -15,7 +15,7 @@
     },
     "commands": {
       "type": "object",
-      "description": "项目常用命令记忆，会注入 prompt；commands.test 也用于 aicode test。",
+      "description": "项目常用命令记忆，会注入 prompt；commands.test/build/lint 也用于 Docker sandbox 命令探测，commands.test 还用于 aicode test。",
       "additionalProperties": {
         "type": "string"
       }

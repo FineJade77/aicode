@@ -187,7 +187,7 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 
 - `protectedPaths`: `read_file`、`search`、`list_files`、`related_files`、`review_diff` 和 `edit_file` 都会跳过或拦截这些路径。
 - `defaultLanguage`: 项目级交互语言偏好；创建 session 时优先于用户级 `ui.language`。
-- `commands.*`: 项目常用命令记忆，会注入 prompt 供模型选择；`commands.test` 设置为具体命令时，`aicode test` 会优先使用该命令，设置为 `auto` 时自动探测。
+- `commands.*`: 项目常用命令记忆，会注入 prompt 供模型选择；`commands.test/build/lint` 会被 Docker sandbox 使用，`commands.test` 还会被 `aicode test` 使用；值设置为 `auto` 时自动探测。
 - `workspaces`: 声明额外只读仓库，供 `list_files`、`search`、`read_file`、`related_files` 分析使用（这些只读工具支持 `workspace` 参数；`bash`、`edit_file`、`review_diff` 始终只作用于主 workspace）。
 - `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
 - `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
@@ -228,13 +228,15 @@ go run ./cli config test show
 go run ./cli config test unset
 ```
 
-也可以先用 Docker MVP 在隔离环境里跑测试。该模式默认禁网、只读挂载 workspace，且会用空文件遮住仓库根目录的 `.env*`：
+也可以先用 Docker sandbox 在隔离环境里跑测试、构建或 lint。该模式默认禁网、只读挂载 workspace，给容器设置 CPU/内存/PID 限制，并用空文件遮住仓库根目录的 `.env*`：
 
 ```bash
 go run ./cli --sandbox docker test
+go run ./cli --sandbox docker build
+go run ./cli --sandbox docker lint
 ```
 
-默认镜像会按探测到的测试命令选择；如需自定义，可设置 `AICODE_SANDBOX_DOCKER_IMAGE`。
+默认镜像会按探测到的命令选择；如需自定义，可设置 `AICODE_SANDBOX_DOCKER_IMAGE`。资源限制默认是 `AICODE_SANDBOX_CPUS=2`、`AICODE_SANDBOX_MEMORY=2g`、`AICODE_SANDBOX_PIDS_LIMIT=256`，可用同名环境变量覆盖。每次 sandbox 运行会写入本地审计日志，只记录 action、镜像、隔离配置、资源限制、`.env*` mask 数量和 command hash，不记录原始命令。
 
 也可以用 CLI 管理额外只读 workspace：
 
@@ -259,10 +261,11 @@ go run ./cli review-rules
 ```json
 {
   "defaultLanguage": "zh-CN",
-  "commands": {
-    "test": "python3 -m pytest tests/unit",
-    "lint": "ruff check ."
-  },
+	  "commands": {
+	    "test": "python3 -m pytest tests/unit",
+	    "build": "npm run build",
+	    "lint": "ruff check ."
+	  },
   "review": {
     "disabledRules": ["large_diff"],
     "largeDiffThreshold": 1200,

@@ -70,6 +70,30 @@ func TestGetTestCommand(t *testing.T) {
 	}
 }
 
+func TestGetCommandReadsNamedCommand(t *testing.T) {
+	workspace := t.TempDir()
+	configDir := filepath.Join(workspace, ".aicode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"commands":{"build":"npm run build","lint":"ruff check ."}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, command, configured, err := GetCommand(workspace, "lint")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if path != configPath {
+		t.Fatalf("path = %q", path)
+	}
+	if !configured || command != "ruff check ." {
+		t.Fatalf("configured = %v command = %q", configured, command)
+	}
+}
+
 func TestGetTestCommandReportsMissing(t *testing.T) {
 	workspace := t.TempDir()
 

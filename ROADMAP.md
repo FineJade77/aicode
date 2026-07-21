@@ -411,19 +411,19 @@ aicode "修复认证模块的边界条件并补测试"
 
 Docker Sandbox：
 
-- 已完成 MVP：`aicode --sandbox docker test`
-- sandbox 内运行 test/build/lint
-- workspace 只读挂载
+- 已完成：`aicode --sandbox docker test/build/lint`
+- 已完成：sandbox 内运行 test/build/lint
+- 已完成：workspace 只读挂载
 - 可选写入挂载
-- 默认禁用网络
-- CPU/内存限制
-- 敏感环境变量隔离
+- 已完成：默认禁用网络
+- 已完成：CPU/内存/PID 限制
+- 已完成：敏感环境变量隔离（不传 `.env*`，并遮蔽仓库根目录 `.env*`）
 
 审计增强：
 
 - audit event schema
 - patch hash
-- command hash
+- 已完成：sandbox command hash
 - sensitive redaction
 - protected path enforcement
 - audit export
@@ -443,13 +443,17 @@ Policy 增强：
 
 ```bash
 aicode --sandbox docker test
+aicode --sandbox docker build
+aicode --sandbox docker lint
 ```
 
 应满足：
 
 - 测试在容器中运行
+- build/lint 可在容器中运行
 - 默认不传入 `.env`
 - 默认无网络
+- 默认有 CPU/内存/PID 限制
 - 审计日志记录 sandbox 配置
 
 运行：

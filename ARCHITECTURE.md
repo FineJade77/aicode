@@ -38,7 +38,7 @@
 | 低风险测试命令 | 允许自动执行 |
 | review 模式 | 严格只读（工具集过滤 + policy deny 双保险） |
 | 多仓库 workspace | 只读分析（`read_file`/`search`/`list_files` 支持 `workspace` 参数） |
-| Docker sandbox | CLI MVP 已支持 `aicode --sandbox docker test`；完整资源限制/审计增强后续补齐 |
+| Docker sandbox | CLI 已支持 `aicode --sandbox docker test/build/lint`，默认禁网、只读挂载、遮蔽 `.env*`、资源限制和本地审计 |
 | 审计日志 | 从第一版开始记录，后续增强到企业级 |
 
 ## 3. 总体架构
@@ -310,7 +310,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 ```json
 {
   "defaultLanguage": "zh-CN",
-  "commands": { "test": "python3 -m pytest tests/unit", "lint": "ruff check ." },
+  "commands": { "test": "python3 -m pytest tests/unit", "build": "npm run build", "lint": "ruff check ." },
   "protectedPaths": [".env", "secrets/**", "infra/prod/**"],
   "review": { "disabledRules": ["large_diff"], "largeDiffThreshold": 1200, "maxFindings": 25 },
   "workspaces": [ { "name": "api", "path": "../api", "mode": "read_only" } ]
@@ -335,7 +335,9 @@ SQLite 存 session / message / event。message 的 role 为 user/assistant/tool�
 
 ## 17. Docker Sandbox
 
-当前 CLI 已支持 `aicode --sandbox docker test`：自动探测测试命令，在 Docker 中运行，workspace 只读挂载，默认禁网，仅注入 `AICODE_SANDBOX=1`，并用空文件遮住仓库根目录的 `.env*`。后续补齐 build/lint、CPU/内存限制和审计日志记录。
+当前 CLI 已支持 `aicode --sandbox docker test/build/lint`：自动探测或读取 `.aicode/config.json` 的 `commands.<action>`，在 Docker 中运行。sandbox 默认只读挂载 workspace、禁用网络、遮蔽仓库根目录 `.env*`、设置安全 cache 目录，并通过 `--cpus`、`--memory`、`--pids-limit` 加资源限制（默认 `2` / `2g` / `256`，可用 `AICODE_SANDBOX_CPUS`、`AICODE_SANDBOX_MEMORY`、`AICODE_SANDBOX_PIDS_LIMIT` 覆盖）。
+
+sandbox 运行会写入本地 audit JSONL：`sandbox.started` / `sandbox.finished`，记录 action、镜像、网络/挂载/环境隔离、资源限制、env mask 数量、exit code、duration 和 command hash，不记录原始命令。
 
 ## 18. 国际化
 

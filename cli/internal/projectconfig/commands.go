@@ -7,13 +7,17 @@ import (
 )
 
 func GetTestCommand(workspacePath string) (string, string, bool, error) {
+	return GetCommand(workspacePath, "test")
+}
+
+func GetCommand(workspacePath string, name string) (string, string, bool, error) {
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
 	raw, err := readProjectConfig(path)
 	if err != nil {
 		return path, "", false, err
 	}
 	commands := objectValue(raw["commands"])
-	value, ok := commands["test"].(string)
+	value, ok := commands[name].(string)
 	value = strings.TrimSpace(value)
 	if !ok || value == "" {
 		return path, "", false, nil
