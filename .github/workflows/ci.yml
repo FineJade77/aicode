@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  go:
+    name: Go CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Check gofmt
+        run: |
+          fmt_out=$(gofmt -l cli/)
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt'ed:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: GOCACHE=$PWD/.cache/go-build GOMODCACHE=$PWD/.cache/go-mod go vet ./cli/...
+
+      - name: go test
+        run: make test-go
+
+  python:
+    name: Python Runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: make deps-python
+
+      - name: Compile check
+        run: make compile-python
+
+      - name: pytest
+        run: make test-python
