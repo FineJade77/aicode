@@ -1,372 +1,415 @@
 # aicode Architecture
 
-> 本文档描述 **Agent Loop v2**（模型驱动）的当前架构
+本文描述当前代码库的运行架构和设计边界，重点是 CLI、Python Runtime、Agent Loop、工具权限、配置、审计和 Docker Sandbox 的真实实现状态。
 
-## 1. 产品定位
+## 1. Product Boundary
 
-`aicode` 是一个本地优先、CLI-first、默认中文交互的 Coding Agent。
+`aicode` 是一个本地优先的 AI Coding Agent：
 
-它专注软件开发场景，核心能力是：
+- 用户通过 Go CLI 发起对话、代码审查、diff 分析、测试修复、提交信息生成等任务。
+- Python Runtime 作为本机 daemon 提供会话、模型调用、工具执行、审批、SSE 事件和持久化能力。
+- Agent 默认在用户的本地 workspace 内工作，读写都经过策略层和审批层。
+- Docker Sandbox 是 CLI 侧的本地命令隔离能力，用于安全运行 `test`、`build`、`lint`。
 
-- 理解代码仓库
-- 搜索和阅读代码
-- 由模型自主决定探索路径并调用工具
-- 生成代码修改（`edit_file`），展示 inline diff 并等待用户确认后应用
-- 运行命令验证改动（低风险命令自动执行，其余经策略闸门）
-- 审查代码变更
-- 记录 token、成本和审计日志
+非目标：
 
-`aicode` 不做通用聊天助手，不做无监督自动上线，不默认访问互联网，也不允许绕过权限策略修改敏感文件。
+- 不提供 IDE 插件、Web UI 或桌面图形界面。
+- 不提供云端托管执行环境。
+- 不自动跨仓库写入或部署生产系统。
+- 不把项目规则视为高于系统安全策略的指令。
 
-## 2. 已确认架构决策
-
-| 主题 | 决策 |
-| --- | --- |
-| 产品形态 | 第一版只做 CLI |
-| CLI 名称 | `aicode` |
-| CLI 实现 | Go（薄客户端，只做交互与渲染） |
-| Runtime 实现 | Python 3.11+（唯一智能体大脑） |
-| 通信协议 | HTTP + Server-Sent Events，支持流式与断点续传 |
-| 默认语言 | 中文；通过配置切换英文 |
-| Agent 循环 | 模型通过原生 function calling 驱动的工具循环 |
-| 模型接入 | OpenAI-compatible provider + Anthropic provider（原生 tool calling + 流式） |
-| 模型扩展 | 通过 provider 抽象扩展其他模型 |
-| 模型路由 | 三角色：`main`（主循环）/ `reviewer`（review 模式）/ `summarizer`（history 压缩） |
-| 无模型运行 | 不支持：未配置 provider 直接报错，不回退 stub |
-| token/cost | 本地统计 |
-| 文件写入 | 统一走 `edit_file`，逐次 inline diff 确认（支持会话级 accept-all，protected 路径除外） |
-| 低风险测试命令 | 允许自动执行 |
-| review 模式 | 严格只读（工具集过滤 + policy deny 双保险） |
-| 多仓库 workspace | 只读分析（`read_file`/`search`/`list_files` 支持 `workspace` 参数） |
-| Docker sandbox | CLI 已支持 `aicode --sandbox docker test/build/lint`，默认禁网、只读挂载、遮蔽 `.env*`、资源限制和本地审计 |
-| 审计日志 | 从第一版开始记录，后续增强到企业级 |
-
-## 3. 总体架构
-
-```text
-aicode CLI (Go)
-  |
-  | HTTP + SSE over localhost (127.0.0.1)
-  v
-Python 3.11+ Runtime Daemon
-  |
-  +-- Agent Loop (模型驱动的工具循环)
-  +-- Model Router (main / reviewer / summarizer)
-  +-- Provider 层 (OpenAI-compatible / Anthropic，流式 + tool calling)
-  +-- Tool Registry (read_file/search/list_files/related_files/bash/edit_file/review_diff)
-  +-- Policy Engine (allow / ask / deny 三态闸门)
-  +-- Edit Approval (inline diff + accept-all + stale 检测)
-  +-- History (加载 / 持久化 / 三层上下文压缩)
-  +-- Audit Logger
-  +-- Session Store (SQLite)
-  |
-  v
-Workspace / Git / Shell / SQLite / Docker Sandbox (test MVP)
-```
-
-Go CLI 是用户交互层：命令解析、自动启停 daemon、SSE 事件消费与渲染、审批交互。它不调用模型、不做规划、不修改文件、不判断风险。
-
-所有核心决策、工具调度、权限判断、会话状态都由 Python Runtime 管理。
-
-## 4. 进程模型
-
-本地 daemon + session 模式。
+## 2. System Overview
 
 ```text
 User
   |
   v
-aicode "修复这个测试失败"
+Go CLI
+  |-- chat / review / diff / test / explain / commit-message
+  |-- config / sessions / usage / models / review-rules
+  |-- --sandbox docker test|build|lint
+  |
+  | HTTP + SSE, localhost token auth
+  v
+Python Runtime
+  |-- FastAPI server
+  |-- Session store, messages, events, approval state
+  |-- Agent Loop
+  |-- Model router
+  |-- Tool registry
+  |-- Policy engine
+  |-- Edit approval and patch apply
+  |-- Audit logger and usage tracker
   |
   v
-Go CLI 检查 Runtime 状态
-  +-- 未启动：启动 Python daemon（绑定 127.0.0.1）
-  +-- 已启动：复用当前 daemon
-  |
-  v
-创建或恢复 session
-  |
-  v
-通过 SSE 流式接收事件
-  |
-  v
-CLI 渲染 assistant 文本流、工具调用、inline diff、final summary
+Workspace / SQLite / Model Providers
 ```
 
-保留一次性运行模式（CI/调试）：`aicode --no-daemon "..."`。
-
-## 5. Agent Loop（核心）
-
-v2 的核心理念：**loop 本身极简，模型自主决定做什么，安全由执行点的统一策略闸门保证**。没有规则 planner、意图分类或固定工具序列。
+Docker Sandbox 不经过 Runtime：
 
 ```text
-用户消息
+Go CLI --sandbox docker <command>
   |
   v
-load_history(session)  ← 唯一状态，跨消息持久化
-  |
+Docker container
+  |-- workspace read-only mount
+  |-- network disabled by default
+  |-- .env not passed through
+  |-- limited allowlist of cache env
+  |-- resource limits
   v
-┌─────────────────────────────────────────────┐
-│  for step in range(max_steps):               │
-│      result = model.stream_complete(          │
-│          purpose, system, history, tools)     │  ← 文本增量转发为 assistant.delta
-│      history.append(assistant_message)        │
-│      if not result.tool_calls:                │
-│          if 本轮有编辑且未提示验证:            │
-│              注入验证提示，继续                │
-│          else: break                          │
-│      for call in result.tool_calls:           │
-│          output = execute_gated(call)         │  ← 安全闸门在这里
-│          history.append(tool_message)         │
-│      history = compact_if_needed(history)     │
-│  else:  # 达到步数上限                         │
-│      注入收尾提示，最后一次 tools=[] 强制总结  │
-└─────────────────────────────────────────────┘
-  |
-  v
-emit final { summary }
+local audit event
 ```
 
-要点：
+## 3. Main Components
 
-- **history 是唯一状态**，持久化到 SQLite messages 表（role: user/assistant/tool），因此多轮修正（"不对，改成 X"）开箱即用。
-- **验证闭环在循环内自然发生**：编辑应用成功后注入系统提示"请运行测试验证；连续 3 次失败请停止汇报"，模型自行跑测试→看失败→再改。
-- **预算收尾**：`TurnBudget`（默认 40 步）耗尽时强制模型总结，保证每轮都以 `final` 事件结束。
-- **模型失败**：provider 请求最终失败或未配置 → 该轮以 `error` + `final` 事件结束，不静默降级。
-- **角色路由**：review 模式的模型调用走 `purpose="reviewer"`，其余走 `main`；history 层压缩走 `summarizer`。
+### 3.1 Go CLI
 
-## 6. 通信协议（HTTP + SSE）
+CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置读写、SSE 输出和 Docker Sandbox。
 
-### 6.1 API
+主要命令：
 
-```http
-GET  /v1/daemon/status
-POST /v1/sessions
-GET  /v1/sessions
-GET  /v1/sessions/{id}
-POST /v1/sessions/{id}/messages       # provider 未配置时返回 400
-GET  /v1/sessions/{id}/events         # SSE，支持 after / Last-Event-ID 续传
-POST /v1/sessions/{id}/approve        # body: {approval_id, accept_all}
-POST /v1/sessions/{id}/reject
-GET  /v1/usage
-GET  /v1/usage/sessions/{id}
-GET  /v1/models/routes
-GET  /v1/review/rules
-```
+- `chat`: 与 Agent 对话，可复用或创建 session。
+- `review`: 对当前改动做代码审查，Runtime 使用 reviewer 路由和只读工具。
+- `diff`: 分析当前 diff。
+- `test`: 根据测试失败信息让 Agent 辅助修复。
+- `explain`: 解释代码或项目行为。
+- `commit-message`: 基于 staged diff 或 working tree diff 生成提交信息。
+- `sessions`: 查看和恢复历史 session。
+- `usage`: 查看 token 和成本估算。
+- `models`: 查看模型路由。
+- `review-rules`: 查看当前审查规则和保护路径。
+- `config`: 查看或修改用户配置。
+- `daemon`: 管理 Runtime daemon。
+- `--sandbox docker test|build|lint`: 在 Docker 隔离环境运行项目命令。
 
-### 6.2 SSE 事件
+CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
 
-事件结构化，带 `event_id`（续传游标）和 `run_id`（区分同一 session 内多次运行）。CLI 只渲染。
+### 3.2 Python Runtime
+
+Runtime 是 Agent 的核心执行层，职责包括：
+
+- 提供 HTTP API 和 SSE 事件流。
+- 管理 session、message、event、approval 状态。
+- 构造 prompt、调用模型、解析工具调用。
+- 执行工具前做 policy 校验。
+- 对写操作和风险命令发起审批。
+- 应用 patch 并检测文件漂移。
+- 记录审计日志和用量统计。
+
+Runtime 使用 FastAPI + Uvicorn，持久化默认落在 `.aicode/state/` 下。
+
+## 4. Process Model
+
+典型执行过程：
+
+1. CLI 读取用户配置和项目配置。
+2. CLI 确保 Runtime daemon 可用。
+3. CLI 调用 `POST /v1/sessions` 创建或复用 session。
+4. CLI 调用 `POST /v1/sessions/{id}/messages` 发起一次 Agent run。
+5. Runtime 立即返回 `run_id`。
+6. CLI 通过 `GET /v1/sessions/{id}/events` 订阅 SSE。
+7. Runtime 持续写入 event，CLI 实时展示。
+8. 如遇 approval，CLI 调用 approve 或 reject API。
+9. Agent 完成后，Runtime 持久化消息、事件、用量和审计记录。
+
+SSE event 使用递增 `event_id`，CLI 可以用 `Last-Event-ID` 恢复事件流。
+
+## 5. Agent Loop
+
+Agent Loop 是一次 run 的核心状态机。
 
 ```text
-session.created / run.queued / run.started
-assistant.delta      # 模型文本增量（流式）
-tool.started / tool.output / tool.denied / tool.error / tool.rejected
-approval.requested   # kind: "tool" | "edit"（edit 携带 diff）
-edit.applied / edit.rejected / edit.auto_approved
-usage.recorded       # model / provider / purpose / tokens / cost
-context.budget       # history 压缩发生时
-error / final
+load session history
+  |
+  v
+build system prompt + project prompt + recent messages
+  |
+  v
+select model route and tool schemas by mode
+  |
+  v
+stream model response
+  |
+  +--> plain assistant text
+  |
+  +--> tool calls
+          |
+          v
+       policy check
+          |
+          +--> allow: execute tool
+          +--> ask: emit approval.requested and wait
+          +--> deny: return denial as tool result
+          |
+          v
+       persist tool result and continue
+  |
+  v
+compact history when context budget requires it
+  |
+  v
+emit run.completed or run.failed
 ```
 
-Schema 见 `schemas/events.schema.json`、`schemas/tools.schema.json`、`schemas/config.schema.json`。
+模型 purpose：
 
-## 7. Tool 系统
+- `review` 使用 `reviewer` 路由。
+- 历史压缩使用 `summarizer` 路由。
+- 其他模式使用 `main` 路由。
 
-模型只能通过结构化工具操作系统。工具定义（`{name, description, input_schema}`）作为原生 function calling 的 tools 传给模型；Provider 层把它翻译成各自格式（OpenAI `tools` / Anthropic `tool_use`）。
+当前不会在 provider 未配置时降级到 stub 模型；缺少 API key 会直接报错。
 
-内置工具（`runtime/app/tools/registry.py`）：
+## 6. Modes
 
-| 工具 | 说明 | 风险 |
+| Mode | 入口 | 工具能力 | 说明 |
+| --- | --- | --- | --- |
+| `default` | `chat` | 全量工具 | 常规编码 Agent。 |
+| `review` | `review` | 只读工具 | 专注发现问题，不修改文件。 |
+| `diff` | `diff` | 全量工具 | 分析 diff，可结合用户后续要求执行修复。 |
+| `test` | `test` | 全量工具 | 基于测试输出定位和修复问题。 |
+| `explain` | `explain` | 全量工具 | Prompt 要求解释为主；安全策略仍会约束写操作。 |
+| `commit_message` | `commit-message` | 无工具 | CLI 注入 diff，模型只返回提交信息。 |
+
+注意：`explain` 的“不修改”主要是 prompt 约束；如果未来希望硬性只读，应把它加入 Runtime 的只读 mode 集合。
+
+## 7. Tool Registry
+
+Runtime 当前注册的工具：
+
+| Tool | 类型 | 说明 |
 | --- | --- | --- |
-| `read_file` | 带行号读取，`offset`/`limit` 分页；支持 `workspace` | 只读 |
-| `search` | ripgrep 优先，无 rg 时纯 Python 回退；正则 + glob；支持 `workspace` | 只读 |
-| `list_files` | 目录树，深度受限；支持 `workspace` | 只读 |
-| `related_files` | 按源码/测试命名、同名文件和引用行查找相关上下文；支持 `workspace` | 只读 |
-| `bash` | 统一命令执行入口（git/测试/构建等），超时杀进程组 | 由 policy 分级 |
-| `edit_file` | replace/create/delete，单文件 stale 检测，拒绝非 UTF-8 | 必经 approval |
-| `review_diff` | 对当前 git diff 跑确定性 review 规则 | 只读 |
+| `read_file` | 只读 | 读取 workspace 内文件。 |
+| `search` | 只读 | 基于文本搜索文件内容。 |
+| `list_files` | 只读 | 列出文件。 |
+| `related_files` | 只读 | 根据路径和内容启发式寻找相关文件。 |
+| `review_diff` | 只读 | 生成或读取用于审查的 diff。 |
+| `bash` | 风险可变 | 执行命令，经过 policy 分类和审批。 |
+| `edit_file` | 写入 | 生成 patch proposal，经过 edit approval。 |
 
-项目信息（测试命令、常用命令、protected paths、`.aicode/rules.md`、`.aicode/memory.md`、语言偏好）通过 system prompt 注入，不再需要独立的 detect 工具。
+工具 schema 会按 mode 裁剪：
 
-## 8. Policy Engine
+- `commit_message`: 不暴露任何工具。
+- `review`: 只暴露只读工具。
+- 其他模式：暴露完整工具集。
 
-统一闸门 `PolicyEngine.gate(tool, args, mode, language)` 返回 `GateDecision(verdict, risk_level, reason)`，verdict ∈ `allow` / `ask` / `deny`：
+即使模型绕过 schema 直接请求工具，Policy 层仍会做二次校验。
 
-- 只读工具 → `allow`（review 模式也允许）。
-- review 模式下写工具 → `deny`。
-- `edit_file` → 恒 `ask`（走 edit approval）。
-- `bash` → 命令分级（见下）。
-- 未知工具 → `deny`。
+## 8. Policy And Approval
 
-`bash` 命令分级采用**引号感知拆分 + 逐子命令取最严**（deny > ask > allow），防止 `ls; rm -rf /`、`ls & rm`、`FOO=1 rm`、`/bin/rm` 之类通过分隔符/前缀绕过：
+Policy 层对每个工具调用做本地判定：
 
-- **allow**：`ls`/`pwd`/`rg`/`cat`/`git status|diff|show|log`/`pytest`/`go test`/`npm test`/`python -m pytest` 等。
-- **ask**：`sed -i`、`git push`/`git commit`、未知命令、含控制符/重定向/命令替换的命令。
-- **deny**：`rm`/`sudo`、`git reset|clean|rebase`、`git push --force|-f|--delete`、`git branch -D`、`git stash drop`、`git checkout --`。
+- 只读工具默认允许。
+- `review` 和 `commit_message` 这类只读 mode 中，非只读工具会被拒绝。
+- `edit_file` 默认进入 edit approval。
+- `bash` 根据命令风险分类为 allow、ask 或 deny。
+- 命中保护路径、越界路径或危险命令时，会拒绝或要求审批。
 
-deny 不终止循环，而是把拒绝理由作为 tool result 返回给模型，模型自行改道。gate 的 `reason` 按会话语言本地化。
+审批事件通过 SSE 暴露给 CLI：
 
-## 9. Edit Approval
+- `approval.requested`
+- `approval.approved`
+- `approval.rejected`
+- `approval.expired`
 
-所有写入走 `edit_file` → build proposal → approval → apply：
+Pending approval 的恢复策略是保守的：Runtime 重启或 session 恢复时，未完成审批会被标记为 expired/rejected，并写入对应事件，避免内存里的 `asyncio.Event` 丢失后造成悬挂状态。
 
-```text
-模型调用 edit_file
-  |
-  v
-build_edit_proposal  ← protected 路径 / 非 UTF-8 / old_text 不唯一 → 直接报错，不写
-  |
-  v
-session.auto_accept_edits 且非 protected？
-  +-- 是：发 edit.auto_approved，直接应用
-  +-- 否：发 approval.requested（携带 unified diff），等待用户
-  |         CLI 交互：y=应用一次 / a=本会话后续自动放行 / 其它=拒绝
-  v
-apply_edit  ← 应用前校验文件内容 hash 未被外部修改（stale 检测），否则报错让模型重读
-  |
-  v
-edit.applied（写入 history 供后续验证；audit 记录 diff_bytes 与 patch_hash，不记录完整 diff）
-```
+## 9. Edit Path
 
-## 10. Context 管理（history）
+文件修改不会直接由模型写入。当前写入路径是：
 
-`runtime/app/agent/history.py` 三层防线，单位为估算 token：
+1. 模型调用 `edit_file`。
+2. Runtime 根据 `old_text` / `new_text` 生成 proposal。
+3. 检查目标路径是否在 workspace 内。
+4. 检查目标路径是否命中 protected paths。
+5. 检查 `old_text` 是否唯一匹配。
+6. 生成 diff 和 `patch_hash`。
+7. 发起 edit approval，或在允许策略下自动接受。
+8. 应用前再次校验文件内容，防止 stale patch。
+9. 写入文件并记录 `edit.applied` 审计事件。
 
-1. **源头截断**：工具结果入 history 前限长（`bash`/`run_tests` 头尾保留，`read_file` 已按行限），标注截断可续读。
-2. **滚动压缩**：超预算时把最老的 tool 消息替换为一行摘要，保留最近 N 条完整。
-3. **溢出兜底**：仍超硬上限时调 `summarizer` 把前半段压成一条历史摘要。
+这样可以避免模型直接覆盖用户本地文件，也便于 CLI 和审计日志展示将要发生的变更。
 
-压缩发生时发 `context.budget` 事件。
+## 10. Prompt And Project Context
 
-## 11. Model Provider 与 Model Router
+Runtime prompt 由几层组成：
 
-### 11.1 Provider 抽象
+- 系统级 Agent 行为约束。
+- 当前 mode 的任务说明。
+- 项目规则 `.aicode/rules.md`。
+- 项目记忆 `.aicode/memory.md`。
+- 受保护路径、推荐命令和默认语言。
+- 最近消息和必要的历史摘要。
 
-统一接口 `stream_complete(request) -> AsyncIterator[StreamEvent]`，`StreamEvent` 为 `text_delta` / `tool_call` / `done`（含 usage 与 model）。两个实现把各自协议的流式增量归一为该序列：
+项目规则被明确标记为“项目规则”，不能覆盖系统安全策略、工具策略和用户显式指令。这样可以降低仓库内 prompt injection 的影响。
 
-- `OpenAICompatibleProvider`：原生 `tools` / `tool_calls` 增量。
-- `AnthropicProvider`：原生 `tool_use` content block 增量。
+默认输出语言由项目配置 `defaultLanguage` 控制；当前 prompt 支持中文和英文模式，但 CLI 的部分固定提示仍以中文为主。
 
-HTTP 用 `httpx.AsyncClient`，超时 + 指数退避重试（429/5xx 与传输错误重试，4xx 不重试）；daemon 关闭时经 lifespan 释放连接池。`provider.type` 选择使用哪个。
+## 11. Configuration
 
-### 11.2 Model Router
+### 11.1 User Config
 
-三角色路由：
+用户级配置通常位于 `~/.aicode/config.yaml`，包含：
 
-```text
-main        主循环，代码理解与修改
-reviewer    review 模式的审查
-summarizer  history 压缩，用便宜模型
-```
+- `ui`: 默认语言、输出风格等交互设置。
+- `runtime`: host、port、state 目录、audit 目录、HTTP timeout。
+- `models.main`: 常规 Agent 模型。
+- `models.reviewer`: review 模式模型。
+- `models.summarizer`: 历史压缩模型。
+- `providers.openai_compatible`: OpenAI-compatible endpoint、API key env、timeout、retry 等。
+- `providers.anthropic`: Anthropic endpoint、API key env、timeout、retry 等。
+- `pricing`: 本地成本估算所需单价。
 
-配置示例（用户级）：
+遗留的 `models.default`、`models.planner`、`models.coder` 已不再作为推荐配置入口，保留主要是为了向后兼容和迁移期容错。
 
-```toml
-[models]
-main = "gpt-5"
-reviewer = "gpt-5"
-summarizer = "gpt-5-mini"
+### 11.2 Project Config
 
-[provider]
-type = "openai_compatible"   # 或 "anthropic"
-```
+项目级配置位于 `.aicode/config.yaml`，包含：
 
-未配置对应 provider 的 API key 时，Runtime 直接报错并提示配置方式，不回退 stub。
+- `defaultLanguage`: 项目默认输出语言。
+- `commands.test/build/lint`: 项目推荐命令。
+- `protectedPaths`: 需要写入保护的路径。
+- `review`: 审查规则和严重级别设置。
+- `workspaces`: 多 workspace root。
 
-## 12. Token 与成本统计
+`.aicode/rules.md` 用于项目规范，`.aicode/memory.md` 用于长期项目记忆。
 
-本地统计，存审计日志。记录 `session_id` / `provider` / `model` / `purpose` / `input_tokens` / `output_tokens` / `estimated_cost` / `created_at`。成本用本地价格表估算（USD / 1M tokens），无价格时 `estimated_cost = 0`。
+## 12. Model Router
 
-CLI：`aicode usage` / `--today` / `--session <id>` / `--json`。
+Runtime 支持两类 provider：
 
-## 13. 配置
+- OpenAI-compatible Chat Completions。
+- Anthropic Messages API。
 
-### 13.1 用户级 `~/.aicode/config.toml`
+路由按 purpose 选择模型：
 
-```toml
-[ui]
-language = "zh-CN"
+| Purpose | 来源 |
+| --- | --- |
+| `main` | `models.main` |
+| `reviewer` | `models.reviewer` |
+| `summarizer` | `models.summarizer` |
 
-[models]
-main = "gpt-5"
-reviewer = "gpt-5"
-summarizer = "gpt-5-mini"
+Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清晰错误，而不是静默降级。
 
-[provider]
-type = "openai_compatible"
+## 13. Sessions And API
 
-[provider.openai_compatible]
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
+主要 API：
 
-[provider.anthropic]
-base_url = "https://api.anthropic.com"
-api_key_env = "ANTHROPIC_API_KEY"
-```
+- `GET /v1/daemon/status`
+- `POST /v1/sessions`
+- `GET /v1/sessions`
+- `GET /v1/sessions/{session_id}`
+- `POST /v1/sessions/{session_id}/messages`
+- `GET /v1/sessions/{session_id}/events`
+- `POST /v1/sessions/{session_id}/approve`
+- `POST /v1/sessions/{session_id}/reject`
+- `GET /v1/usage`
+- `GET /v1/usage/sessions/{session_id}`
+- `GET /v1/models/routes`
+- `GET /v1/review/rules`
 
-### 13.2 项目级 `.aicode/config.json`
+所有 Runtime API 默认只监听本机地址，并通过 CLI 写入的 token 做本地鉴权。401 通常表示 CLI 读取的 daemon token 与当前 Runtime 不一致。
 
-```json
-{
-  "defaultLanguage": "zh-CN",
-  "commands": { "test": "python3 -m pytest tests/unit", "build": "npm run build", "lint": "ruff check ." },
-  "protectedPaths": [".env", "secrets/**", "infra/prod/**"],
-  "review": { "disabledRules": ["large_diff"], "largeDiffThreshold": 1200, "maxFindings": 25 },
-  "workspaces": [ { "name": "api", "path": "../api", "mode": "read_only" } ]
-}
-```
+## 14. Persistence
 
-`.aicode/memory.md` 作为长期项目记忆读取并注入 prompt，仅作为项目背景，不能覆盖系统/开发者指令、工具策略、审批要求或安全约束。
+Runtime 持久化以下内容：
 
-优先级：命令行 > 项目级 > 用户级。
+- session metadata。
+- user / assistant / tool messages。
+- SSE events。
+- approval 状态。
+- usage records。
+- audit JSONL。
 
-## 14. Session 与持久化
+历史消息会在接近上下文预算时被压缩，压缩结果作为摘要继续参与后续 prompt。
 
-SQLite 存 session / message / event。message 的 role 为 user/assistant/tool，即完整对话 history，因此 `resume` 恢复后可继续多轮。事件默认每 session 保留最近 2000 条，可用 `AICODE_SESSION_EVENT_LIMIT` 调整。
+## 15. Audit And Usage
 
-## 15. 审计日志
+审计日志记录本地敏感操作的结构化事件：
 
-从第一版记录到本地 JSONL（`~/.aicode/audit.jsonl`，或 `$AICODE_HOME/audit.jsonl`）：session 创建、消息、工具调用、approval、edit（含 diff 大小与 patch hash）、usage、final、error。敏感内容脱敏（`.env`/password/token/secret/api_key/private_key）。
+- 工具调用。
+- bash 风险分类。
+- approval requested / approved / rejected / expired。
+- edit proposal / applied。
+- sandbox run。
 
-## 16. 多仓库 Workspace
+敏感字段会尽量脱敏，例如 API key、token、authorization header 和常见 secret 环境变量。写入 patch 时，审计记录使用 `patch_hash` 等摘要信息辅助追踪，避免不必要地扩散完整敏感内容。
 
-只读分析。`read_file`/`search`/`list_files`/`related_files` 接受 `workspace` 参数，Runtime 把路径限制在该配置仓库内并强制只读；`edit_file`/`bash`/测试命令只作用于主 workspace。路径逃逸（`../`）被拦截。
+Usage 记录按模型、session 和时间聚合 token 与成本估算。成本来自本地 `pricing` 配置，适合做近似统计，不等同于 provider 账单。
+
+## 16. Multi-Workspace
+
+项目配置可以声明多个 workspace root。Runtime 在路径校验、读写工具和 protected paths 判断时会以这些 root 作为边界。
+
+当前设计仍保持本地项目优先：
+
+- 不自动扫描用户整个磁盘。
+- 不默认跨 root 写文件。
+- 不把另一个仓库的规则隐式混入当前项目。
 
 ## 17. Docker Sandbox
 
-当前 CLI 已支持 `aicode --sandbox docker test/build/lint`：自动探测或读取 `.aicode/config.json` 的 `commands.<action>`，在 Docker 中运行。sandbox 默认只读挂载 workspace、禁用网络、遮蔽仓库根目录 `.env*`、设置安全 cache 目录，并通过 `--cpus`、`--memory`、`--pids-limit` 加资源限制（默认 `2` / `2g` / `256`，可用 `AICODE_SANDBOX_CPUS`、`AICODE_SANDBOX_MEMORY`、`AICODE_SANDBOX_PIDS_LIMIT` 覆盖）。
+Docker Sandbox 是 CLI 侧能力，当前支持：
 
-sandbox 运行会写入本地 audit JSONL：`sandbox.started` / `sandbox.finished`，记录 action、镜像、网络/挂载/环境隔离、资源限制、env mask 数量、exit code、duration 和 command hash，不记录原始命令。
+- `aicode --sandbox docker test`
+- `aicode --sandbox docker build`
+- `aicode --sandbox docker lint`
 
-## 18. 国际化
+安全默认值：
 
-默认中文，`aicode config set ui.language en-US` 切英文。plan/审批提示/final summary/error/policy 拒绝原因遵循语言配置。内部日志和机器协议字段保持英文。
+- workspace 只读挂载。
+- 默认禁网。
+- 不传 `.env`。
+- 只允许少量缓存相关环境变量。
+- 设置 CPU、内存、进程数等资源限制。
+- 记录 sandbox audit 事件。
 
-## 19. 推荐仓库结构
+它适合在隔离环境中验证命令是否能通过，但不是完整的远程执行平台。当前还没有实现可配置写入挂载、完整 artifact 回收或复杂服务编排。
+
+## 18. Security Model
+
+核心安全假设：
+
+- 仓库内容不可信，尤其是 prompt、文档和脚本。
+- 模型输出不可信，必须经过工具 schema、policy 和 approval。
+- 写入必须限制在 workspace root 内。
+- 项目规则不能覆盖系统安全策略。
+- 风险 bash 命令必须可审计、可拒绝。
+- Runtime token 只用于本机 CLI 与 daemon 通信，不是公网认证方案。
+
+这套模型的目标是降低本地 Agent 的误操作风险，而不是提供强沙箱级隔离。强隔离任务应优先使用 Docker Sandbox 或未来更完整的 sandbox 后端。
+
+## 19. Repository Layout
 
 ```text
-aicode/
-  cli/                     # Go CLI（薄客户端）
-  runtime/
-    app/
-      server/main.py       # FastAPI + SSE + lifespan
-      agent/               # loop / turn / history / prompts / types
-      tools/               # registry / edit / file / review / command / base
-      models/              # provider / openai_compatible / anthropic / router
-      policy/engine.py     # 三态 gate
-      sessions/store.py    # SQLite session
-      audit/ usage/ project/ config/ events/
-    tests/
-  schemas/                 # events / tools / config JSON Schema
-  docs/superpowers/        # 设计 spec 与实施计划
-  ARCHITECTURE.md ROADMAP.md README.md
+.
+├── cli/                    # Go CLI
+├── runtime/                # Python Runtime
+│   └── app/
+│       ├── agent/          # Agent Loop, prompts, history compression
+│       ├── audit/          # audit logger and redaction
+│       ├── config/         # user/project config loading
+│       ├── models/         # provider clients and router
+│       ├── policy/         # tool policy engine
+│       ├── server/         # FastAPI routes
+│       ├── sessions/       # SQLite-backed sessions/events/approvals
+│       ├── tools/          # tool registry and implementations
+│       └── usage/          # usage tracking
+├── tests/                  # integration and behavior tests
+├── README.md               # user-facing guide
+└── ARCHITECTURE.md         # this document
 ```
 
-## 20. 非目标（当前）
+## 20. Current Gaps
 
-- IDE / Web / Desktop UI
-- 本地模型
-- 自动发布、跨仓库自动写入、自动删除文件、自动执行高风险 shell
-- 完整 Docker sandbox（build/lint、资源限制、审计增强）
-- 企业远端审计服务
+仍可继续推进的方向：
+
+- 将 `explain` 升级为硬只读 mode，而不只依赖 prompt。
+- 为 Docker Sandbox 增加可控写入目录和 artifact 导出。
+- 引入更强的代码索引，例如 symbol、import graph、test mapping。
+- 增强多 provider fallback 和 per-route 健康检查。
+- 补充更细的恢复语义，例如跨进程 approval continuation。
+- 提供更完整的英文 CLI 文案。
+- 增加端到端测试覆盖 daemon restart、SSE resume、approval recovery 和 sandbox audit。
+
+架构目标保持不变：先把本地 Agent 的安全边界、可恢复性和可解释性做扎实，再逐步扩展更复杂的执行环境和产品形态。
