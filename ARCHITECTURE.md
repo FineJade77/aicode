@@ -1,6 +1,6 @@
 # aicode Architecture
 
-> 本文档描述 **Agent Loop v2**（模型驱动重构后）的当前架构。历史 v1 设计（规则 planner + JSON patch proposal）已废弃，重构设计见 `docs/superpowers/specs/2026-07-17-agent-loop-redesign-design.md`。
+> 本文档描述 **Agent Loop v2**（模型驱动）的当前架构
 
 ## 1. 产品定位
 
