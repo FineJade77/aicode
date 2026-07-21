@@ -110,11 +110,19 @@ func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendM
 }
 
 func (c Client) Approve(ctx context.Context, sessionID string, approvalID string, acceptAll bool) error {
-	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
+	err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
+	if isApprovalAlreadyResolved(err) {
+		return nil
+	}
+	return err
 }
 
 func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {
-	return c.postJSON(ctx, "/v1/sessions/"+sessionID+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+	err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+	if isApprovalAlreadyResolved(err) {
+		return nil
+	}
+	return err
 }
 
 func (c Client) StreamEvents(ctx context.Context, sessionID string, handle func(map[string]any) error) error {
@@ -303,15 +311,38 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, out any)
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func runtimeHTTPError(operation string, statusCode int, status string, body []byte) error {
-	detail := strings.TrimSpace(string(body))
-	if statusCode == http.StatusUnauthorized {
+type RuntimeHTTPError struct {
+	Operation  string
+	StatusCode int
+	Status     string
+	Detail     string
+}
+
+func (err *RuntimeHTTPError) Error() string {
+	if err.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf(
 			"%s failed: %s: %s\nRuntime 认证失败：当前 CLI 的 runtime.token 与正在运行的 daemon 不匹配。请运行 `go run ./cli daemon stop`，确认 8765 端口没有旧 uvicorn/daemon 后，再 `go run ./cli daemon start`。",
-			operation,
-			status,
-			detail,
-		)
+			err.Operation,
+			err.Status,
+			err.Detail,
+		).Error()
 	}
-	return fmt.Errorf("%s failed: %s: %s", operation, status, detail)
+	return fmt.Sprintf("%s failed: %s: %s", err.Operation, err.Status, err.Detail)
+}
+
+func runtimeHTTPError(operation string, statusCode int, status string, body []byte) error {
+	return &RuntimeHTTPError{
+		Operation:  operation,
+		StatusCode: statusCode,
+		Status:     status,
+		Detail:     strings.TrimSpace(string(body)),
+	}
+}
+
+func isApprovalAlreadyResolved(err error) bool {
+	httpErr, ok := err.(*RuntimeHTTPError)
+	if !ok || httpErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	return strings.Contains(httpErr.Detail, "approval not found or already resolved")
 }

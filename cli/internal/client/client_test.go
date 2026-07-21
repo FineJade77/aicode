@@ -155,6 +155,64 @@ func TestApproveSendsAcceptAll(t *testing.T) {
 	}
 }
 
+func TestApprovalAlreadyResolvedIsIdempotent(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		call func(Client, context.Context) error
+	}{
+		{
+			name: "approve",
+			call: func(c Client, ctx context.Context) error {
+				return c.Approve(ctx, "sess_1", "appr_1", false)
+			},
+		},
+		{
+			name: "reject",
+			call: func(c Client, ctx context.Context) error {
+				return c.Reject(ctx, "sess_1", "appr_1")
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := New("http://runtime.test", "")
+			c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Status:     "404 Not Found",
+					Body:       io.NopCloser(strings.NewReader(`{"detail":"approval not found or already resolved"}`)),
+				}, nil
+			})}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			if err := tt.call(c, ctx); err != nil {
+				t.Fatalf("expected already-resolved approval to be idempotent, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRejectReturnsOtherNotFoundErrors(t *testing.T) {
+	c := New("http://runtime.test", "")
+	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Status:     "404 Not Found",
+			Body:       io.NopCloser(strings.NewReader(`{"detail":"session not found"}`)),
+		}, nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := c.Reject(ctx, "sess_1", "appr_1")
+	if err == nil {
+		t.Fatal("expected non-approval 404 to stay fatal")
+	}
+	if !strings.Contains(err.Error(), "session not found") {
+		t.Fatalf("expected original error detail, got %v", err)
+	}
+}
+
 func TestRequestsIncludeAuthorizationHeaderWhenTokenSet(t *testing.T) {
 	var gotHeader string
 	c := New("http://runtime.test", "secret-token")
