@@ -41,7 +41,7 @@
 | Docker Sandbox | `[~]` | test/build/lint MVP 已完成，仍缺写入挂载和 artifact 导出。 |
 | Prompt 国际化 | `[~]` | Runtime prompt 支持中英文；CLI 固定文案仍以中文为主。 |
 | 配置收敛 | `[~]` | 推荐 `main/reviewer/summarizer`，遗留键仍需迁移期兼容。 |
-| 依赖管理 | `[~]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，仍缺锁文件策略。 |
+| 依赖管理 | `[x]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，`requirements(-dev).lock.txt` 提供可复现安装。 |
 | 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
 | CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
 
@@ -202,9 +202,9 @@
 - [x] Python 测试依赖集中到 `runtime[dev]` extra。
 - [x] Go module 通过根目录 `go.work` 管理。
 - [x] 根目录 `Makefile` 提供 `make deps`、`make test-go`、`make test-python`、`make test`。
-- [ ] 评估是否引入 Python lock 文件，例如 `uv.lock` 或 constraints 文件。
+- [x] Python 依赖锁文件：`runtime/requirements.lock.txt`（运行依赖）与 `runtime/requirements-dev.lock.txt`（含测试依赖），由 `make lock-python`（基于 `uv pip compile --universal`）生成，`make deps-python` 和 CI 均从锁文件安装。
 - [ ] 评估是否需要 Go 工具依赖 pinning，例如 lint 工具的 `tools.go`。
-- [ ] CI 中固定依赖安装和 cache 路径。
+- [x] CI 中固定依赖安装和 cache 路径：`.github/workflows/ci.yml` 通过 `make deps-python`（锁文件）安装，`setup-python` 启用 `cache: pip`。
 
 ### P1: 补齐 Docker Sandbox MVP
 

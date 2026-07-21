@@ -12,5 +12,6 @@ dist/
 build/
 coverage/
 runtime/.pytest_cache/
+*.egg-info/
 cli/aicode
 docs/

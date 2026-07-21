@@ -46,17 +46,26 @@ docs/       设计与开发计划
 - Make，用于构建、安装和测试快捷命令
 - Docker，可选，仅 `--sandbox docker` 需要
 
-安装 Runtime Python 依赖：
+安装 Runtime Python 依赖，推荐使用锁定版本以保证可复现：
+
+```bash
+python3 -m pip install -r runtime/requirements.lock.txt
+python3 -m pip install -e ./runtime --no-deps
+```
+
+不需要精确锁定版本时，也可以直接安装 `pyproject.toml` 中声明的范围：
 
 ```bash
 python3 -m pip install -e ./runtime
 ```
 
-开发环境建议安装 Python 测试依赖，并整理 Go module：
+开发环境建议安装 Python 测试依赖（同样锁定版本），并整理 Go module：
 
 ```bash
 make deps
 ```
+
+`runtime/requirements.lock.txt` 和 `runtime/requirements-dev.lock.txt` 由 `make lock-python` 生成（需要 [uv](https://docs.astral.sh/uv/)），修改 `runtime/pyproject.toml` 的依赖后重新运行并提交锁文件。
 
 构建 CLI 二进制：
 
