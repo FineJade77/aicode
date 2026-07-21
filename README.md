@@ -43,7 +43,7 @@ docs/       设计与开发计划
 - Python 3.11+
 - Git
 - ripgrep (`rg`)，用于快速搜索
-- Make，可选，用于开发依赖和测试快捷命令
+- Make，用于构建、安装和测试快捷命令
 - Docker，可选，仅 `--sandbox docker` 需要
 
 安装 Runtime Python 依赖：
@@ -57,6 +57,22 @@ python3 -m pip install -e ./runtime
 ```bash
 make deps
 ```
+
+构建 CLI 二进制：
+
+```bash
+make build
+./bin/aicode "解释当前项目"
+```
+
+安装到 `~/.local/bin/aicode`：
+
+```bash
+make install
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+下文默认 `aicode` 已经在 `PATH` 中。如果不安装，也可以用 `./bin/aicode` 替代。
 
 配置模型 API key。默认 provider 是 OpenAI-compatible：
 
@@ -73,7 +89,7 @@ export AICODE_OPENAI_API_KEY="..."
 第一次运行：
 
 ```bash
-go run ./cli "解释当前项目"
+aicode "解释当前项目"
 ```
 
 CLI 会自动启动 Runtime daemon，并创建 session。没有配置可用 provider 时，Runtime 会直接报错并提示需要设置 API key，不会回退到 stub。
@@ -81,31 +97,31 @@ CLI 会自动启动 Runtime daemon，并创建 session。没有配置可用 prov
 ## 常用命令
 
 ```bash
-go run ./cli chat "你好"
-go run ./cli "修复 pytest 失败"
-go run ./cli review
-go run ./cli diff
-go run ./cli test
-go run ./cli explain runtime/app/server/main.py
-go run ./cli commit-message
+aicode chat "你好"
+aicode "修复 pytest 失败"
+aicode review
+aicode diff
+aicode test
+aicode explain runtime/app/server/main.py
+aicode commit-message
 ```
 
 辅助命令：
 
 ```bash
-go run ./cli daemon status
-go run ./cli daemon stop
-go run ./cli sessions
-go run ./cli resume --last
-go run ./cli resume --last "继续刚才的任务"
-go run ./cli resume <session_id> "继续这个会话"
-go run ./cli models
-go run ./cli models --json
-go run ./cli usage
-go run ./cli usage --today
-go run ./cli usage --session <session_id>
-go run ./cli usage --json
-go run ./cli review-rules
+aicode daemon status
+aicode daemon stop
+aicode sessions
+aicode resume --last
+aicode resume --last "继续刚才的任务"
+aicode resume <session_id> "继续这个会话"
+aicode models
+aicode models --json
+aicode usage
+aicode usage --today
+aicode usage --session <session_id>
+aicode usage --json
+aicode review-rules
 ```
 
 `commit-message` 会优先读取 staged diff；如果没有 staged diff，则读取 tracked working tree diff。它不会包含 untracked 文件内容，除非文件已被 `git add`。
@@ -115,7 +131,7 @@ go run ./cli review-rules
 普通任务直接用自然语言描述即可：
 
 ```bash
-go run ./cli "给认证模块补一个边界测试"
+aicode "给认证模块补一个边界测试"
 ```
 
 Runtime 会把系统 prompt、项目配置、项目规则、项目记忆和对话历史发给模型。模型根据需要调用只读工具、运行低风险命令或提出 `edit_file`。一旦要写文件，CLI 会展示 diff 并等待确认：
@@ -144,9 +160,9 @@ python3 -m uvicorn app.server.main:app --host 127.0.0.1 --port 8765
 之后 CLI 请求会携带 `Authorization: Bearer <token>`。如果遇到 `401 Unauthorized`，通常是旧 daemon 或手动 uvicorn 仍占用 `8765`，先停止 daemon 并确认端口空闲：
 
 ```bash
-go run ./cli daemon stop
+aicode daemon stop
 lsof -nP -iTCP:8765 -sTCP:LISTEN
-go run ./cli daemon start
+aicode daemon start
 ```
 
 ## Session 和审计
@@ -162,7 +178,7 @@ go run ./cli daemon start
 开发测试时可以用 `AICODE_HOME` 隔离本地状态：
 
 ```bash
-AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前项目"
+AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 ```
 
 如果 daemon 重启或 session 恢复时发现未决 approval，Runtime 会把这些 approval 标记为 expired/rejected，并发出对应事件，避免恢复后一直悬挂等待。
@@ -180,43 +196,43 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前项目"
 初始化和查看：
 
 ```bash
-go run ./cli config init
-go run ./cli config show
-go run ./cli config list
-go run ./cli config docs
-go run ./cli config get models.main
+aicode config init
+aicode config show
+aicode config list
+aicode config docs
+aicode config get models.main
 ```
 
 常用设置：
 
 ```bash
-go run ./cli config set ui.language en-US
-go run ./cli config set models.main gpt-5
-go run ./cli config set models.reviewer gpt-5
-go run ./cli config set models.summarizer gpt-5-mini
-go run ./cli config unset models.reviewer
+aicode config set ui.language en-US
+aicode config set models.main gpt-5
+aicode config set models.reviewer gpt-5
+aicode config set models.summarizer gpt-5-mini
+aicode config unset models.reviewer
 ```
 
 provider 配置：
 
 ```bash
-go run ./cli config set provider.type openai_compatible
-go run ./cli config set provider.openai_compatible.base_url https://api.openai.com/v1
-go run ./cli config set provider.openai_compatible.api_key_env OPENAI_API_KEY
-go run ./cli config set provider.openai_compatible.timeout_seconds 60
+aicode config set provider.type openai_compatible
+aicode config set provider.openai_compatible.base_url https://api.openai.com/v1
+aicode config set provider.openai_compatible.api_key_env OPENAI_API_KEY
+aicode config set provider.openai_compatible.timeout_seconds 60
 
-go run ./cli config set provider.type anthropic
-go run ./cli config set provider.anthropic.base_url https://api.anthropic.com
-go run ./cli config set provider.anthropic.api_key_env ANTHROPIC_API_KEY
-go run ./cli config set provider.anthropic.timeout_seconds 120
+aicode config set provider.type anthropic
+aicode config set provider.anthropic.base_url https://api.anthropic.com
+aicode config set provider.anthropic.api_key_env ANTHROPIC_API_KEY
+aicode config set provider.anthropic.timeout_seconds 120
 ```
 
 成本估算使用本地价格表，单位是 USD / 1M tokens：
 
 ```bash
-go run ./cli config set pricing.openai_compatible.gpt-5.input_per_1m 1.25
-go run ./cli config set pricing.openai_compatible.gpt-5.output_per_1m 10
-go run ./cli config unset pricing.openai_compatible.gpt-5.input_per_1m
+aicode config set pricing.openai_compatible.gpt-5.input_per_1m 1.25
+aicode config set pricing.openai_compatible.gpt-5.output_per_1m 10
+aicode config unset pricing.openai_compatible.gpt-5.input_per_1m
 ```
 
 `models.default`、`models.planner`、`models.coder` 已废弃。旧配置仍可被读取用于迁移，但 CLI 文档、配置列表和 Runtime 环境注入不再暴露这些键；请使用 `models.main`、`models.reviewer`、`models.summarizer`。
@@ -299,40 +315,40 @@ export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25
 配置 protected paths：
 
 ```bash
-go run ./cli config protected add secrets/local/**
-go run ./cli config protected list
-go run ./cli config protected remove secrets/local/**
-go run ./cli config protected reset
+aicode config protected add secrets/local/**
+aicode config protected list
+aicode config protected remove secrets/local/**
+aicode config protected reset
 ```
 
 配置 review 规则：
 
 ```bash
-go run ./cli config review list
-go run ./cli config review docs
-go run ./cli config review disable large_diff
-go run ./cli config review enable large_diff
-go run ./cli config review set largeDiffThreshold 1200
-go run ./cli config review set maxFindings 25
-go run ./cli config review unset largeDiffThreshold
-go run ./cli config review prune
+aicode config review list
+aicode config review docs
+aicode config review disable large_diff
+aicode config review enable large_diff
+aicode config review set largeDiffThreshold 1200
+aicode config review set maxFindings 25
+aicode config review unset largeDiffThreshold
+aicode config review prune
 ```
 
 配置测试命令：
 
 ```bash
-go run ./cli config test set python3 -m pytest tests/unit
-go run ./cli config test auto
-go run ./cli config test show
-go run ./cli config test unset
+aicode config test set python3 -m pytest tests/unit
+aicode config test auto
+aicode config test show
+aicode config test unset
 ```
 
 配置额外只读 workspace：
 
 ```bash
-go run ./cli config workspace add api ../api
-go run ./cli config workspace list
-go run ./cli config workspace remove api
+aicode config workspace add api ../api
+aicode config workspace list
+aicode config workspace remove api
 ```
 
 ## Review
@@ -352,7 +368,7 @@ go run ./cli config workspace remove api
 查看规则和项目配置后的生效状态：
 
 ```bash
-go run ./cli review-rules
+aicode review-rules
 ```
 
 ## Docker sandbox
@@ -360,9 +376,9 @@ go run ./cli review-rules
 Docker sandbox 是 CLI 本地能力，不需要 Runtime。支持：
 
 ```bash
-go run ./cli --sandbox docker test
-go run ./cli --sandbox docker build
-go run ./cli --sandbox docker lint
+aicode --sandbox docker test
+aicode --sandbox docker build
+aicode --sandbox docker lint
 ```
 
 默认行为：
@@ -392,12 +408,12 @@ export AICODE_SANDBOX_PIDS_LIMIT="128"
 ## 用量统计
 
 ```bash
-go run ./cli usage
-go run ./cli usage --today
-go run ./cli usage --session <session_id>
-go run ./cli usage --json
-go run ./cli usage --today --json
-go run ./cli usage --session <session_id> --json
+aicode usage
+aicode usage --today
+aicode usage --session <session_id>
+aicode usage --json
+aicode usage --today --json
+aicode usage --session <session_id> --json
 ```
 
 输出包含 token、估算成本，以及按 purpose/model/provider 的汇总。没有配置价格时，`estimated_cost` 为 `0`。

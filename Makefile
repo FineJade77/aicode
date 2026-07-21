@@ -1,8 +1,19 @@
-.PHONY: deps deps-go deps-python test test-go test-python compile-python tidy-go
+.PHONY: build install deps deps-go deps-python test test-go test-python compile-python tidy-go
 
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 GOENV := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE)
+BINDIR ?= $(CURDIR)/bin
+AICODE_BIN ?= $(BINDIR)/aicode
+INSTALL_BINDIR ?= $(HOME)/.local/bin
+
+build:
+	mkdir -p $(BINDIR)
+	$(GOENV) go build -o $(AICODE_BIN) ./cli
+
+install: build
+	mkdir -p $(INSTALL_BINDIR)
+	install -m 0755 $(AICODE_BIN) $(INSTALL_BINDIR)/aicode
 
 deps: deps-go deps-python
 
