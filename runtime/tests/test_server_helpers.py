@@ -12,10 +12,13 @@ from app.policy.engine import PolicyEngine
 from app.project.detect import detect_test_command
 from app.server import main as server
 from app.server.main import (
+    CreateSessionRequest,
     MessageRequest,
     bind_message_request_to_session,
+    create_session,
     daemon_status,
     emit_run_queued,
+    effective_session_language,
     model_routes,
     process_session_runs,
     review_rules,
@@ -40,6 +43,34 @@ def test_message_request_is_bound_to_session_context(tmp_path: Path) -> None:
     assert effective.workspace == session.workspace
     assert effective.language == "zh-CN"
     assert request.language == "en"
+
+
+def test_effective_session_language_prefers_project_default(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".aicode"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text('{"defaultLanguage":"en-US"}', encoding="utf-8")
+
+    assert effective_session_language(str(tmp_path), "zh-CN") == "en-US"
+
+
+def test_effective_session_language_falls_back_to_request(tmp_path: Path) -> None:
+    assert effective_session_language(str(tmp_path), "en-US") == "en-US"
+
+
+@pytest.mark.asyncio
+async def test_create_session_uses_project_default_language(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_dir = tmp_path / ".aicode"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text('{"defaultLanguage":"en-US"}', encoding="utf-8")
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+
+    response = await create_session(CreateSessionRequest(workspace=str(tmp_path), language="zh-CN"))
+    session = store.get(response.session_id)
+
+    assert session is not None
+    assert session.language == "en-US"
 
 
 def test_message_request_rejects_workspace_mismatch(tmp_path: Path) -> None:

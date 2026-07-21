@@ -186,11 +186,14 @@ AICODE_HOME=/tmp/aicode-dev go run ./cli "解释当前目录"
 当前已生效的字段：
 
 - `protectedPaths`: `read_file`、`search`、`list_files`、`related_files`、`review_diff` 和 `edit_file` 都会跳过或拦截这些路径。
-- `commands.test`: 设置为具体命令时，`aicode test` 会优先使用该命令；设置为 `auto` 时自动探测。
+- `defaultLanguage`: 项目级交互语言偏好；创建 session 时优先于用户级 `ui.language`。
+- `commands.*`: 项目常用命令记忆，会注入 prompt 供模型选择；`commands.test` 设置为具体命令时，`aicode test` 会优先使用该命令，设置为 `auto` 时自动探测。
 - `workspaces`: 声明额外只读仓库，供 `list_files`、`search`、`read_file`、`related_files` 分析使用（这些只读工具支持 `workspace` 参数；`bash`、`edit_file`、`review_diff` 始终只作用于主 workspace）。
 - `review.disabledRules`: 关闭指定 review 规则，例如 `large_diff`、`debug_output`。
 - `review.largeDiffThreshold`: 调整大 diff 提醒阈值，默认 `500`。
 - `review.maxFindings`: 限制 review 输出的问题数量，默认 `50`。
+
+`.aicode/memory.md` 会作为项目记忆注入 prompt，用来放长期背景、架构约定、常见入口等信息；它和 `.aicode/rules.md` 一样只是项目级上下文，不能覆盖系统安全策略、审批要求或 protected paths。
 
 当前内置规则覆盖疑似密钥、敏感路径、大 diff、调试残留、动态执行、前端 XSS、Python 反序列化/YAML 加载、Go TLS 跳过校验和过宽文件权限等常见风险。
 
@@ -255,8 +258,10 @@ go run ./cli review-rules
 
 ```json
 {
+  "defaultLanguage": "zh-CN",
   "commands": {
-    "test": "python3 -m pytest tests/unit"
+    "test": "python3 -m pytest tests/unit",
+    "lint": "ruff check ."
   },
   "review": {
     "disabledRules": ["large_diff"],

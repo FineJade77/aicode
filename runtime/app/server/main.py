@@ -79,7 +79,7 @@ async def daemon_status() -> dict[str, Any]:
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
-    session = store.create(workspace=request.workspace, language=request.language)
+    session = store.create(workspace=request.workspace, language=effective_session_language(request.workspace, request.language))
     audit.record(
         "session.created",
         session_id=session.session_id,
@@ -233,6 +233,11 @@ def require_session(session_id: str) -> Session:
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+def effective_session_language(workspace: str, requested_language: str) -> str:
+    project_language = load_project_config(Path(workspace)).default_language
+    return project_language or requested_language or "zh-CN"
 
 
 def bind_message_request_to_session(session: Session, request: MessageRequest) -> MessageRequest:

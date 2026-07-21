@@ -5,14 +5,17 @@
   "type": "object",
   "properties": {
     "projectName": {
-      "type": "string"
+      "type": "string",
+      "description": "项目显示名，仅作为上下文提示。"
     },
     "defaultLanguage": {
       "type": "string",
-      "enum": ["zh-CN", "en-US"]
+      "enum": ["zh-CN", "en-US"],
+      "description": "项目级默认交互语言；创建 session 时优先于用户级 ui.language。"
     },
     "commands": {
       "type": "object",
+      "description": "项目常用命令记忆，会注入 prompt；commands.test 也用于 aicode test。",
       "additionalProperties": {
         "type": "string"
       }

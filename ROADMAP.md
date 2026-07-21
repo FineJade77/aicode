@@ -361,9 +361,9 @@ review 模式仍为硬只读；未配置 provider 时明确报错并提示配置
 记忆：
 
 - `.aicode/rules.md`
-- project memory
-- 常用命令记忆
-- 语言偏好读取
+- project memory（已完成：`.aicode/memory.md` 注入 prompt）
+- 常用命令记忆（已完成：`commands.*` 注入 prompt）
+- 语言偏好读取（已完成：`defaultLanguage` 创建 session 时生效）
 
 ### 验收标准
 

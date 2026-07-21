@@ -187,7 +187,7 @@ Schema 见 `schemas/events.schema.json`、`schemas/tools.schema.json`、`schemas
 | `edit_file` | replace/create/delete，单文件 stale 检测，拒绝非 UTF-8 | 必经 approval |
 | `review_diff` | 对当前 git diff 跑确定性 review 规则 | 只读 |
 
-项目信息（测试命令、protected paths、`.aicode/rules.md`、语言）通过 system prompt 注入，不再需要独立的 detect 工具。
+项目信息（测试命令、常用命令、protected paths、`.aicode/rules.md`、`.aicode/memory.md`、语言偏好）通过 system prompt 注入，不再需要独立的 detect 工具。
 
 ## 8. Policy Engine
 
@@ -309,12 +309,15 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 ```json
 {
-  "commands": { "test": "python3 -m pytest tests/unit" },
+  "defaultLanguage": "zh-CN",
+  "commands": { "test": "python3 -m pytest tests/unit", "lint": "ruff check ." },
   "protectedPaths": [".env", "secrets/**", "infra/prod/**"],
   "review": { "disabledRules": ["large_diff"], "largeDiffThreshold": 1200, "maxFindings": 25 },
   "workspaces": [ { "name": "api", "path": "../api", "mode": "read_only" } ]
 }
 ```
+
+`.aicode/memory.md` 作为长期项目记忆读取并注入 prompt，仅作为项目背景，不能覆盖系统/开发者指令、工具策略、审批要求或安全约束。
 
 优先级：命令行 > 项目级 > 用户级。
 
