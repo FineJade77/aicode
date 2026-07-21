@@ -98,7 +98,7 @@
 - [x] stale patch 检测。
 - [x] review mode 只暴露只读工具。
 - [x] commit-message mode 不暴露工具。
-- [~] explain mode 目前主要靠 prompt 约束“不修改”，尚未做硬只读。
+- [x] explain mode 硬只读：不暴露 `bash` / `edit_file`，Policy 层同时拒绝对应工具调用。
 
 ### 3.5 Edit Approval
 
@@ -167,11 +167,11 @@
 
 ### P0: 收敛安全语义
 
-- [ ] 把 `explain` 升级为硬只读 mode。
-  - Runtime 不向 `explain` 暴露 `bash` / `edit_file`。
-  - Policy 把 `explain` 加入 read-only mode。
-  - CLI 和文档同步说明。
-  - 增加测试覆盖。
+- [x] 把 `explain` 升级为硬只读 mode。
+  - [x] Runtime 不向 `explain` 暴露 `bash` / `edit_file`（`tool_schemas_for_mode`）。
+  - [x] Policy 把 `explain` 加入 read-only mode（`READ_ONLY_MODES`）。
+  - [x] 文档同步说明（ARCHITECTURE.md Modes 表、Policy 小节、Current Gaps）。
+  - [x] 增加测试覆盖（`test_registry.py`、`test_policy_gate.py`）。
 
 - [ ] 为 pending approval 恢复补端到端测试。
   - 覆盖 daemon restart。
@@ -338,10 +338,9 @@ git diff --check README.md ARCHITECTURE.md ROADMAP.md
 
 最建议按这个顺序继续：
 
-1. `explain` 硬只读。
-2. pending approval 恢复端到端测试。
-3. prompt 安全层级回归测试。
-4. Docker Sandbox artifact 导出设计和最小实现。
-5. `related_files` 索引化增强。
+1. pending approval 恢复端到端测试。
+2. prompt 安全层级回归测试。
+3. Docker Sandbox artifact 导出设计和最小实现。
+4. `related_files` 索引化增强。
 
 这样可以继续强化当前项目最关键的三个优势：安全边界清楚、状态可恢复、上下文获取更省心。

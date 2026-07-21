@@ -168,10 +168,8 @@ emit run.completed or run.failed
 | `review` | `review` | 只读工具 | 专注发现问题，不修改文件。 |
 | `diff` | `diff` | 全量工具 | 分析 diff，可结合用户后续要求执行修复。 |
 | `test` | `test` | 全量工具 | 基于测试输出定位和修复问题。 |
-| `explain` | `explain` | 全量工具 | Prompt 要求解释为主；安全策略仍会约束写操作。 |
+| `explain` | `explain` | 只读工具 | 硬只读 mode：不暴露 `bash` / `edit_file`，Policy 层同时拒绝对应工具调用。 |
 | `commit_message` | `commit-message` | 无工具 | CLI 注入 diff，模型只返回提交信息。 |
-
-注意：`explain` 的“不修改”主要是 prompt 约束；如果未来希望硬性只读，应把它加入 Runtime 的只读 mode 集合。
 
 ## 7. Tool Registry
 
@@ -200,7 +198,7 @@ Runtime 当前注册的工具：
 Policy 层对每个工具调用做本地判定：
 
 - 只读工具默认允许。
-- `review` 和 `commit_message` 这类只读 mode 中，非只读工具会被拒绝。
+- `review`、`commit_message`、`explain` 这类只读 mode 中，非只读工具会被拒绝。
 - `edit_file` 默认进入 edit approval。
 - `bash` 根据命令风险分类为 allow、ask 或 deny。
 - 命中保护路径、越界路径或危险命令时，会拒绝或要求审批。
@@ -404,7 +402,6 @@ Docker Sandbox 是 CLI 侧能力，当前支持：
 
 仍可继续推进的方向：
 
-- 将 `explain` 升级为硬只读 mode，而不只依赖 prompt。
 - 为 Docker Sandbox 增加可控写入目录和 artifact 导出。
 - 引入更强的代码索引，例如 symbol、import graph、test mapping。
 - 增强多 provider fallback 和 per-route 健康检查。

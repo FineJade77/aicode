@@ -29,6 +29,17 @@ def test_write_tools_denied_in_commit_message_mode(engine):
     assert gate_bash(engine, "git diff", mode="commit_message").verdict == "deny"
 
 
+def test_read_only_tools_allowed_in_explain(engine):
+    assert engine.gate("read_file", {"path": "a.py"}, mode="explain").verdict == "allow"
+    assert engine.gate("search", {"query": "x"}, mode="explain").verdict == "allow"
+    assert engine.gate("related_files", {"path": "a.py"}, mode="explain").verdict == "allow"
+
+
+def test_write_tools_denied_in_explain_mode(engine):
+    assert engine.gate("edit_file", {"path": "a.py"}, mode="explain").verdict == "deny"
+    assert gate_bash(engine, "ls", mode="explain").verdict == "deny"
+
+
 def test_edit_file_always_asks(engine):
     assert engine.gate("edit_file", {"path": "a.py"}).verdict == "ask"
 
