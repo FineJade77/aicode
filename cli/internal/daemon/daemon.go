@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aicode-dev/aicode/cli/internal/config"
+	"github.com/FineJade77/aicode/cli/internal/config"
 )
 
 func tokenPath(home string) string {

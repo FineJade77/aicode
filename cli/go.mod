@@ -1,3 +1,3 @@
-module github.com/aicode-dev/aicode/cli
+module github.com/FineJade77/aicode/cli
 
 go 1.22

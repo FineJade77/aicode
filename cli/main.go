@@ -18,12 +18,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/aicode-dev/aicode/cli/internal/client"
-	"github.com/aicode-dev/aicode/cli/internal/config"
-	"github.com/aicode-dev/aicode/cli/internal/daemon"
-	"github.com/aicode-dev/aicode/cli/internal/projectconfig"
-	"github.com/aicode-dev/aicode/cli/internal/renderer"
-	"github.com/aicode-dev/aicode/cli/internal/workspace"
+	"github.com/FineJade77/aicode/cli/internal/client"
+	"github.com/FineJade77/aicode/cli/internal/config"
+	"github.com/FineJade77/aicode/cli/internal/daemon"
+	"github.com/FineJade77/aicode/cli/internal/projectconfig"
+	"github.com/FineJade77/aicode/cli/internal/renderer"
+	"github.com/FineJade77/aicode/cli/internal/workspace"
 )
 
 const defaultTimeout = 10 * time.Second
