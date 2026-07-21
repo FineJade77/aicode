@@ -43,14 +43,19 @@ docs/       设计与开发计划
 - Python 3.11+
 - Git
 - ripgrep (`rg`)，用于快速搜索
+- Make，可选，用于开发依赖和测试快捷命令
 - Docker，可选，仅 `--sandbox docker` 需要
 
 安装 Runtime Python 依赖：
 
 ```bash
-cd runtime
-python3 -m pip install -e .
-cd ..
+python3 -m pip install -e ./runtime
+```
+
+开发环境建议安装 Python 测试依赖，并整理 Go module：
+
+```bash
+make deps
 ```
 
 配置模型 API key。默认 provider 是 OpenAI-compatible：
@@ -402,25 +407,28 @@ go run ./cli usage --session <session_id> --json
 Go CLI：
 
 ```bash
-cd cli
-go test ./...
-cd ..
+make test-go
 ```
 
 Python Runtime：
 
 ```bash
-cd runtime
-python3 -m pytest -q
-python3 -m compileall app
-cd ..
+make test-python
+make compile-python
 ```
 
-在受限环境中如果 Go build cache 不可写，可以指定：
+完整验证：
 
 ```bash
-cd cli
-GOCACHE=/tmp/aicode-go-build go test ./...
+make test
+```
+
+Go 依赖在 `cli/go.mod` 中维护，根目录 `go.work` 只注册 `./cli` 子模块。Python 运行依赖在 `runtime/pyproject.toml` 的 `[project.dependencies]` 中维护，测试依赖在 `runtime[dev]` extra 中维护。
+
+在受限环境中如果默认 Go build cache 不可写，可以把 cache 放到 workspace 内：
+
+```bash
+GOCACHE=.cache/go-build GOMODCACHE=.cache/go-mod go test ./cli/...
 ```
 
 ## 当前边界

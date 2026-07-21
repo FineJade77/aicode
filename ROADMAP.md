@@ -41,6 +41,7 @@
 | Docker Sandbox | `[~]` | test/build/lint MVP 已完成，仍缺写入挂载和 artifact 导出。 |
 | Prompt 国际化 | `[~]` | Runtime prompt 支持中英文；CLI 固定文案仍以中文为主。 |
 | 配置收敛 | `[~]` | 推荐 `main/reviewer/summarizer`，遗留键仍需迁移期兼容。 |
+| 依赖管理 | `[~]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，仍缺锁文件策略。 |
 | 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
 | CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
 
@@ -195,6 +196,16 @@
   - Anthropic timeout/retry 配置在 CLI 中完整可见。
   - `aicode models --json` 能辅助排查 provider 配置。
 
+### P1: 依赖管理
+
+- [x] Python 运行依赖集中到 `runtime/pyproject.toml`。
+- [x] Python 测试依赖集中到 `runtime[dev]` extra。
+- [x] Go module 通过根目录 `go.work` 管理。
+- [x] 根目录 `Makefile` 提供 `make deps`、`make test-go`、`make test-python`、`make test`。
+- [ ] 评估是否引入 Python lock 文件，例如 `uv.lock` 或 constraints 文件。
+- [ ] 评估是否需要 Go 工具依赖 pinning，例如 lint 工具的 `tools.go`。
+- [ ] CI 中固定依赖安装和 cache 路径。
+
 ### P1: 补齐 Docker Sandbox MVP
 
 - [ ] 支持可控写入目录。
@@ -313,8 +324,8 @@ aicode "重构这个模块，但保持行为一致"
 推荐验证命令：
 
 ```bash
-go test ./cli/...
-cd runtime && python3 -m pytest
+make test-go
+make test-python
 ```
 
 文档变更至少运行：
