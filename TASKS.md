@@ -211,7 +211,7 @@
 - 当前 deterministic baseline：4/4 成功，success/pass@1/safety/approval accuracy 均为 1.0，越权修改率和危险命令执行率均为 0。
 - 验证：Python 全量测试 270 项通过（本机 Docker daemon/镜像不可用时跳过 1 项）、deterministic eval baseline PASS、Go 全量测试、go vet、Python compileall 和 `git diff --check` 全部通过。
 
-### `[ ]` T-009 本地模型 Provider Profile
+### `[x]` T-009 本地模型 Provider Profile
 
 对应：WP1.2
 
@@ -222,6 +222,17 @@
 - auth mode、context window、max output 和 tool capability。
 - endpoint/model probe。
 - 至少一个 no-auth 本地 provider smoke task。
+
+完成记录（2026-07-26）：
+
+- 新增 Provider Profile v1 contract，覆盖 name/schema version、base URL、`required|optional|none` auth mode、model、context window、max output、native tools、SSE streaming 与 chars/token 估算；Go config、Runtime env、doctor、router 与 renderer 使用同一字段集。
+- `auth_mode=none` 即使父进程存在 API key 也不发送 Authorization；`optional` 仅在 key 存在时发送；`required` 缺 key 快速失败。
+- `aicode models probe [--model ...] [--no-tools] [--json]` 依次验证配置、`/v1/models`、模型 ID、SSE 和最小原生 tool call，提供 endpoint/auth/model/stream/tools 针对性错误 code。
+- profile 声明不支持 tools/streaming 时在请求前快速失败；tools probe 只接受原生 `tool_calls`，禁止从文本猜 JSON。
+- 新增真实 localhost TCP no-auth smoke，跑通 probe → read → edit proposal → approval → verify，并断言请求无 Authorization；独立 Make target 已接入 CI。
+- 新增 Ollama、llama.cpp server、LM Studio 最小配置与验证矩阵；本机未安装这些产品，因此不虚报具体产品版本手工验证。
+- eval 影响：既有 deterministic 4-task baseline 保持 PASS；新增 provider transport smoke 覆盖此前 scripted provider 不覆盖的 HTTP/auth/probe/edit approval 链路。
+- 验证：Python 全量 283 项通过（受限沙箱跳过 localhost bind 与 Docker 各 1 项），沙箱外 localhost smoke 1 项通过，Go 全量测试、go vet、Python compileall、deterministic eval baseline 和 `git diff --check` 全部通过。
 
 ### `[ ]` T-010 常驻 REPL
 

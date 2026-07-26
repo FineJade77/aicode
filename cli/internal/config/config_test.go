@@ -27,9 +27,18 @@ reviewer = "review-model"
 summarizer = "summary-model"
 
 [provider.openai_compatible]
+profile = "local-test"
+profile_schema_version = 1
 base_url = "https://api.example.com/v1"
 api_key_env = "EXAMPLE_API_KEY"
+auth_mode = "none"
 timeout_seconds = 12.5
+context_window = 16384
+max_output_tokens = 2048
+tool_calling = true
+streaming = true
+tokenizer = "chars"
+chars_per_token = 4
 
 [provider.anthropic]
 base_url = "https://anthropic.example.com"
@@ -64,6 +73,17 @@ output_per_1m = 10
 	if cfg.OpenAICompatible.TimeoutSeconds != 12.5 {
 		t.Fatalf("timeout = %v", cfg.OpenAICompatible.TimeoutSeconds)
 	}
+	if cfg.OpenAICompatible.Profile != "local-test" ||
+		cfg.OpenAICompatible.ProfileSchemaVersion != 1 ||
+		cfg.OpenAICompatible.AuthMode != "none" ||
+		cfg.OpenAICompatible.ContextWindow != 16384 ||
+		cfg.OpenAICompatible.MaxOutputTokens != 2048 ||
+		!cfg.OpenAICompatible.ToolCalling ||
+		!cfg.OpenAICompatible.Streaming ||
+		cfg.OpenAICompatible.Tokenizer != "chars" ||
+		cfg.OpenAICompatible.CharsPerToken != 4 {
+		t.Fatalf("provider profile = %#v", cfg.OpenAICompatible)
+	}
 	if cfg.Anthropic.BaseURL != "https://anthropic.example.com" || cfg.Anthropic.APIKeyEnv != "ANTHROPIC_TEST_KEY" {
 		t.Fatalf("anthropic = %#v", cfg.Anthropic)
 	}
@@ -96,6 +116,21 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	if _, err := SetValue("provider.openai_compatible.timeout_seconds", "7.5"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := SetValue("provider.openai_compatible.profile", "ollama"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.openai_compatible.auth_mode", "none"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.openai_compatible.context_window", "32768"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.openai_compatible.max_output_tokens", "4096"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetValue("provider.openai_compatible.tool_calling", "true"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := SetValue("provider.anthropic.timeout_seconds", "31.5"); err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +160,13 @@ func TestSetValueSupportsModelRoutes(t *testing.T) {
 	}
 	if cfg.OpenAICompatible.TimeoutSeconds != 7.5 {
 		t.Fatalf("timeout = %v", cfg.OpenAICompatible.TimeoutSeconds)
+	}
+	if cfg.OpenAICompatible.Profile != "ollama" ||
+		cfg.OpenAICompatible.AuthMode != "none" ||
+		cfg.OpenAICompatible.ContextWindow != 32768 ||
+		cfg.OpenAICompatible.MaxOutputTokens != 4096 ||
+		!cfg.OpenAICompatible.ToolCalling {
+		t.Fatalf("provider profile = %#v", cfg.OpenAICompatible)
 	}
 	if cfg.Anthropic.TimeoutSeconds != 31.5 {
 		t.Fatalf("anthropic timeout = %v", cfg.Anthropic.TimeoutSeconds)
@@ -263,6 +305,12 @@ func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	cfg.Models.Reviewer = "review-model"
 	cfg.OpenAICompatible.BaseURL = "https://api.example.com/v1"
 	cfg.OpenAICompatible.APIKeyEnv = "EXAMPLE_API_KEY"
+	cfg.OpenAICompatible.Profile = "local-test"
+	cfg.OpenAICompatible.AuthMode = "none"
+	cfg.OpenAICompatible.ContextWindow = 16384
+	cfg.OpenAICompatible.MaxOutputTokens = 2048
+	cfg.OpenAICompatible.ToolCalling = true
+	cfg.OpenAICompatible.Streaming = true
 	cfg.OpenAICompatible.TimeoutSeconds = 17.5
 	cfg.Anthropic.TimeoutSeconds = 88
 	cfg.Pricing["openai_compatible/gpt-5"] = ModelPriceConfig{InputPer1M: 1.25, OutputPer1M: 10}
@@ -277,6 +325,14 @@ func TestRuntimeEnvIncludesModelAndProviderConfig(t *testing.T) {
 	}
 	if env["AICODE_OPENAI_API_KEY_ENV"] != "EXAMPLE_API_KEY" {
 		t.Fatalf("AICODE_OPENAI_API_KEY_ENV = %q", env["AICODE_OPENAI_API_KEY_ENV"])
+	}
+	if env["AICODE_OPENAI_PROFILE"] != "local-test" ||
+		env["AICODE_OPENAI_AUTH_MODE"] != "none" ||
+		env["AICODE_OPENAI_CONTEXT_WINDOW"] != "16384" ||
+		env["AICODE_OPENAI_MAX_OUTPUT_TOKENS"] != "2048" ||
+		env["AICODE_OPENAI_TOOL_CALLING"] != "true" ||
+		env["AICODE_OPENAI_STREAMING"] != "true" {
+		t.Fatalf("provider profile env = %#v", env)
 	}
 	if env["AICODE_OPENAI_TIMEOUT_SECONDS"] != "17.5" {
 		t.Fatalf("AICODE_OPENAI_TIMEOUT_SECONDS = %q", env["AICODE_OPENAI_TIMEOUT_SECONDS"])
@@ -343,6 +399,12 @@ func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
 	if _, ok := findDoc(docs, "provider.anthropic.timeout_seconds"); !ok {
 		t.Fatal("missing anthropic timeout doc")
 	}
+	if _, ok := findDoc(docs, "provider.openai_compatible.auth_mode"); !ok {
+		t.Fatal("missing auth mode doc")
+	}
+	if _, ok := findDoc(docs, "provider.openai_compatible.tool_calling"); !ok {
+		t.Fatal("missing tool calling doc")
+	}
 	if _, ok := findDoc(docs, "models.coder"); ok {
 		t.Fatal("legacy models.coder should not appear in docs")
 	}
@@ -402,8 +464,17 @@ func clearConfigEnv(t *testing.T) {
 		"AICODE_ANTHROPIC_API_KEY_ENV",
 		"AICODE_ANTHROPIC_TIMEOUT_SECONDS",
 		"AICODE_OPENAI_BASE_URL",
+		"AICODE_OPENAI_PROFILE",
+		"AICODE_OPENAI_PROFILE_SCHEMA_VERSION",
 		"AICODE_OPENAI_API_KEY_ENV",
+		"AICODE_OPENAI_AUTH_MODE",
 		"AICODE_OPENAI_TIMEOUT_SECONDS",
+		"AICODE_OPENAI_CONTEXT_WINDOW",
+		"AICODE_OPENAI_MAX_OUTPUT_TOKENS",
+		"AICODE_OPENAI_TOOL_CALLING",
+		"AICODE_OPENAI_STREAMING",
+		"AICODE_OPENAI_TOKENIZER",
+		"AICODE_OPENAI_CHARS_PER_TOKEN",
 		"AICODE_MODEL_PRICES_JSON",
 	} {
 		t.Setenv(key, "")

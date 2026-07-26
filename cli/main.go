@@ -116,6 +116,7 @@ func printHelp() {
   aicode usage --today [--json]
   aicode usage --session <session_id> [--json]
   aicode models [--json]
+  aicode models probe [--no-tools] [--model <name>] [--json]
   aicode doctor [--json]
   aicode trust [status|add|remove|list] [--json]
   aicode config init

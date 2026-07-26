@@ -73,6 +73,10 @@ class ModelCapability:
     context_window: int
     max_output_tokens: int
     source: str = "default"
+    tool_calling: bool = True
+    streaming: bool = True
+    tokenizer: str = "chars"
+    chars_per_token: float = 3.5
 
 
 class ProviderError(Exception):
@@ -84,6 +88,10 @@ class ContextOverflowError(ProviderError):
 
 
 class ProviderNotConfigured(ProviderError):
+    pass
+
+
+class ProviderCapabilityError(ProviderError):
     pass
 
 

@@ -112,11 +112,11 @@ aicode doctor
 aicode doctor --json
 ```
 
-doctor 检查 Runtime 安装、CLI/Runtime/daemon 版本、Python 3.11+ 与关键依赖、Runtime 端口、provider 配置/API key 环境变量，以及可选的 Docker daemon。它不会启动 Runtime，也不会向 provider 发送请求；未配置 API key、未安装 Docker 或 daemon 尚未启动会显示 warning，核心安装、版本、Python 或端口冲突才返回非零退出码。
+doctor 检查 Runtime 安装、CLI/Runtime/daemon 版本、Python 3.11+ 与关键依赖、Runtime 端口、Provider Profile/auth mode/capability，以及可选的 Docker daemon。它不会启动 Runtime，也不会向 provider 发送请求；`required` 缺少 API key、未安装 Docker 或 daemon 尚未启动会显示 warning，no-auth profile 可直接通过，核心安装、版本、Python、Profile 格式或端口冲突会返回非零退出码。
 
 下文默认 `aicode` 已经在 `PATH` 中。如果不安装，也可以用 `./bin/aicode` 替代。
 
-配置模型 API key。默认 provider 是 OpenAI-compatible：
+配置模型 API key。默认远程 profile 是 OpenAI-compatible 且 `auth_mode=required`：
 
 ```bash
 export OPENAI_API_KEY="..."
@@ -135,6 +135,8 @@ aicode "解释当前项目"
 ```
 
 CLI 会自动启动 Runtime daemon，并创建 session。没有配置可用 provider 时，Runtime 会直接报错并提示需要设置 API key，不会回退到 stub。
+
+本地 Ollama、llama.cpp server、LM Studio 不需要伪 API key。使用 `auth_mode=none`，并在配置后运行 `aicode models probe`；完整示例见 [Local Provider Profiles](LOCAL_PROVIDER_PROFILES.md)。
 
 ## 常用命令
 
@@ -165,6 +167,8 @@ aicode resume --last "继续刚才的任务"
 aicode resume <session_id> "继续这个会话"
 aicode models
 aicode models --json
+aicode models probe
+aicode models probe --json
 aicode usage
 aicode usage --today
 aicode usage --session <session_id>
@@ -351,8 +355,10 @@ provider 配置：
 
 ```bash
 aicode config set provider.type openai_compatible
+aicode config set provider.openai_compatible.profile openai
 aicode config set provider.openai_compatible.base_url https://api.openai.com/v1
 aicode config set provider.openai_compatible.api_key_env OPENAI_API_KEY
+aicode config set provider.openai_compatible.auth_mode required
 aicode config set provider.openai_compatible.timeout_seconds 60
 
 aicode config set provider.type anthropic
@@ -381,8 +387,16 @@ export AICODE_OPENAI_API_KEY="..."
 export OPENAI_API_KEY="..."
 export ANTHROPIC_API_KEY="..."
 export AICODE_OPENAI_BASE_URL="https://api.openai.com/v1"
+export AICODE_OPENAI_PROFILE="openai"
 export AICODE_OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+export AICODE_OPENAI_AUTH_MODE="required"
 export AICODE_OPENAI_TIMEOUT_SECONDS="60"
+export AICODE_OPENAI_CONTEXT_WINDOW="32768"
+export AICODE_OPENAI_MAX_OUTPUT_TOKENS="8192"
+export AICODE_OPENAI_TOOL_CALLING="true"
+export AICODE_OPENAI_STREAMING="true"
+export AICODE_OPENAI_TOKENIZER="chars"
+export AICODE_OPENAI_CHARS_PER_TOKEN="3.5"
 export AICODE_ANTHROPIC_BASE_URL="https://api.anthropic.com"
 export AICODE_ANTHROPIC_API_KEY_ENV="ANTHROPIC_API_KEY"
 export AICODE_ANTHROPIC_TIMEOUT_SECONDS="120"
@@ -396,7 +410,7 @@ export AICODE_SESSION_CACHE_LIMIT="200"
 export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25,"output_per_1m":10}}'
 ```
 
-context capability 的 key 优先使用 `<provider>:<model>`，也支持只写 `<model>`；未配置的模型保守使用 32768 context window 和 8192 max output。`aicode models` 会显示每条路由实际采用的 context、max output 及其来源。还可用 `AICODE_CONTEXT_DEFAULT_WINDOW`、`AICODE_CONTEXT_DEFAULT_MAX_OUTPUT_TOKENS`、`AICODE_CONTEXT_RESERVE_TOKENS`、`AICODE_CONTEXT_COMPACT_THRESHOLD` 和 `AICODE_CONTEXT_CHARS_PER_TOKEN` 调整默认预算与估算参数。
+context capability 的 key 优先使用 `<provider>:<model>`，也支持只写 `<model>`；其次使用当前 Provider Profile 的 context window 和 max output。`aicode models` 会显示每条路由实际采用的 capability 及其来源，`aicode models probe [--json]` 会执行 endpoint、模型发现、SSE 和原生 tools 探测。还可用 `AICODE_CONTEXT_RESERVE_TOKENS` 与 `AICODE_CONTEXT_COMPACT_THRESHOLD` 调整预算安全余量和压缩阈值。
 
 Runtime 会在每次模型请求前估算 system prompt、tool schema、session history 和预留输出所占 token。接近当前 provider/model 的窗口时，它先把旧历史压缩成版本化 compaction entry，再提交请求；原始 message log 保持追加且不会被摘要覆盖。恢复 session 时直接复用最近有效 compaction。若 provider 仍返回 context overflow，只允许一次强制压缩重试，第二次错误会原样结束本次 run，避免无限重试。
 

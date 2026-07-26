@@ -51,9 +51,18 @@ type AnthropicConfig struct {
 }
 
 type OpenAICompatibleConfig struct {
-	BaseURL        string
-	APIKeyEnv      string
-	TimeoutSeconds float64
+	Profile              string
+	ProfileSchemaVersion int
+	BaseURL              string
+	APIKeyEnv            string
+	AuthMode             string
+	TimeoutSeconds       float64
+	ContextWindow        int
+	MaxOutputTokens      int
+	ToolCalling          bool
+	Streaming            bool
+	Tokenizer            string
+	CharsPerToken        float64
 }
 
 type ModelPriceConfig struct {
@@ -100,9 +109,18 @@ func Default() Config {
 			TimeoutSeconds: 120.0,
 		},
 		OpenAICompatible: OpenAICompatibleConfig{
-			BaseURL:        "https://api.openai.com/v1",
-			APIKeyEnv:      "OPENAI_API_KEY",
-			TimeoutSeconds: 60.0,
+			Profile:              "openai",
+			ProfileSchemaVersion: 1,
+			BaseURL:              "https://api.openai.com/v1",
+			APIKeyEnv:            "OPENAI_API_KEY",
+			AuthMode:             "required",
+			TimeoutSeconds:       60.0,
+			ContextWindow:        32768,
+			MaxOutputTokens:      8192,
+			ToolCalling:          true,
+			Streaming:            true,
+			Tokenizer:            "chars",
+			CharsPerToken:        3.5,
 		},
 		Pricing: map[string]ModelPriceConfig{},
 	}
@@ -181,12 +199,54 @@ func Load() (Config, error) {
 			cfg.OpenAICompatible.BaseURL = value
 		case "provider.openai_compatible.api_key_env":
 			cfg.OpenAICompatible.APIKeyEnv = value
+		case "provider.openai_compatible.profile":
+			cfg.OpenAICompatible.Profile = value
+		case "provider.openai_compatible.profile_schema_version":
+			version, err := strconv.Atoi(value)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.openai_compatible.profile_schema_version: %w", err)
+			}
+			cfg.OpenAICompatible.ProfileSchemaVersion = version
+		case "provider.openai_compatible.auth_mode":
+			cfg.OpenAICompatible.AuthMode = value
 		case "provider.openai_compatible.timeout_seconds":
 			timeout, err := strconv.ParseFloat(value, 64)
 			if err != nil {
 				return cfg, fmt.Errorf("invalid provider.openai_compatible.timeout_seconds: %w", err)
 			}
 			cfg.OpenAICompatible.TimeoutSeconds = timeout
+		case "provider.openai_compatible.context_window":
+			contextWindow, err := strconv.Atoi(value)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.openai_compatible.context_window: %w", err)
+			}
+			cfg.OpenAICompatible.ContextWindow = contextWindow
+		case "provider.openai_compatible.max_output_tokens":
+			maxOutput, err := strconv.Atoi(value)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.openai_compatible.max_output_tokens: %w", err)
+			}
+			cfg.OpenAICompatible.MaxOutputTokens = maxOutput
+		case "provider.openai_compatible.tool_calling":
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.openai_compatible.tool_calling: %w", err)
+			}
+			cfg.OpenAICompatible.ToolCalling = enabled
+		case "provider.openai_compatible.streaming":
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.openai_compatible.streaming: %w", err)
+			}
+			cfg.OpenAICompatible.Streaming = enabled
+		case "provider.openai_compatible.tokenizer":
+			cfg.OpenAICompatible.Tokenizer = value
+		case "provider.openai_compatible.chars_per_token":
+			ratio, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return cfg, fmt.Errorf("invalid provider.openai_compatible.chars_per_token: %w", err)
+			}
+			cfg.OpenAICompatible.CharsPerToken = ratio
 		default:
 			if strings.HasPrefix(section, "pricing.") {
 				if err := setPricingValue(cfg.Pricing, section, key, value); err != nil {
@@ -243,13 +303,52 @@ func applyEnvOverrides(cfg *Config) {
 	if baseURL := os.Getenv("AICODE_OPENAI_BASE_URL"); baseURL != "" {
 		cfg.OpenAICompatible.BaseURL = baseURL
 	}
+	if profile := os.Getenv("AICODE_OPENAI_PROFILE"); profile != "" {
+		cfg.OpenAICompatible.Profile = profile
+	}
+	if version := os.Getenv("AICODE_OPENAI_PROFILE_SCHEMA_VERSION"); version != "" {
+		if parsed, err := strconv.Atoi(version); err == nil {
+			cfg.OpenAICompatible.ProfileSchemaVersion = parsed
+		}
+	}
 	if apiKeyEnv := os.Getenv("AICODE_OPENAI_API_KEY_ENV"); apiKeyEnv != "" {
 		cfg.OpenAICompatible.APIKeyEnv = apiKeyEnv
+	}
+	if authMode := os.Getenv("AICODE_OPENAI_AUTH_MODE"); authMode != "" {
+		cfg.OpenAICompatible.AuthMode = authMode
 	}
 	if timeout := os.Getenv("AICODE_OPENAI_TIMEOUT_SECONDS"); timeout != "" {
 		parsed, err := strconv.ParseFloat(timeout, 64)
 		if err == nil {
 			cfg.OpenAICompatible.TimeoutSeconds = parsed
+		}
+	}
+	if contextWindow := os.Getenv("AICODE_OPENAI_CONTEXT_WINDOW"); contextWindow != "" {
+		if parsed, err := strconv.Atoi(contextWindow); err == nil {
+			cfg.OpenAICompatible.ContextWindow = parsed
+		}
+	}
+	if maxOutput := os.Getenv("AICODE_OPENAI_MAX_OUTPUT_TOKENS"); maxOutput != "" {
+		if parsed, err := strconv.Atoi(maxOutput); err == nil {
+			cfg.OpenAICompatible.MaxOutputTokens = parsed
+		}
+	}
+	if toolCalling := os.Getenv("AICODE_OPENAI_TOOL_CALLING"); toolCalling != "" {
+		if parsed, err := strconv.ParseBool(toolCalling); err == nil {
+			cfg.OpenAICompatible.ToolCalling = parsed
+		}
+	}
+	if streaming := os.Getenv("AICODE_OPENAI_STREAMING"); streaming != "" {
+		if parsed, err := strconv.ParseBool(streaming); err == nil {
+			cfg.OpenAICompatible.Streaming = parsed
+		}
+	}
+	if tokenizer := os.Getenv("AICODE_OPENAI_TOKENIZER"); tokenizer != "" {
+		cfg.OpenAICompatible.Tokenizer = tokenizer
+	}
+	if charsPerToken := os.Getenv("AICODE_OPENAI_CHARS_PER_TOKEN"); charsPerToken != "" {
+		if parsed, err := strconv.ParseFloat(charsPerToken, 64); err == nil {
+			cfg.OpenAICompatible.CharsPerToken = parsed
 		}
 	}
 	if rawPrices := os.Getenv("AICODE_MODEL_PRICES_JSON"); rawPrices != "" {
@@ -268,9 +367,18 @@ func (cfg Config) RuntimeEnv() []string {
 		"AICODE_ANTHROPIC_BASE_URL=" + cfg.Anthropic.BaseURL,
 		"AICODE_ANTHROPIC_API_KEY_ENV=" + cfg.Anthropic.APIKeyEnv,
 		"AICODE_ANTHROPIC_TIMEOUT_SECONDS=" + strconv.FormatFloat(cfg.Anthropic.TimeoutSeconds, 'f', -1, 64),
+		"AICODE_OPENAI_PROFILE=" + cfg.OpenAICompatible.Profile,
+		"AICODE_OPENAI_PROFILE_SCHEMA_VERSION=" + strconv.Itoa(cfg.OpenAICompatible.ProfileSchemaVersion),
 		"AICODE_OPENAI_BASE_URL=" + cfg.OpenAICompatible.BaseURL,
 		"AICODE_OPENAI_API_KEY_ENV=" + cfg.OpenAICompatible.APIKeyEnv,
+		"AICODE_OPENAI_AUTH_MODE=" + cfg.OpenAICompatible.AuthMode,
 		"AICODE_OPENAI_TIMEOUT_SECONDS=" + strconv.FormatFloat(cfg.OpenAICompatible.TimeoutSeconds, 'f', -1, 64),
+		"AICODE_OPENAI_CONTEXT_WINDOW=" + strconv.Itoa(cfg.OpenAICompatible.ContextWindow),
+		"AICODE_OPENAI_MAX_OUTPUT_TOKENS=" + strconv.Itoa(cfg.OpenAICompatible.MaxOutputTokens),
+		"AICODE_OPENAI_TOOL_CALLING=" + strconv.FormatBool(cfg.OpenAICompatible.ToolCalling),
+		"AICODE_OPENAI_STREAMING=" + strconv.FormatBool(cfg.OpenAICompatible.Streaming),
+		"AICODE_OPENAI_TOKENIZER=" + cfg.OpenAICompatible.Tokenizer,
+		"AICODE_OPENAI_CHARS_PER_TOKEN=" + strconv.FormatFloat(cfg.OpenAICompatible.CharsPerToken, 'f', -1, 64),
 	}
 	if len(cfg.Pricing) > 0 {
 		if encoded, err := json.Marshal(cfg.Pricing); err == nil {
@@ -282,21 +390,30 @@ func (cfg Config) RuntimeEnv() []string {
 
 func filteredRuntimeBaseEnv(env []string) []string {
 	managed := map[string]bool{
-		"AICODE_DEFAULT_LANGUAGE":          true,
-		"AICODE_MODEL_DEFAULT":             true,
-		"AICODE_MODEL_MAIN":                true,
-		"AICODE_MODEL_PLANNER":             true,
-		"AICODE_MODEL_CODER":               true,
-		"AICODE_MODEL_REVIEWER":            true,
-		"AICODE_MODEL_SUMMARIZER":          true,
-		"AICODE_PROVIDER_TYPE":             true,
-		"AICODE_ANTHROPIC_BASE_URL":        true,
-		"AICODE_ANTHROPIC_API_KEY_ENV":     true,
-		"AICODE_ANTHROPIC_TIMEOUT_SECONDS": true,
-		"AICODE_OPENAI_BASE_URL":           true,
-		"AICODE_OPENAI_API_KEY_ENV":        true,
-		"AICODE_OPENAI_TIMEOUT_SECONDS":    true,
-		"AICODE_MODEL_PRICES_JSON":         true,
+		"AICODE_DEFAULT_LANGUAGE":              true,
+		"AICODE_MODEL_DEFAULT":                 true,
+		"AICODE_MODEL_MAIN":                    true,
+		"AICODE_MODEL_PLANNER":                 true,
+		"AICODE_MODEL_CODER":                   true,
+		"AICODE_MODEL_REVIEWER":                true,
+		"AICODE_MODEL_SUMMARIZER":              true,
+		"AICODE_PROVIDER_TYPE":                 true,
+		"AICODE_ANTHROPIC_BASE_URL":            true,
+		"AICODE_ANTHROPIC_API_KEY_ENV":         true,
+		"AICODE_ANTHROPIC_TIMEOUT_SECONDS":     true,
+		"AICODE_OPENAI_PROFILE":                true,
+		"AICODE_OPENAI_PROFILE_SCHEMA_VERSION": true,
+		"AICODE_OPENAI_BASE_URL":               true,
+		"AICODE_OPENAI_API_KEY_ENV":            true,
+		"AICODE_OPENAI_AUTH_MODE":              true,
+		"AICODE_OPENAI_TIMEOUT_SECONDS":        true,
+		"AICODE_OPENAI_CONTEXT_WINDOW":         true,
+		"AICODE_OPENAI_MAX_OUTPUT_TOKENS":      true,
+		"AICODE_OPENAI_TOOL_CALLING":           true,
+		"AICODE_OPENAI_STREAMING":              true,
+		"AICODE_OPENAI_TOKENIZER":              true,
+		"AICODE_OPENAI_CHARS_PER_TOKEN":        true,
+		"AICODE_MODEL_PRICES_JSON":             true,
 	}
 	filtered := make([]string, 0, len(env))
 	for _, item := range env {
@@ -322,9 +439,18 @@ func (cfg Config) Entries() []Entry {
 		{"provider.anthropic.base_url", cfg.Anthropic.BaseURL},
 		{"provider.anthropic.api_key_env", cfg.Anthropic.APIKeyEnv},
 		{"provider.anthropic.timeout_seconds", formatFloat(cfg.Anthropic.TimeoutSeconds)},
+		{"provider.openai_compatible.profile", cfg.OpenAICompatible.Profile},
+		{"provider.openai_compatible.profile_schema_version", strconv.Itoa(cfg.OpenAICompatible.ProfileSchemaVersion)},
 		{"provider.openai_compatible.base_url", cfg.OpenAICompatible.BaseURL},
 		{"provider.openai_compatible.api_key_env", cfg.OpenAICompatible.APIKeyEnv},
+		{"provider.openai_compatible.auth_mode", cfg.OpenAICompatible.AuthMode},
 		{"provider.openai_compatible.timeout_seconds", formatFloat(cfg.OpenAICompatible.TimeoutSeconds)},
+		{"provider.openai_compatible.context_window", strconv.Itoa(cfg.OpenAICompatible.ContextWindow)},
+		{"provider.openai_compatible.max_output_tokens", strconv.Itoa(cfg.OpenAICompatible.MaxOutputTokens)},
+		{"provider.openai_compatible.tool_calling", strconv.FormatBool(cfg.OpenAICompatible.ToolCalling)},
+		{"provider.openai_compatible.streaming", strconv.FormatBool(cfg.OpenAICompatible.Streaming)},
+		{"provider.openai_compatible.tokenizer", cfg.OpenAICompatible.Tokenizer},
+		{"provider.openai_compatible.chars_per_token", formatFloat(cfg.OpenAICompatible.CharsPerToken)},
 	}
 	for _, key := range sortedPricingKeys(cfg.Pricing) {
 		price := cfg.Pricing[key]
@@ -416,6 +542,18 @@ func KeyDocs() []KeyDoc {
 			Description: "Anthropic provider 请求超时时间，单位秒。",
 		},
 		{
+			Key:         "provider.openai_compatible.profile",
+			Default:     defaults.OpenAICompatible.Profile,
+			Env:         "AICODE_OPENAI_PROFILE",
+			Description: "Provider Profile 名称，例如 openai、ollama、llama_cpp 或 lm_studio。",
+		},
+		{
+			Key:         "provider.openai_compatible.profile_schema_version",
+			Default:     strconv.Itoa(defaults.OpenAICompatible.ProfileSchemaVersion),
+			Env:         "AICODE_OPENAI_PROFILE_SCHEMA_VERSION",
+			Description: "Provider Profile 契约版本，当前为 1。",
+		},
+		{
 			Key:         "provider.openai_compatible.base_url",
 			Default:     defaults.OpenAICompatible.BaseURL,
 			Env:         "AICODE_OPENAI_BASE_URL",
@@ -428,10 +566,52 @@ func KeyDocs() []KeyDoc {
 			Description: "Runtime 从哪个环境变量读取 provider API key。",
 		},
 		{
+			Key:         "provider.openai_compatible.auth_mode",
+			Default:     defaults.OpenAICompatible.AuthMode,
+			Env:         "AICODE_OPENAI_AUTH_MODE",
+			Description: "认证模式：required、optional 或 none；本地 no-auth endpoint 使用 none。",
+		},
+		{
 			Key:         "provider.openai_compatible.timeout_seconds",
 			Default:     formatFloat(defaults.OpenAICompatible.TimeoutSeconds),
 			Env:         "AICODE_OPENAI_TIMEOUT_SECONDS",
 			Description: "OpenAI-compatible 请求超时时间，单位秒。",
+		},
+		{
+			Key:         "provider.openai_compatible.context_window",
+			Default:     strconv.Itoa(defaults.OpenAICompatible.ContextWindow),
+			Env:         "AICODE_OPENAI_CONTEXT_WINDOW",
+			Description: "Profile 默认 context window token 数。",
+		},
+		{
+			Key:         "provider.openai_compatible.max_output_tokens",
+			Default:     strconv.Itoa(defaults.OpenAICompatible.MaxOutputTokens),
+			Env:         "AICODE_OPENAI_MAX_OUTPUT_TOKENS",
+			Description: "Profile 默认最大输出 token 数。",
+		},
+		{
+			Key:         "provider.openai_compatible.tool_calling",
+			Default:     strconv.FormatBool(defaults.OpenAICompatible.ToolCalling),
+			Env:         "AICODE_OPENAI_TOOL_CALLING",
+			Description: "是否声明支持原生 OpenAI tools；false 时 Agent 快速失败。",
+		},
+		{
+			Key:         "provider.openai_compatible.streaming",
+			Default:     strconv.FormatBool(defaults.OpenAICompatible.Streaming),
+			Env:         "AICODE_OPENAI_STREAMING",
+			Description: "是否声明支持 SSE streaming；当前 Agent 要求为 true。",
+		},
+		{
+			Key:         "provider.openai_compatible.tokenizer",
+			Default:     defaults.OpenAICompatible.Tokenizer,
+			Env:         "AICODE_OPENAI_TOKENIZER",
+			Description: "token 预算估算策略，当前支持 chars。",
+		},
+		{
+			Key:         "provider.openai_compatible.chars_per_token",
+			Default:     formatFloat(defaults.OpenAICompatible.CharsPerToken),
+			Env:         "AICODE_OPENAI_CHARS_PER_TOKEN",
+			Description: "chars tokenizer 的字符/token 估算比。",
 		},
 		{
 			Key:         "pricing.<provider>.<model>.input_per_1m",
@@ -548,20 +728,33 @@ func configKeyTarget(key string) (string, string, error) {
 	}
 
 	supported := map[string][2]string{
-		"ui.language":                                {"ui", "language"},
-		"ui.style":                                   {"ui", "style"},
-		"runtime.url":                                {"runtime", "url"},
-		"runtime.port":                               {"runtime", "port"},
-		"models.main":                                {"models", "main"},
-		"models.reviewer":                            {"models", "reviewer"},
-		"models.summarizer":                          {"models", "summarizer"},
-		"provider.type":                              {"provider", "type"},
-		"provider.anthropic.base_url":                {"provider.anthropic", "base_url"},
-		"provider.anthropic.api_key_env":             {"provider.anthropic", "api_key_env"},
-		"provider.anthropic.timeout_seconds":         {"provider.anthropic", "timeout_seconds"},
+		"ui.language":                        {"ui", "language"},
+		"ui.style":                           {"ui", "style"},
+		"runtime.url":                        {"runtime", "url"},
+		"runtime.port":                       {"runtime", "port"},
+		"models.main":                        {"models", "main"},
+		"models.reviewer":                    {"models", "reviewer"},
+		"models.summarizer":                  {"models", "summarizer"},
+		"provider.type":                      {"provider", "type"},
+		"provider.anthropic.base_url":        {"provider.anthropic", "base_url"},
+		"provider.anthropic.api_key_env":     {"provider.anthropic", "api_key_env"},
+		"provider.anthropic.timeout_seconds": {"provider.anthropic", "timeout_seconds"},
+		"provider.openai_compatible.profile": {"provider.openai_compatible", "profile"},
+		"provider.openai_compatible.profile_schema_version": {
+			"provider.openai_compatible", "profile_schema_version",
+		},
 		"provider.openai_compatible.base_url":        {"provider.openai_compatible", "base_url"},
 		"provider.openai_compatible.api_key_env":     {"provider.openai_compatible", "api_key_env"},
+		"provider.openai_compatible.auth_mode":       {"provider.openai_compatible", "auth_mode"},
 		"provider.openai_compatible.timeout_seconds": {"provider.openai_compatible", "timeout_seconds"},
+		"provider.openai_compatible.context_window":  {"provider.openai_compatible", "context_window"},
+		"provider.openai_compatible.max_output_tokens": {
+			"provider.openai_compatible", "max_output_tokens",
+		},
+		"provider.openai_compatible.tool_calling":    {"provider.openai_compatible", "tool_calling"},
+		"provider.openai_compatible.streaming":       {"provider.openai_compatible", "streaming"},
+		"provider.openai_compatible.tokenizer":       {"provider.openai_compatible", "tokenizer"},
+		"provider.openai_compatible.chars_per_token": {"provider.openai_compatible", "chars_per_token"},
 	}
 	target, ok := supported[key]
 	if !ok {
@@ -576,16 +769,25 @@ func configKeyTarget(key string) (string, string, error) {
 }
 
 func formatConfigLine(section string, key string, value string) (string, error) {
-	if section == "runtime" && key == "port" {
+	if (section == "runtime" && key == "port") ||
+		(section == "provider.openai_compatible" &&
+			(key == "profile_schema_version" || key == "context_window" || key == "max_output_tokens")) {
 		if _, err := strconv.Atoi(value); err != nil {
 			return "", fmt.Errorf("%s.%s 必须是整数: %w", section, key, err)
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
 	if ((section == "provider.openai_compatible" || section == "provider.anthropic") && key == "timeout_seconds") ||
+		(section == "provider.openai_compatible" && key == "chars_per_token") ||
 		strings.HasPrefix(section, "pricing.") {
 		if _, err := strconv.ParseFloat(value, 64); err != nil {
 			return "", fmt.Errorf("%s.%s 必须是数字: %w", section, key, err)
+		}
+		return fmt.Sprintf("%s = %s", key, value), nil
+	}
+	if section == "provider.openai_compatible" && (key == "tool_calling" || key == "streaming") {
+		if _, err := strconv.ParseBool(value); err != nil {
+			return "", fmt.Errorf("%s.%s 必须是 true 或 false: %w", section, key, err)
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
@@ -830,9 +1032,18 @@ api_key_env = "ANTHROPIC_API_KEY"
 timeout_seconds = 120
 
 [provider.openai_compatible]
+profile = "openai"
+profile_schema_version = 1
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
+auth_mode = "required"
 timeout_seconds = 60
+context_window = 32768
+max_output_tokens = 8192
+tool_calling = true
+streaming = true
+tokenizer = "chars"
+chars_per_token = 3.5
 
 [permissions]
 file_write = "ask"

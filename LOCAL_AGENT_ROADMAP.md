@@ -380,6 +380,15 @@ aicode chat
 - endpoint 不可达、模型不存在、无 tools 能力时给出针对性错误。
 - 至少一个真实本地 provider 跑通 read → edit proposal → approval → verify 的 smoke task。
 
+当前落地（2026-07-26）：
+
+- Provider Profile v1 已由 JSON Schema 固化，并贯通 Go config、Runtime env、doctor、router、`models` renderer。
+- no-auth 模式永不发送 Authorization；optional/required 模式分别实现按需认证与缺 key 快速失败。
+- `aicode models probe` 已覆盖配置、模型发现、SSE 和原生 tools，失败返回稳定分类；Agent 不支持文本 JSON tools fallback。
+- 真实 localhost TCP fixture 已跑通 probe → read → edit proposal → approval → verify，独立 smoke target 接入 CI。
+- Ollama、llama.cpp server、LM Studio 提供最小配置模板与官方文档链接；当前自动化验证的是 OpenAI-compatible 协议与 no-auth 全链路，不宣称未安装产品的具体版本已验证。
+- 验证：Python 283 passed / 2 skipped（受限沙箱 localhost bind、Docker），沙箱外 localhost smoke 1 passed；Go test/vet、compileall、deterministic eval baseline 与 diff check 通过。
+
 ### WP1.3 Agent 任务级评测与 Trace
 
 目标：用稳定指标回答“这次改动是否让 Agent 更可靠”。

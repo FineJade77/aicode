@@ -2,11 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from app.config.settings import Settings
 from app.events.sse import encode_sse
 from app.events.types import EVENT_TYPES
 from app.execution.models import ExecutionStatus
+from app.models.router import ModelRouter
 from app.server.main import (
     CancelExecutionResponse,
     CancelRunResponse,
@@ -79,6 +81,16 @@ def test_project_trust_schema_is_external_and_versioned() -> None:
     assert schema["properties"]["schema_version"]["const"] == 1
     assert set(project["required"]) == {"workspace", "level", "git_remote", "updated_at"}
     assert project["properties"]["level"]["const"] == "trusted"
+
+
+def test_provider_profile_schema_validates_runtime_status() -> None:
+    schema = load_schema("provider-profile.schema.json")
+    profile = ModelRouter.from_settings(Settings()).profile_status()
+
+    assert schema["x-aicode-contract-version"] == "1.0"
+    Draft202012Validator(schema).validate(profile)
+    assert profile["schema_version"] == 1
+    assert set(schema["properties"]["auth_mode"]["enum"]) == {"required", "optional", "none"}
 
 
 def test_http_response_fixture_matches_runtime_models() -> None:

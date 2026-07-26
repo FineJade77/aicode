@@ -99,6 +99,41 @@ func TestBuildReportWarnsForOptionalAndInactiveServices(t *testing.T) {
 	}
 }
 
+func TestProviderCheckAcceptsNoAuthLocalProfileWithoutFakeKey(t *testing.T) {
+	cfg := config.Default()
+	cfg.OpenAICompatible.Profile = "ollama"
+	cfg.OpenAICompatible.BaseURL = "http://127.0.0.1:11434/v1"
+	cfg.OpenAICompatible.AuthMode = "none"
+	cfg.OpenAICompatible.APIKeyEnv = ""
+	deps := healthyDependencies()
+	deps.lookupEnv = func(string) (string, bool) { return "", false }
+
+	check := checkProvider(cfg, deps)
+
+	if check.Status != StatusOK || check.Details["configured"] != true {
+		t.Fatalf("provider check = %#v", check)
+	}
+	if !strings.Contains(check.Summary, "no-auth") {
+		t.Fatalf("summary = %q", check.Summary)
+	}
+}
+
+func TestProviderCheckRejectsInvalidProfileCapabilities(t *testing.T) {
+	cfg := config.Default()
+	cfg.OpenAICompatible.AuthMode = "invalid"
+	check := checkProvider(cfg, healthyDependencies())
+	if check.Status != StatusError || !strings.Contains(check.Summary, "auth_mode") {
+		t.Fatalf("provider check = %#v", check)
+	}
+
+	cfg = config.Default()
+	cfg.OpenAICompatible.MaxOutputTokens = cfg.OpenAICompatible.ContextWindow
+	check = checkProvider(cfg, healthyDependencies())
+	if check.Status != StatusError || !strings.Contains(check.Summary, "capability") {
+		t.Fatalf("provider check = %#v", check)
+	}
+}
+
 func TestBuildReportRejectsOldPythonAndMismatchedRuntimePort(t *testing.T) {
 	cfg := config.Default()
 	cfg.Runtime.Port = 9999

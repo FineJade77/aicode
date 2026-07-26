@@ -195,7 +195,7 @@ emit run.completed or run.failed
 - 历史压缩使用 `summarizer` 路由。
 - 其他模式使用 `main` 路由。
 
-当前不会在 provider 未配置时降级到 stub 模型；缺少 API key 会直接报错。
+当前不会在 provider 未配置时降级到 stub 模型；`auth_mode=required` 且缺少 API key 时会直接报错。
 
 ## 6. Modes
 
@@ -299,7 +299,7 @@ Runtime prompt 由几层组成：
 - `models.main`: 常规 Agent 模型。
 - `models.reviewer`: review 模式模型。
 - `models.summarizer`: 历史压缩模型。
-- `provider.openai_compatible`: OpenAI-compatible endpoint、API key env、timeout。
+- `provider.openai_compatible`: versioned Provider Profile，包含 endpoint、auth mode、模型能力、context/max output、streaming 与 token 估算策略。
 - `provider.anthropic`: Anthropic endpoint、API key env、timeout。
 - `pricing`: 本地成本估算所需单价。
 
@@ -332,9 +332,11 @@ Runtime 支持两类 provider：
 | `reviewer` | `models.reviewer` |
 | `summarizer` | `models.summarizer` |
 
-Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清晰错误，而不是静默降级。
+OpenAI-compatible Profile auth mode 支持 `required`、`optional`、`none`。`none` 永不发送 Authorization，适合 no-auth localhost；`required` 缺少 key 时快速失败。Runtime 不会静默降级。
 
-每个 purpose 在调用前解析 `provider + model` capability，包括 context window 与 max output。精确配置优先使用 `AICODE_MODEL_CONTEXT_WINDOWS_JSON` 和 `AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON` 中的 `<provider>:<model>` key，其次匹配 `<model>`，最后使用保守默认值。预算包含 system prompt、tool schema、history、预留输出和安全余量；`GET /v1/models/routes` 与 `aicode models` 会暴露实际 capability 及配置来源。
+每个 purpose 在调用前解析 `provider + model` capability，包括 context window、max output、native tools、streaming 与 tokenizer。精确 model map 优先，随后使用 Profile 默认值。`tool_calling=false` 或 `streaming=false` 会在 provider 请求前快速失败，禁止从正文猜 tool JSON。
+
+`GET /v1/models/probe` / `aicode models probe` 按 configuration → `/v1/models` → selected model → SSE → tools 分阶段探测，并返回 versioned result 和稳定错误 code。Profile/probe contract 分别由 `schemas/provider-profile.schema.json` 与 `schemas/provider-probe.schema.json` 定义。
 
 ## 13. Sessions And API
 
@@ -357,6 +359,7 @@ Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清
 - `GET /v1/usage`
 - `GET /v1/usage/sessions/{session_id}`
 - `GET /v1/models/routes`
+- `GET /v1/models/probe`
 - `GET /v1/review/rules`
 
 所有 Runtime API 默认只监听本机地址，并通过 CLI 写入的 token 做本地鉴权。401 通常表示 CLI 读取的 daemon token 与当前 Runtime 不一致。

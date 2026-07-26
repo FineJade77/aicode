@@ -30,6 +30,10 @@ func PrintModelRoutes(value any) {
 	fmt.Print(ModelRoutesTable(value))
 }
 
+func PrintModelProbe(value any) {
+	fmt.Print(ModelProbeTable(value))
+}
+
 func PrintUsageSummary(value any) {
 	fmt.Print(UsageSummaryTable(value))
 }
@@ -86,7 +90,7 @@ func ModelRoutesTable(value any) string {
 		out.WriteString("\nContext Capabilities\n")
 		var table bytes.Buffer
 		writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(writer, "ROUTE\tPROVIDER\tMODEL\tCONTEXT\tMAX OUTPUT\tSOURCE")
+		fmt.Fprintln(writer, "ROUTE\tPROVIDER\tMODEL\tCONTEXT\tMAX OUTPUT\tTOOLS\tSTREAM\tTOKENIZER\tSOURCE")
 		keys := make([]string, 0, len(capabilities))
 		for key := range capabilities {
 			keys = append(keys, key)
@@ -99,12 +103,15 @@ func ModelRoutesTable(value any) string {
 			}
 			fmt.Fprintf(
 				writer,
-				"%s\t%s\t%s\t%v\t%v\t%s\n",
+				"%s\t%s\t%s\t%v\t%v\t%v\t%v\t%s\t%s\n",
 				key,
 				stringValue(row["provider"]),
 				stringValue(row["model"]),
 				row["context_window"],
 				row["max_output_tokens"],
+				row["tool_calling"],
+				row["streaming"],
+				stringValue(row["tokenizer"]),
 				stringValue(row["source"]),
 			)
 		}
@@ -114,9 +121,13 @@ func ModelRoutesTable(value any) string {
 
 	if openai, ok := root["openai_compatible"].(map[string]any); ok {
 		out.WriteString("\nOpenAI-compatible\n")
+		out.WriteString(fmt.Sprintf("profile: %s (schema v%v)\n", stringValue(openai["profile"]), openai["profile_schema_version"]))
 		out.WriteString(fmt.Sprintf("base_url: %s\n", stringValue(openai["base_url"])))
+		out.WriteString(fmt.Sprintf("auth_mode: %s\n", stringValue(openai["auth_mode"])))
 		out.WriteString(fmt.Sprintf("api_key_env: %s\n", stringValue(openai["api_key_env"])))
 		out.WriteString(fmt.Sprintf("timeout_seconds: %v\n", openai["timeout_seconds"]))
+		out.WriteString(fmt.Sprintf("tool_calling: %v\n", openai["tool_calling"]))
+		out.WriteString(fmt.Sprintf("streaming: %v\n", openai["streaming"]))
 	}
 
 	if pricing, ok := root["pricing"].(map[string]any); ok {
@@ -144,6 +155,58 @@ func ModelRoutesTable(value any) string {
 		out.WriteString(table.String())
 	}
 
+	return out.String()
+}
+
+func ModelProbeTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Provider Profile Probe\n")
+	out.WriteString(fmt.Sprintf("status: %s\n", stringValue(root["status"])))
+	out.WriteString(fmt.Sprintf("model: %s\n", stringValue(root["model"])))
+	out.WriteString(fmt.Sprintf("latency_ms: %v\n", root["latency_ms"]))
+	if profile, ok := root["profile"].(map[string]any); ok {
+		out.WriteString("\nProfile\n")
+		for _, key := range []string{
+			"name", "schema_version", "provider", "base_url", "auth_mode", "context_window",
+			"max_output_tokens", "tool_calling", "streaming", "tokenizer", "chars_per_token",
+		} {
+			out.WriteString(fmt.Sprintf("%s: %v\n", key, profile[key]))
+		}
+	}
+
+	out.WriteString("\nChecks\n")
+	var table bytes.Buffer
+	writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "STATUS\tCHECK\tCODE\tLATENCY\tSUMMARY")
+	if checks, ok := root["checks"].([]any); ok {
+		for _, item := range checks {
+			check, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(
+				writer,
+				"%s\t%s\t%s\t%v\t%s\n",
+				strings.ToUpper(stringValue(check["status"])),
+				stringValue(check["name"]),
+				stringValue(check["code"]),
+				check["latency_ms"],
+				stringValue(check["summary"]),
+			)
+		}
+	}
+	writer.Flush()
+	out.WriteString(table.String())
+
+	if models := joinStringList(root["discovered_models"]); models != "" {
+		out.WriteString("\nDiscovered Models\n")
+		out.WriteString(models + "\n")
+	}
 	return out.String()
 }
 

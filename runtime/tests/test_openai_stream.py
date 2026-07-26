@@ -26,6 +26,56 @@ def make_provider(handler) -> OpenAICompatibleProvider:
 
 
 @pytest.mark.asyncio
+async def test_no_auth_profile_sends_no_authorization_header(monkeypatch):
+    monkeypatch.setenv("AICODE_OPENAI_API_KEY", "must-not-be-sent")
+    monkeypatch.setenv("UNUSED_LOCAL_KEY", "must-also-not-be-sent")
+    seen = {}
+
+    def handler(request):
+        seen["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, content=STREAM_BODY)
+
+    provider = OpenAICompatibleProvider(
+        OpenAICompatibleSettings(
+            profile="local",
+            base_url="http://local.invalid/v1",
+            api_key_env="UNUSED_LOCAL_KEY",
+            auth_mode="none",
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        events = [
+            event
+            async for event in provider.stream_complete(
+                CompletionRequest(
+                    purpose="main",
+                    system="s",
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="m1",
+                )
+            )
+        ]
+    finally:
+        await provider.aclose()
+
+    assert provider.is_configured() is True
+    assert seen["authorization"] is None
+    assert events[-1].type == "done"
+
+
+def test_optional_auth_is_configured_without_key(monkeypatch):
+    monkeypatch.delenv("AICODE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPTIONAL_LOCAL_KEY", raising=False)
+    provider = OpenAICompatibleProvider(
+        OpenAICompatibleSettings(api_key_env="OPTIONAL_LOCAL_KEY", auth_mode="optional")
+    )
+
+    assert provider.is_configured() is True
+    assert provider.request_headers() == {"Content-Type": "application/json"}
+
+
+@pytest.mark.asyncio
 async def test_stream_parses_text_tool_calls_and_usage(monkeypatch):
     monkeypatch.setenv("FAKE_KEY", "sk-test")
     provider = make_provider(lambda request: httpx.Response(200, content=STREAM_BODY))

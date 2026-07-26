@@ -4,7 +4,7 @@ import pytest
 
 from app.config.settings import ContextSettings, ModelSettings, OpenAICompatibleSettings, PricingSettings, Settings
 from app.models.router import ModelRouter
-from app.models.provider import ProviderNotConfigured
+from app.models.provider import ProviderCapabilityError, ProviderNotConfigured
 from app.usage.pricing import ModelPrice
 from tests.fakes import FakeProvider, text_turn, tool_turn
 
@@ -95,6 +95,61 @@ def test_context_capabilities_load_from_environment(monkeypatch):
     assert settings.context.compact_threshold == 0.75
 
 
+def test_local_provider_profile_loads_from_environment(monkeypatch):
+    monkeypatch.setenv("AICODE_OPENAI_PROFILE", "ollama")
+    monkeypatch.setenv("AICODE_OPENAI_AUTH_MODE", "none")
+    monkeypatch.setenv("AICODE_OPENAI_CONTEXT_WINDOW", "16384")
+    monkeypatch.setenv("AICODE_OPENAI_MAX_OUTPUT_TOKENS", "2048")
+    monkeypatch.setenv("AICODE_OPENAI_TOOL_CALLING", "false")
+    monkeypatch.setenv("AICODE_OPENAI_STREAMING", "true")
+    monkeypatch.setenv("AICODE_OPENAI_CHARS_PER_TOKEN", "4")
+
+    profile = Settings.from_env().openai_compatible
+
+    assert profile.profile == "ollama"
+    assert profile.auth_mode == "none"
+    assert profile.context_window == 16_384
+    assert profile.max_output_tokens == 2_048
+    assert profile.tool_calling is False
+    assert profile.streaming is True
+    assert profile.tokenizer == "chars"
+    assert profile.chars_per_token == 4
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("AICODE_OPENAI_AUTH_MODE", "maybe"),
+        ("AICODE_OPENAI_PROFILE_SCHEMA_VERSION", "2"),
+        ("AICODE_OPENAI_TOOL_CALLING", "sometimes"),
+        ("AICODE_OPENAI_CONTEXT_WINDOW", "1"),
+    ],
+)
+def test_invalid_local_provider_profile_environment_fails_fast(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises((ValueError, TypeError)):
+        Settings.from_env()
+
+
+@pytest.mark.asyncio
+async def test_declared_missing_tool_capability_fails_before_provider_call():
+    settings = Settings(openai_compatible=OpenAICompatibleSettings(tool_calling=False))
+    fake = FakeProvider([text_turn("must not be called")])
+    fake.provider_name = "openai_compatible"
+    router = ModelRouter(primary=fake, settings=settings)
+
+    with pytest.raises(ProviderCapabilityError, match="native tools"):
+        await router.stream_complete(
+            purpose="main",
+            system="s",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"name": "read_file", "description": "d", "input_schema": {"type": "object"}}],
+        )
+
+    assert fake.calls == []
+
+
 @pytest.mark.asyncio
 async def test_stream_complete_estimates_cost_from_price_table():
     settings = Settings(
@@ -115,9 +170,13 @@ def test_route_status_reports_roles_without_leaking_api_key(monkeypatch):
     settings = Settings(
         models=ModelSettings(reviewer="review-model", summarizer="summary-model"),
         openai_compatible=OpenAICompatibleSettings(
+            profile="local-test",
             base_url="https://api.example.com/v1",
             api_key_env="AICODE_TEST_SECRET_KEY",
+            auth_mode="optional",
             timeout_seconds=12.5,
+            context_window=16_384,
+            max_output_tokens=2_048,
         ),
         pricing=PricingSettings(model_prices={"openai_compatible/review-model": ModelPrice(input_per_1m=1.25, output_per_1m=10)}),
     )
@@ -132,7 +191,11 @@ def test_route_status_reports_roles_without_leaking_api_key(monkeypatch):
     assert status["routes"]["summarizer"] == "summary-model"
     assert status["openai_compatible"]["base_url"] == "https://api.example.com/v1"
     assert status["openai_compatible"]["api_key_env"] == "AICODE_TEST_SECRET_KEY"
+    assert status["openai_compatible"]["auth_mode"] == "optional"
     assert status["openai_compatible"]["timeout_seconds"] == 12.5
+    assert status["profile"]["name"] == "local-test"
+    assert status["profile"]["context_window"] == 16_384
+    assert status["profile"]["max_output_tokens"] == 2_048
     assert status["pricing"]["currency"] == "USD"
     assert status["pricing"]["unit"] == "per_1m_tokens"
     assert status["pricing"]["models"][0]["model"] == "review-model"

@@ -213,6 +213,55 @@ func TestModelRoutesTable(t *testing.T) {
 	assertContains(t, table, "openai_compatible")
 }
 
+func TestModelProbeTable(t *testing.T) {
+	table := ModelProbeTable(map[string]any{
+		"status":     "ok",
+		"model":      "local-coder",
+		"latency_ms": float64(12),
+		"profile": map[string]any{
+			"name":              "ollama",
+			"schema_version":    float64(1),
+			"provider":          "openai_compatible",
+			"base_url":          "http://127.0.0.1:11434/v1",
+			"auth_mode":         "none",
+			"context_window":    float64(32768),
+			"max_output_tokens": float64(4096),
+			"tool_calling":      true,
+			"streaming":         true,
+			"tokenizer":         "chars",
+			"chars_per_token":   float64(3.5),
+		},
+		"checks": []any{
+			map[string]any{
+				"name":       "endpoint",
+				"status":     "pass",
+				"code":       "reachable",
+				"summary":    "发现 1 个模型",
+				"latency_ms": float64(4),
+			},
+			map[string]any{
+				"name":    "tools",
+				"status":  "pass",
+				"code":    "tools_ok",
+				"summary": "原生 tool calling 正常",
+			},
+		},
+		"discovered_models": []any{"local-coder"},
+	})
+
+	for _, expected := range []string{
+		"Provider Profile Probe",
+		"status: ok",
+		"name: ollama",
+		"auth_mode: none",
+		"PASS",
+		"tools_ok",
+		"local-coder",
+	} {
+		assertContains(t, table, expected)
+	}
+}
+
 func TestDaemonStatusTable(t *testing.T) {
 	table := DaemonStatusTable(map[string]any{
 		"status":  "ok",

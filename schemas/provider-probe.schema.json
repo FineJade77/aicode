@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/provider-probe.schema.json",
+  "x-aicode-contract-version": "1.0",
+  "title": "aicode Provider Probe Result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status",
+    "model",
+    "discovered_models",
+    "checks",
+    "latency_ms",
+    "profile"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["ok", "error"]},
+    "model": {"type": "string", "minLength": 1},
+    "discovered_models": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "code", "summary"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "status": {"enum": ["pass", "fail", "skip"]},
+          "code": {"type": "string", "minLength": 1},
+          "summary": {"type": "string", "minLength": 1},
+          "latency_ms": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    },
+    "latency_ms": {"type": "integer", "minimum": 0},
+    "profile": {"$ref": "provider-profile.schema.json"}
+  },
+  "additionalProperties": false
+}

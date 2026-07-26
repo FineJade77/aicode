@@ -31,11 +31,18 @@ func EnsureDaemon(cfg config.Config) error {
 }
 
 func FetchJSON(cfg config.Config, path string) (any, error) {
+	return FetchJSONWithTimeout(cfg, path, DefaultTimeout)
+}
+
+func FetchJSONWithTimeout(cfg config.Config, path string, timeout time.Duration) (any, error) {
 	if err := EnsureDaemon(cfg); err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	api := client.New(cfg.Runtime.URL, daemon.Token())

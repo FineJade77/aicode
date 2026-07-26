@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/provider-profile.schema.json",
+  "x-aicode-contract-version": "1.0",
+  "title": "aicode OpenAI-compatible Provider Profile",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "provider",
+    "base_url",
+    "auth_mode",
+    "api_key_env",
+    "model",
+    "context_window",
+    "max_output_tokens",
+    "tool_calling",
+    "streaming",
+    "tokenizer",
+    "chars_per_token"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"type": "string", "minLength": 1},
+    "provider": {"type": "string", "minLength": 1},
+    "base_url": {"type": "string", "pattern": "^https?://"},
+    "auth_mode": {"enum": ["required", "optional", "none"]},
+    "api_key_env": {"type": "string"},
+    "model": {"type": "string", "minLength": 1},
+    "context_window": {"type": "integer", "minimum": 2},
+    "max_output_tokens": {"type": "integer", "minimum": 1},
+    "tool_calling": {"type": "boolean"},
+    "streaming": {"type": "boolean"},
+    "tokenizer": {"const": "chars"},
+    "chars_per_token": {"type": "number", "minimum": 1, "maximum": 20}
+  },
+  "additionalProperties": false
+}

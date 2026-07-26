@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.usage.pricing import ModelPrice, parse_model_prices
 
@@ -15,9 +16,24 @@ class ModelSettings(BaseModel):
 
 
 class OpenAICompatibleSettings(BaseModel):
+    profile: str = Field(default="openai", min_length=1)
+    profile_schema_version: Literal[1] = 1
     base_url: str = "https://api.openai.com/v1"
     api_key_env: str = "OPENAI_API_KEY"
-    timeout_seconds: float = 60.0
+    auth_mode: Literal["required", "optional", "none"] = "required"
+    timeout_seconds: float = Field(default=60.0, gt=0)
+    context_window: int = Field(default=32_768, ge=2)
+    max_output_tokens: int = Field(default=8_192, ge=1)
+    tool_calling: bool = True
+    streaming: bool = True
+    tokenizer: Literal["chars"] = "chars"
+    chars_per_token: float = Field(default=3.5, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def validate_token_budget(self) -> "OpenAICompatibleSettings":
+        if self.max_output_tokens >= self.context_window:
+            raise ValueError("max_output_tokens must be smaller than context_window")
+        return self
 
 
 class ProviderSettings(BaseModel):
@@ -68,9 +84,18 @@ class Settings(BaseModel):
                 summarizer=os.getenv("AICODE_MODEL_SUMMARIZER", "gpt-5-mini"),
             ),
             openai_compatible=OpenAICompatibleSettings(
+                profile=os.getenv("AICODE_OPENAI_PROFILE", "openai"),
+                profile_schema_version=int(os.getenv("AICODE_OPENAI_PROFILE_SCHEMA_VERSION", "1")),  # type: ignore[arg-type]
                 base_url=os.getenv("AICODE_OPENAI_BASE_URL", "https://api.openai.com/v1"),
                 api_key_env=os.getenv("AICODE_OPENAI_API_KEY_ENV", "OPENAI_API_KEY"),
+                auth_mode=os.getenv("AICODE_OPENAI_AUTH_MODE", "required").strip().casefold(),  # type: ignore[arg-type]
                 timeout_seconds=float(os.getenv("AICODE_OPENAI_TIMEOUT_SECONDS", "60")),
+                context_window=int(os.getenv("AICODE_OPENAI_CONTEXT_WINDOW", "32768")),
+                max_output_tokens=int(os.getenv("AICODE_OPENAI_MAX_OUTPUT_TOKENS", "8192")),
+                tool_calling=os.getenv("AICODE_OPENAI_TOOL_CALLING", "true"),  # type: ignore[arg-type]
+                streaming=os.getenv("AICODE_OPENAI_STREAMING", "true"),  # type: ignore[arg-type]
+                tokenizer=os.getenv("AICODE_OPENAI_TOKENIZER", "chars").strip().casefold(),  # type: ignore[arg-type]
+                chars_per_token=float(os.getenv("AICODE_OPENAI_CHARS_PER_TOKEN", "3.5")),
             ),
             provider=ProviderSettings(type=os.getenv("AICODE_PROVIDER_TYPE", "openai_compatible")),
             anthropic=AnthropicSettings(

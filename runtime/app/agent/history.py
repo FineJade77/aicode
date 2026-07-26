@@ -103,7 +103,7 @@ async def prepare_history_for_model(
     history = load_history(session)
     capability = _capability(runtime, purpose, max_tokens)
     context_settings = getattr(getattr(runtime.model_router, "settings", None), "context", None)
-    chars_per_token = float(getattr(context_settings, "chars_per_token", 3.5))
+    chars_per_token = float(getattr(capability, "chars_per_token", getattr(context_settings, "chars_per_token", 3.5)))
     reserve_tokens = int(getattr(context_settings, "reserve_tokens", 1_024))
     threshold = float(getattr(context_settings, "compact_threshold", 0.8))
     requested_output = min(max_tokens, capability.max_output_tokens)

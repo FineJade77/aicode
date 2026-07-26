@@ -24,6 +24,7 @@ from app.server.main import (
     execute_sandbox,
     emit_run_queued,
     effective_session_language,
+    model_probe,
     model_routes,
     process_session_runs,
     review_rules,
@@ -262,6 +263,19 @@ async def test_model_routes_endpoint_returns_route_status() -> None:
     assert "reviewer" in data["routes"]
     assert "summarizer" in data["routes"]
     assert "api_key_env" in data["openai_compatible"]
+
+
+@pytest.mark.asyncio
+async def test_model_probe_endpoint_delegates_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ProbeRouter:
+        async def probe(self, *, model, tools):
+            return {"status": "ok", "model": model, "tools": tools}
+
+    monkeypatch.setattr(server, "model_router", ProbeRouter())
+
+    data = await model_probe(tools=False, model="local-coder")
+
+    assert data == {"status": "ok", "model": "local-coder", "tools": False}
 
 
 @pytest.mark.asyncio

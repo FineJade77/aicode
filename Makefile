@@ -1,4 +1,4 @@
-.PHONY: build install test-install-e2e deps deps-go deps-python test test-go test-python eval-smoke compile-python tidy-go lock-python
+.PHONY: build install test-install-e2e test-local-provider-smoke deps deps-go deps-python test test-go test-python eval-smoke compile-python tidy-go lock-python
 
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
@@ -54,6 +54,10 @@ test-go:
 
 test-python:
 	python3 -m pytest -q
+
+test-local-provider-smoke:
+	PYTHONPATH="$(CURDIR)/runtime" python3 -m pytest -q \
+		runtime/tests/test_local_provider_profile.py::test_no_auth_localhost_profile_probe_and_full_edit_flow
 
 eval-smoke:
 	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \

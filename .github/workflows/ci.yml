@@ -52,6 +52,9 @@ jobs:
       - name: pytest
         run: make test-python
 
+      - name: No-auth localhost provider smoke
+        run: make test-local-provider-smoke
+
       - name: Deterministic agent eval smoke
         run: make eval-smoke
 

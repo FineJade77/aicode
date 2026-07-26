@@ -386,11 +386,47 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 	var baseURL string
 	var apiKeyEnv string
 	var directEnv string
+	authMode := "required"
 	switch providerType {
 	case "openai_compatible":
 		baseURL = cfg.OpenAICompatible.BaseURL
 		apiKeyEnv = cfg.OpenAICompatible.APIKeyEnv
 		directEnv = "AICODE_OPENAI_API_KEY"
+		authMode = strings.TrimSpace(cfg.OpenAICompatible.AuthMode)
+		details["profile"] = cfg.OpenAICompatible.Profile
+		details["profile_schema_version"] = cfg.OpenAICompatible.ProfileSchemaVersion
+		details["auth_mode"] = authMode
+		details["context_window"] = cfg.OpenAICompatible.ContextWindow
+		details["max_output_tokens"] = cfg.OpenAICompatible.MaxOutputTokens
+		details["tool_calling"] = cfg.OpenAICompatible.ToolCalling
+		details["streaming"] = cfg.OpenAICompatible.Streaming
+		details["tokenizer"] = cfg.OpenAICompatible.Tokenizer
+		if authMode != "required" && authMode != "optional" && authMode != "none" {
+			return Check{
+				Name:        "provider",
+				Status:      StatusError,
+				Summary:     "provider auth_mode 不受支持",
+				Details:     details,
+				Remediation: "将 provider.openai_compatible.auth_mode 设置为 required、optional 或 none。",
+			}
+		}
+		if cfg.OpenAICompatible.ProfileSchemaVersion != 1 ||
+			strings.TrimSpace(cfg.OpenAICompatible.Profile) == "" ||
+			cfg.OpenAICompatible.ContextWindow <= 0 ||
+			cfg.OpenAICompatible.MaxOutputTokens <= 0 ||
+			cfg.OpenAICompatible.MaxOutputTokens >= cfg.OpenAICompatible.ContextWindow ||
+			cfg.OpenAICompatible.Tokenizer != "chars" ||
+			cfg.OpenAICompatible.CharsPerToken < 1 ||
+			cfg.OpenAICompatible.CharsPerToken > 20 ||
+			cfg.OpenAICompatible.TimeoutSeconds <= 0 {
+			return Check{
+				Name:        "provider",
+				Status:      StatusError,
+				Summary:     "Provider Profile capability 配置无效",
+				Details:     details,
+				Remediation: "使用 schema version 1、正数 context/max output（max output 小于 context）和 chars tokenizer。",
+			}
+		}
 	case "anthropic":
 		baseURL = cfg.Anthropic.BaseURL
 		apiKeyEnv = cfg.Anthropic.APIKeyEnv
@@ -418,7 +454,7 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 			Remediation: "通过 `aicode config set` 配置有效的 http/https provider base URL。",
 		}
 	}
-	if apiKeyEnv == "" {
+	if authMode == "required" && apiKeyEnv == "" {
 		return Check{
 			Name:        "provider",
 			Status:      StatusError,
@@ -434,13 +470,30 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 	} else if nonEmptyEnv(deps.lookupEnv, apiKeyEnv) {
 		keySource = apiKeyEnv
 	}
-	details["configured"] = keySource != ""
+	configured := authMode != "required" || keySource != ""
+	details["configured"] = configured
+	if authMode == "none" {
+		return Check{
+			Name:    "provider",
+			Status:  StatusOK,
+			Summary: "no-auth 本地 Provider Profile 已就绪",
+			Details: details,
+		}
+	}
 	if keySource != "" {
 		details["api_key_source"] = keySource
 		return Check{
 			Name:    "provider",
 			Status:  StatusOK,
 			Summary: "provider 配置和 API key 已就绪",
+			Details: details,
+		}
+	}
+	if authMode == "optional" {
+		return Check{
+			Name:    "provider",
+			Status:  StatusOK,
+			Summary: "optional-auth Provider Profile 已就绪（当前未发送 API key）",
 			Details: details,
 		}
 	}
