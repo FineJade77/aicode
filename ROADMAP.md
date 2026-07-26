@@ -46,6 +46,7 @@
 | 依赖管理 | `[x]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，`requirements(-dev).lock.txt` 提供可复现安装。 |
 | 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home install/start/stop E2E 已接入 CI。 |
 | 安装诊断 | `[x]` | `aicode doctor [--json]` 检查安装、版本、Python/依赖、端口、provider 和 Docker。 |
+| 统一执行后端 | `[x]` | Runtime Host/Docker backend 统一 execution contract、终态、取消、资源策略和 audit。 |
 | 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
 | CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
 
@@ -161,6 +162,8 @@
 - [x] 允许少量 cache env。
 - [x] CPU、内存、PID 限制。
 - [x] sandbox audit event。
+- [x] CLI sandbox 下沉 Runtime，与 Agent Host 命令共享 ExecutionService。
+- [x] execution timeout/cancel 终止完整进程组，正常 daemon stop 先清理活跃 execution。
 - [~] 还没有可选写入挂载。
 - [~] 还没有 artifact 导出。
 
@@ -228,7 +231,7 @@
   - artifact 路径必须在受控目录内。
   - 审计日志记录 artifact 元信息。
 
-- [ ] 增加 sandbox e2e 测试。
+- [x] 增加 ExecutionBackend/sandbox 集成测试（Docker daemon 与本地镜像可用时运行真实容器，否则明确 skip）。
   - test/build/lint 命令选择。
   - 禁网参数。
   - `.env*` mask。

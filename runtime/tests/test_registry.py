@@ -107,7 +107,7 @@ async def test_search_no_match(tmp_path):
 async def test_search_reports_rg_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr("app.tools.registry.shutil.which", lambda name: "/fake/rg")
 
-    async def fake_run_command(command, *, cwd, timeout):
+    async def fake_run_command(command, *, cwd, timeout, **_kwargs):
         return CommandResult(command=list(command), returncode=-9, stderr="命令超时: 30s", timed_out=True)
 
     monkeypatch.setattr("app.tools.registry.run_command", fake_run_command)

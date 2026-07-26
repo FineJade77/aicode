@@ -16,3 +16,4 @@ class AgentRuntime:
     model_router: Any
     audit: Any
     policy: Any = None
+    execution: Any = None

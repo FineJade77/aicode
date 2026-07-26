@@ -45,27 +45,23 @@ Python Runtime
 Workspace / SQLite / Model Providers
 ```
 
-Docker Sandbox 不经过 Runtime：
+Host 命令与 Docker Sandbox 统一经过 Runtime ExecutionService：
 
 ```text
-Go CLI --sandbox docker <command>
+Agent bash/search/review ----\
+                              -> ExecutionService -> HostExecutionBackend
+Go CLI --sandbox docker -----/                   \-> DockerExecutionBackend
   |
-  v
-Docker container
-  |-- workspace read-only mount
-  |-- network disabled by default
-  |-- .env not passed through
-  |-- limited allowlist of cache env
-  |-- resource limits
-  v
-local audit event
+  +-- stable execution_id and terminal state
+  +-- timeout/cancel kills the whole process group
+  +-- command hash, backend, exit/duration audit
 ```
 
 ## 3. Main Components
 
 ### 3.1 Go CLI
 
-CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置读写、SSE 输出和 Docker Sandbox。
+CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置读写、SSE 输出，以及将 Docker Sandbox 请求转发给 Runtime。
 
 主要命令：
 
@@ -85,6 +81,20 @@ CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置
 - `--sandbox docker test|build|lint`: 在 Docker 隔离环境运行项目命令。
 
 CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
+
+`--sandbox docker` 不再在 Go 进程内自行启动容器。CLI 只提交版本化 execution request，并在中断时调用统一 cancel API；命令探测、资源限制、进程终态和 audit 均由 Runtime 负责。
+
+### 3.1.1 Execution Backends
+
+`runtime/app/execution/` 定义 `ExecutionRequest`、`ExecutionResult` 和 `ExecutionBackend` Protocol。Host 与 Docker 共享：
+
+- `execution_id`、`succeeded/failed/timed_out/cancelled` 终态；
+- workspace、allowed roots、mode/session/run/tool-call 元数据；
+- timeout、CPU/内存/PID、network、writable/masked path 等策略字段；
+- 进程组级 timeout/cancel；
+- 不记录原始命令的 execution audit。
+
+Agent `bash`、`rg` 搜索、review git 命令和编辑后的模型验证都走 Host backend。`test/build/lint` sandbox 由 Docker backend 执行，保持 workspace 只读、默认禁网、`.env*` 遮蔽和资源限制。正常 `daemon stop` 会先请求 Runtime 取消全部活跃 execution，再终止 daemon。
 
 ### 3.2 Installed Runtime
 
@@ -354,7 +364,7 @@ Runtime 持久化以下内容：
 - bash 风险分类。
 - approval requested / approved / rejected / expired。
 - edit proposal / applied。
-- sandbox run。
+- `execution.started` / `execution.finished`（覆盖 Host 与 Docker）。
 
 敏感字段会尽量脱敏，例如 API key、token、authorization header 和常见 secret 环境变量。写入 patch 时，审计记录使用 `patch_hash` 等摘要信息辅助追踪，避免不必要地扩散完整敏感内容。
 
@@ -372,7 +382,7 @@ Usage 记录按模型、session 和时间聚合 token 与成本估算。成本�
 
 ## 17. Docker Sandbox
 
-Docker Sandbox 是 CLI 侧能力，当前支持：
+Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留客户端入口。当前支持：
 
 - `aicode --sandbox docker test`
 - `aicode --sandbox docker build`
@@ -385,7 +395,7 @@ Docker Sandbox 是 CLI 侧能力，当前支持：
 - 不传 `.env`。
 - 只允许少量缓存相关环境变量。
 - 设置 CPU、内存、进程数等资源限制。
-- 记录 sandbox audit 事件。
+- 使用与 Agent Host 命令一致的 execution 终态、取消和 audit 格式。
 
 它适合在隔离环境中验证命令是否能通过，但不是完整的远程执行平台。当前还没有实现可配置写入挂载、完整 artifact 回收或复杂服务编排。
 

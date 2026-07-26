@@ -57,6 +57,17 @@ func TestTokenPath(t *testing.T) {
 	}
 }
 
+func TestLoopbackRuntimeURL(t *testing.T) {
+	for _, value := range []string{"http://127.0.0.1:8765", "http://localhost:8765", "http://[::1]:8765"} {
+		if !loopbackRuntimeURL(value) {
+			t.Fatalf("expected loopback URL: %s", value)
+		}
+	}
+	if loopbackRuntimeURL("https://runtime.example.com") {
+		t.Fatal("remote Runtime URL must not be treated as loopback")
+	}
+}
+
 func TestRuntimeInstallationFromManifest(t *testing.T) {
 	installRoot := t.TempDir()
 	versionRoot := filepath.Join(installRoot, "0.1.0")

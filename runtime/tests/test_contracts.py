@@ -6,7 +6,8 @@ import pytest
 from app.config.settings import Settings
 from app.events.sse import encode_sse
 from app.events.types import EVENT_TYPES
-from app.server.main import CancelRunResponse, CreateSessionResponse, SendMessageResponse
+from app.execution.models import ExecutionStatus
+from app.server.main import CancelExecutionResponse, CancelRunResponse, CreateSessionResponse, ExecutionResponse, SendMessageResponse
 from app.sessions.store import SessionEvents
 from app.tools.registry import TOOL_SCHEMAS
 
@@ -54,6 +55,14 @@ def test_install_manifest_schema_and_runtime_version_share_source_version() -> N
     assert source_version == Settings().version
 
 
+def test_execution_schema_matches_runtime_terminal_states() -> None:
+    schema = load_schema("execution.schema.json")
+
+    assert schema["x-aicode-contract-version"] == "1.0"
+    assert set(schema["$defs"]["status"]["enum"]) == {status.value for status in ExecutionStatus}
+    assert schema["$defs"]["request"]["oneOf"]
+
+
 def test_http_response_fixture_matches_runtime_models() -> None:
     fixture = load_fixture("http-responses.v2.json")
     responses = fixture["responses"]
@@ -67,6 +76,10 @@ def test_http_response_fixture_matches_runtime_models() -> None:
     assert cancelled.run_id == "run_fixture"
     assert idle.status == "idle"
     assert idle.run_id is None
+    execution = ExecutionResponse.model_validate(responses["execute_sandbox"])
+    assert execution.execution_id == "exec_fixture"
+    assert execution.status == "succeeded"
+    assert CancelExecutionResponse.model_validate(responses["cancel_execution"]).status == "cancelled"
 
 
 def test_sse_fixture_covers_v2_events_and_round_trips() -> None:

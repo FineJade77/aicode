@@ -142,7 +142,15 @@ def tool_schemas_for_mode(mode: str) -> list[dict[str, Any]]:
     return list(TOOL_SCHEMAS)
 
 
-def build_tool_context(workspace: str, mode: str, language: str) -> ToolContext:
+def build_tool_context(
+    workspace: str,
+    mode: str,
+    language: str,
+    *,
+    execution: Any = None,
+    session_id: str = "",
+    run_id: str = "",
+) -> ToolContext:
     project_config = load_project_config(Path(workspace))
     return ToolContext(
         workspace=Path(workspace),
@@ -153,6 +161,9 @@ def build_tool_context(workspace: str, mode: str, language: str) -> ToolContext:
         review_disabled_rules=project_config.review.disabled_rules,
         review_large_diff_threshold=project_config.review.large_diff_threshold,
         review_max_findings=project_config.review.max_findings,
+        execution=execution,
+        session_id=session_id,
+        run_id=run_id,
     )
 
 
@@ -295,7 +306,19 @@ async def _search_with_rg(
         command.extend(["--glob", glob_pattern])
     command.extend(["-e", query])
 
-    proc = await run_command(command, cwd=root, timeout=DEFAULT_SEARCH_TIMEOUT)
+    proc = await run_command(
+        command,
+        cwd=root,
+        timeout=DEFAULT_SEARCH_TIMEOUT,
+        execution=context.execution,
+        metadata={
+            "action": "tool.search",
+            "mode": context.mode,
+            "session_id": context.session_id,
+            "run_id": context.run_id,
+            "tool_call_id": context.tool_call_id,
+        },
+    )
     returncode = proc.returncode if proc.returncode is not None else -1
 
     prefix = f"{workspace_name}: " if workspace_name else ""
@@ -376,18 +399,38 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
     if not command:
         raise ToolError("command 不能为空")
     timeout = max(1, min(int(arguments.get("timeout") or DEFAULT_BASH_TIMEOUT), MAX_BASH_TIMEOUT))
-    result = await run_shell_command(command, cwd=context.workspace, timeout=timeout, stderr_to_stdout=True)
+    result = await run_shell_command(
+        command,
+        cwd=context.workspace,
+        timeout=timeout,
+        stderr_to_stdout=True,
+        execution=context.execution,
+        metadata={
+            "action": "agent.bash",
+            "mode": context.mode,
+            "session_id": context.session_id,
+            "run_id": context.run_id,
+            "tool_call_id": context.tool_call_id,
+        },
+    )
+    data = {
+        "execution_id": result.execution_id,
+        "backend": result.backend,
+        "status": result.status,
+        "exit_code": result.returncode,
+        "timed_out": result.timed_out,
+    }
     if result.timed_out:
         return ToolResult(
             success=False,
-            error=f"命令超时（{timeout}s）: {command}",
+            error=f"命令超时（{timeout}s）",
             risk_level="medium",
-            data={"command": command, "exit_code": result.returncode, "timed_out": True},
+            data=data,
         )
     text = f"exit={result.returncode}\n{result.stdout}".rstrip()
     return ToolResult(
         success=result.returncode == 0,
         text=text,
         error="" if result.returncode == 0 else text,
-        data={"command": command, "exit_code": result.returncode},
+        data=data,
     )

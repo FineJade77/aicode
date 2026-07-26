@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from app.project.config import load_project_config, parse_project_config
-from app.project.detect import detect_test_command
+from app.project.detect import detect_project_command, detect_test_command
 
 
 def test_parse_project_config() -> None:
@@ -53,6 +53,21 @@ def test_detect_test_command_uses_project_config_override(tmp_path: Path) -> Non
     (tmp_path / "go.work").write_text("go 1.22\n\nuse ./cli\n", encoding="utf-8")
 
     assert detect_test_command(tmp_path) == "python3 -m pytest tests/unit"
+
+
+def test_detect_project_commands_for_go_workspace(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.test/demo\n", encoding="utf-8")
+
+    assert detect_project_command(tmp_path, "test") == "go test ./..."
+    assert detect_project_command(tmp_path, "build") == "go build ./..."
+    assert detect_project_command(tmp_path, "lint") == "go vet ./..."
+
+
+def test_detect_project_lint_uses_package_manager(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text('{"scripts":{"lint":"eslint ."}}', encoding="utf-8")
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+
+    assert detect_project_command(tmp_path, "lint") == "pnpm lint"
 
 
 def write_project_config(tmp_path: Path, data: dict) -> None:

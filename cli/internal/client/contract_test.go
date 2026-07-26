@@ -37,6 +37,10 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		key := ""
 		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/executions":
+			key = "execute_sandbox"
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/executions/"):
+			key = "cancel_execution"
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/sessions":
 			key = "create_session"
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages"):
@@ -90,6 +94,23 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	}
 	if idle.Status != "idle" || idle.RunID != nil || idle.Queued != 0 {
 		t.Fatalf("idle response = %#v", idle)
+	}
+
+	execution, err := api.Execute(ctx, ExecutionRequest{
+		ExecutionID: "exec_fixture", Backend: "docker", Action: "test", Workspace: "/workspace", TimeoutSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Status != "succeeded" || execution.ExecutionID != "exec_fixture" {
+		t.Fatalf("execution response = %#v", execution)
+	}
+	cancelledExecution, err := api.CancelExecution(ctx, "exec_fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelledExecution.Status != "cancelled" || cancelledExecution.ExecutionID != "exec_fixture" {
+		t.Fatalf("cancel execution response = %#v", cancelledExecution)
 	}
 }
 

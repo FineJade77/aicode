@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
 from app.config.settings import Settings
+from app.execution.models import ExecutionResult, ExecutionStatus
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.detect import detect_test_command
@@ -15,14 +16,17 @@ from app.server.main import (
     CreateSessionRequest,
     MessageRequest,
     bind_message_request_to_session,
+    cancel_execution,
     cancel_run,
     create_session,
     daemon_status,
+    execute_sandbox,
     emit_run_queued,
     effective_session_language,
     model_routes,
     process_session_runs,
     review_rules,
+    SandboxExecutionRequest,
 )
 from app.sessions.store import Session
 from app.sessions.store import SessionStore
@@ -268,3 +272,62 @@ async def test_daemon_status_includes_event_writer_status(monkeypatch: pytest.Mo
     assert data["audit_writer"]["failed"] == 0
     assert data["event_writer"]["queue_size"] == 0
     assert data["event_writer"]["dropped"] == 0
+    assert "active" in data["executions"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_execution_endpoint_uses_runtime_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.test/demo\n", encoding="utf-8")
+    fake = FakeExecutionService()
+    monkeypatch.setattr(server, "execution_service", fake)
+
+    result = await execute_sandbox(
+        SandboxExecutionRequest(
+            execution_id="exec_api",
+            backend="docker",
+            action="test",
+            workspace=str(tmp_path),
+            timeout_seconds=60,
+        )
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["action"] == "test"
+    assert fake.request is not None
+    assert fake.request.shell_command == "go test ./..."
+    assert fake.request.network == "none"
+    assert fake.request.backend == "docker"
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_endpoint_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeExecutionService()
+    monkeypatch.setattr(server, "execution_service", fake)
+
+    response = await cancel_execution("exec_api")
+
+    assert response == {"status": "cancelled", "execution_id": "exec_api"}
+
+
+class FakeExecutionService:
+    def __init__(self) -> None:
+        self.request = None
+
+    async def execute(self, request):
+        self.request = request
+        return ExecutionResult(
+            execution_id=request.execution_id,
+            backend=request.backend,
+            status=ExecutionStatus.SUCCEEDED,
+            exit_code=0,
+            stdout="ok\n",
+        )
+
+    async def cancel(self, _execution_id):
+        return True
+
+    async def cancel_all(self):
+        return None
+
+    def status(self):
+        return {"active": 0}

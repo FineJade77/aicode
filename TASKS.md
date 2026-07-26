@@ -112,7 +112,7 @@
 
 ## M1：可信执行与长会话
 
-### `[ ]` T-005 ExecutionBackend
+### `[x]` T-005 ExecutionBackend
 
 对应：WP0.2
 
@@ -123,6 +123,17 @@
 - 定义 Host/Sandbox 共用执行接口。
 - 迁移 Agent bash、test/build/lint 和编辑后验证。
 - 统一取消、终态、资源限制和 audit。
+
+完成记录：
+
+- 新增版本化 `ExecutionRequest` / `ExecutionResult` contract、`ExecutionBackend` Protocol 和 Runtime `ExecutionService`，固定 `succeeded` / `failed` / `timed_out` / `cancelled` 终态。
+- `HostExecutionBackend` 成为唯一宿主机子进程创建点；argv/shell、timeout、显式 cancel 和任务取消均按 execution id 管理，并终止完整进程组。
+- `DockerExecutionBackend` 复用 Host lifecycle，统一只读 workspace、默认禁网、`.env*` mask、最小 Docker CLI 环境和 CPU/内存/PID 限制。
+- Agent bash、rg search、review git 命令和编辑后的模型验证均接入 ExecutionService；bash execution audit 仅保留 executable/command hash 和终态，不记录原始命令。
+- `aicode --sandbox docker test|build|lint` 已从本地 Go 执行器收敛为 Runtime HTTP 客户端；Runtime 负责命令探测、执行、cancel 和 audit，API 不开放任意 shell action。
+- 正常 `aicode daemon stop` 先调用 prepare-stop 取消全部活跃 execution，再终止 Runtime，避免正常重启遗留子进程。
+- 新增 Host success/timeout/cancel/process-group、Docker 隔离参数、HTTP contract、project command detection、safe audit 和可用时真实 Docker backend 集成测试。
+- 验证：Go 全量测试、go vet、Python 222 项通过（本机 Docker daemon/镜像不可用时跳过 1 项集成测试）、clean-home install/doctor/start/status/stop E2E 通过。
 
 ### `[ ]` T-006 Project Trust 与 shell 路径安全
 

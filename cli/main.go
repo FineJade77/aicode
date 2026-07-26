@@ -37,7 +37,7 @@ func run(args []string) error {
 		return err
 	}
 	if options.Sandbox != "" {
-		return sandboxcmd.Run(options.Sandbox, commandArgs)
+		return sandboxcmd.Run(cfg, options.Sandbox, commandArgs)
 	}
 	args = commandArgs
 

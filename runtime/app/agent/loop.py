@@ -46,7 +46,14 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
     history.append(current_user_message)
     persist_message(session, current_user_message)
     tools = tool_schemas_for_mode(request.mode)
-    context = build_tool_context(request.workspace, request.mode, request.language)
+    context = build_tool_context(
+        request.workspace,
+        request.mode,
+        request.language,
+        execution=runtime.execution,
+        session_id=session.session_id,
+        run_id=session.current_run_id or "",
+    )
     purpose = "reviewer" if request.mode == "review" else "main"
     budget = TurnBudget()
     applied_edits = 0
@@ -153,7 +160,7 @@ async def execute_gated(
                 "tool": call.name,
                 "tool_call_id": call.id,
                 "validation_error": validation_error,
-                "args": call.arguments,
+                "args": tool_audit_arguments(call.name, call.arguments),
             },
         )
         await session.events.put(
@@ -169,6 +176,7 @@ async def execute_gated(
         return f"[工具参数校验失败] {message}", 0
 
     gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
+    audit_args = tool_audit_arguments(call.name, call.arguments)
     runtime.audit.record(
         "tool.started",
         session_id=session.session_id,
@@ -176,7 +184,7 @@ async def execute_gated(
         data={
             "tool": call.name,
             "tool_call_id": call.id,
-            "args": call.arguments,
+            "args": audit_args,
             "verdict": gate.verdict,
             "risk_level": gate.risk_level,
         },
@@ -227,6 +235,7 @@ async def execute_gated(
             return f"[{reason}]", 0
 
     session.mark_agent_progress(f"tool.{call.name}")
+    context.tool_call_id = call.id
     result = await run_tool(call.name, call.arguments, context)
     if result.success:
         output = truncate_tool_output(call.name, result.text)
@@ -367,6 +376,16 @@ def tool_finish_audit_data(tool: str, result: ToolResult, *, tool_call_id: str =
         data["tool_call_id"] = tool_call_id
     data.update(tool_observability_fields(result.data))
     return data
+
+
+def tool_audit_arguments(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool != "bash":
+        return arguments
+    command = str(arguments.get("command") or "")
+    return {
+        "command_hash": stable_hash(command),
+        "timeout": arguments.get("timeout"),
+    }
 
 
 def elapsed_ms(started: float) -> int:

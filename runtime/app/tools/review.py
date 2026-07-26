@@ -206,12 +206,29 @@ class ReviewDiffTool:
 
     async def run(self, args: dict, context: ToolContext) -> ToolResult:
         path_filter = str(args["path"]) if args.get("path") else None
-        proc = await run_review_diff(context.workspace, path_filter)
+        metadata = {
+            "mode": context.mode,
+            "session_id": context.session_id,
+            "run_id": context.run_id,
+            "tool_call_id": context.tool_call_id,
+        }
+        proc = await run_review_diff(context.workspace, path_filter, execution=context.execution, metadata=metadata)
         if proc.returncode != 0:
             return ToolResult(success=False, error=proc.stderr.strip() or proc.stdout.strip() or "git diff 失败")
 
         files = parse_unified_diff(proc.stdout)
-        files.extend(load_untracked_files(context.workspace, await list_untracked_paths(context.workspace, path_filter), context.protected_paths))
+        files.extend(
+            load_untracked_files(
+                context.workspace,
+                await list_untracked_paths(
+                    context.workspace,
+                    path_filter,
+                    execution=context.execution,
+                    metadata=metadata,
+                ),
+                context.protected_paths,
+            )
+        )
         report = review_files(
             files,
             protected_paths=context.protected_paths,
@@ -259,21 +276,52 @@ def review_files(
     return ReviewReport(findings=findings, files=files, added_lines=added_lines, removed_lines=removed_lines)
 
 
-async def run_review_diff(workspace: Path, path_filter: str | None) -> CommandResult:
+async def run_review_diff(
+    workspace: Path,
+    path_filter: str | None,
+    *,
+    execution=None,
+    metadata: dict | None = None,
+) -> CommandResult:
     extra = ["--", path_filter] if path_filter else []
-    proc = await run_command(["git", "diff", "HEAD", *extra], cwd=workspace, timeout=20)
+    command_metadata = {**(metadata or {}), "action": "review.diff"}
+    proc = await run_command(
+        ["git", "diff", "HEAD", *extra],
+        cwd=workspace,
+        timeout=20,
+        execution=execution,
+        metadata=command_metadata,
+    )
     if proc.returncode == 0:
         return proc
 
     if "HEAD" not in proc.stderr:
         return proc
 
-    return await run_command(["git", "diff", *extra], cwd=workspace, timeout=20)
+    return await run_command(
+        ["git", "diff", *extra],
+        cwd=workspace,
+        timeout=20,
+        execution=execution,
+        metadata=command_metadata,
+    )
 
 
-async def list_untracked_paths(workspace: Path, path_filter: str | None) -> list[str]:
+async def list_untracked_paths(
+    workspace: Path,
+    path_filter: str | None,
+    *,
+    execution=None,
+    metadata: dict | None = None,
+) -> list[str]:
     extra = ["--", path_filter] if path_filter else []
-    proc = await run_command(["git", "ls-files", "--others", "--exclude-standard", "-z", *extra], cwd=workspace, timeout=20)
+    proc = await run_command(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", *extra],
+        cwd=workspace,
+        timeout=20,
+        execution=execution,
+        metadata={**(metadata or {}), "action": "review.untracked"},
+    )
     if proc.returncode != 0 or not proc.stdout:
         return []
     return [path for path in proc.stdout.split("\0") if path]

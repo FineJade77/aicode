@@ -21,6 +21,7 @@ docs/       设计与开发计划
 - [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md)：从当前 MVP 到本地日用 Agent 的 P0/P1/P2 工作包、依赖和验收标准
 - [TASKS.md](TASKS.md)：按依赖执行的任务台账、当前状态和完成记录
 - [schemas/config.schema.json](schemas/config.schema.json)：项目级 `.aicode/config.json` schema
+- [schemas/execution.schema.json](schemas/execution.schema.json)：Host/Docker 共用 execution request/result contract
 
 ## 已具备能力
 
@@ -231,7 +232,7 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 
 如果 daemon 重启或 session 恢复时发现未决 approval，Runtime 会把这些 approval 标记为 expired/rejected，并发出对应事件，避免恢复后一直悬挂等待。
 
-审计日志会记录 session、tool call、approval、edit、usage、final、error、sandbox 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；sandbox 审计记录 command hash 而不是原始命令。
+审计日志会记录 session、tool call、approval、edit、usage、final、error、execution 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；Host/Docker execution 都记录 command hash 而不是原始命令。
 
 ### 排队或疑似卡死时排查
 
@@ -479,7 +480,7 @@ aicode review-rules
 
 ## Docker sandbox
 
-Docker sandbox 是 CLI 本地能力，不需要 Runtime。支持：
+Docker sandbox 通过本地 Runtime 的统一 ExecutionBackend 执行；CLI 只负责提交、展示结果和中断时取消。支持：
 
 ```bash
 aicode --sandbox docker test
@@ -495,7 +496,8 @@ aicode --sandbox docker lint
 - 用空文件遮蔽仓库根目录 `.env*`
 - 设置隔离 cache 目录：`HOME`、`GOCACHE`、`GOMODCACHE`、npm/yarn/pip cache
 - 资源限制：`--cpus 2`、`--memory 2g`、`--pids-limit 256`
-- 写入本地 audit JSONL，记录 sandbox 配置、env mask 数量、退出码、耗时和 command hash
+- 与 Agent bash 共用 `execution_id`、超时/取消、终态和 audit
+- 写入本地 audit JSONL，记录 backend、资源策略、退出码、耗时和 command hash
 
 可覆盖：
 
@@ -510,6 +512,8 @@ export AICODE_SANDBOX_PIDS_LIMIT="128"
 
 1. `.aicode/config.json` 的 `commands.test/build/lint`，值不是 `auto` 时直接使用。
 2. package.json scripts、Go module/workspace、Python pytest/ruff 配置等自动探测。
+
+Runtime API 只接受 `test/build/lint` 三种 sandbox action，不开放任意远程 shell endpoint。执行中按 `Ctrl-C` 时，CLI 会调用 execution cancel；正常 `aicode daemon stop` 也会先清理活跃进程组。
 
 ## 用量统计
 

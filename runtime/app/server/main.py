@@ -9,16 +9,18 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.agent.loop import run_turn_safely
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import settings
 from app.events.sse import encode_sse
+from app.execution import ExecutionRequest, ExecutionService, ResourceLimits
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.config import load_project_config
+from app.project.detect import detect_project_command
 from app.server.auth import auth_middleware
 from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
@@ -26,12 +28,14 @@ from app.usage.store import summarize_usage
 
 model_router = ModelRouter.from_settings(settings)
 audit = AuditLogger.from_env()
-agent_runtime = AgentRuntime(model_router=model_router, audit=audit, policy=PolicyEngine())
+execution_service = ExecutionService(audit=audit)
+agent_runtime = AgentRuntime(model_router=model_router, audit=audit, policy=PolicyEngine(), execution=execution_service)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     yield
+    await execution_service.cancel_all()
     # 关闭时释放模型 provider 的 HTTP 连接池，避免长驻 daemon 连接泄漏
     await model_router.aclose()
     # 排空审计日志队列，避免 usage/final 等刚记录的事件在进程退出时丢失
@@ -76,6 +80,32 @@ class ApprovalRequest(BaseModel):
     accept_all: bool = False
 
 
+class SandboxExecutionRequest(BaseModel):
+    execution_id: str
+    backend: Literal["docker"] = "docker"
+    action: Literal["test", "build", "lint"]
+    workspace: str
+    timeout_seconds: float = Field(default=1800.0, gt=0, le=3600)
+
+
+class CancelExecutionResponse(BaseModel):
+    status: Literal["cancelled", "idle"]
+    execution_id: str
+
+
+class ExecutionResponse(BaseModel):
+    execution_id: str
+    backend: str
+    action: str
+    status: Literal["succeeded", "failed", "timed_out", "cancelled"]
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+    timed_out: bool
+    cancelled: bool
+
+
 @app.get("/v1/daemon/status")
 async def daemon_status() -> dict[str, Any]:
     return {
@@ -85,7 +115,58 @@ async def daemon_status() -> dict[str, Any]:
         "pid": os.getpid(),
         "audit_writer": audit.status(),
         "event_writer": store.event_writer_status(),
+        "executions": execution_service.status(),
     }
+
+
+@app.post("/v1/executions", response_model=ExecutionResponse)
+async def execute_sandbox(request: SandboxExecutionRequest) -> dict[str, Any]:
+    workspace = Path(request.workspace).expanduser().resolve()
+    if not workspace.is_dir():
+        raise HTTPException(status_code=400, detail="workspace 不存在或不是目录")
+    command = detect_project_command(workspace, request.action)
+    if not command:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未能自动探测 {request.action} 命令，请在 .aicode/config.json 的 commands.{request.action} 中配置",
+        )
+    try:
+        limits = ResourceLimits(
+            timeout_seconds=request.timeout_seconds,
+            cpus=os.getenv("AICODE_SANDBOX_CPUS", "2"),
+            memory=os.getenv("AICODE_SANDBOX_MEMORY", "2g"),
+            pids_limit=int(os.getenv("AICODE_SANDBOX_PIDS_LIMIT", "256")),
+        )
+        execution_request = ExecutionRequest(
+            execution_id=request.execution_id,
+            backend=request.backend,
+            action=request.action,
+            workspace=workspace,
+            shell_command=command,
+            allowed_roots=(workspace,),
+            masked_paths=(".env*",),
+            network="none",
+            limits=limits,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        result = await execution_service.execute(execution_request)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return execution_service_result(result, request.action)
+
+
+@app.post("/v1/executions/{execution_id}/cancel", response_model=CancelExecutionResponse)
+async def cancel_execution(execution_id: str) -> dict[str, str]:
+    cancelled = await execution_service.cancel(execution_id)
+    return {"status": "cancelled" if cancelled else "idle", "execution_id": execution_id}
+
+
+@app.post("/v1/daemon/prepare-stop")
+async def prepare_daemon_stop() -> dict[str, Any]:
+    await execution_service.cancel_all()
+    return {"status": "ready", "executions": execution_service.status()}
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
@@ -400,3 +481,9 @@ async def emit_run_started(session: Session, queued: QueuedAgentRun) -> None:
 
 def datetime_utc_today():
     return datetime.now(timezone.utc).date()
+
+
+def execution_service_result(result, action: str) -> dict[str, Any]:
+    payload = result.to_dict()
+    payload["action"] = action
+    return payload

@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -162,6 +164,7 @@ func Stop() error {
 	if err != nil {
 		return err
 	}
+	prepareRuntimeStop()
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return err
@@ -178,6 +181,44 @@ func Stop() error {
 		return err
 	}
 	return nil
+}
+
+func prepareRuntimeStop() {
+	cfg, err := config.Load()
+	if err != nil || !loopbackRuntimeURL(cfg.Runtime.URL) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		strings.TrimRight(cfg.Runtime.URL, "/")+"/v1/daemon/prepare-stop",
+		nil,
+	)
+	if err != nil {
+		return
+	}
+	if token := Token(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+}
+
+func loopbackRuntimeURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func WaitUntilReady(baseURL string, timeout time.Duration) error {

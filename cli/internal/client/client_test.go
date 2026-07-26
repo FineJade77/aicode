@@ -162,6 +162,72 @@ func TestCancelRunReturnsCancelledRun(t *testing.T) {
 	}
 }
 
+func TestExecutePostsVersionedExecutionContract(t *testing.T) {
+	var gotPath string
+	var got ExecutionRequest
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			return nil, err
+		}
+		return jsonResponse(`{
+			"execution_id":"exec_123",
+			"backend":"docker",
+			"action":"test",
+			"status":"succeeded",
+			"exit_code":0,
+			"stdout":"ok\n",
+			"stderr":"",
+			"duration_ms":12,
+			"timed_out":false,
+			"cancelled":false,
+			"future_field":"ignored"
+		}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := api.Execute(ctx, ExecutionRequest{
+		ExecutionID:    "exec_123",
+		Backend:        "docker",
+		Action:         "test",
+		Workspace:      "/repo",
+		TimeoutSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/executions" || got.Workspace != "/repo" {
+		t.Fatalf("path = %q, request = %#v", gotPath, got)
+	}
+	if response.Status != "succeeded" || response.ExitCode != 0 || response.ExecutionID != "exec_123" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestCancelExecutionEscapesID(t *testing.T) {
+	var gotPath string
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		return jsonResponse(`{"status":"cancelled","execution_id":"exec/1"}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := api.CancelExecution(ctx, "exec/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/executions/exec%2F1/cancel" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if response.Status != "cancelled" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestApproveSendsAcceptAll(t *testing.T) {
 	var got map[string]any
 	c := New("http://runtime.test", "")

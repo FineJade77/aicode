@@ -18,6 +18,10 @@ class ToolContext:
     review_disabled_rules: list[str] = field(default_factory=list)
     review_large_diff_threshold: int = 500
     review_max_findings: int = 50
+    execution: Any = None
+    session_id: str = ""
+    run_id: str = ""
+    tool_call_id: str = ""
 
 
 @dataclass(slots=True)

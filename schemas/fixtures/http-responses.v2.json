@@ -23,6 +23,24 @@
       "run_id": null,
       "queued": 0,
       "future_field": true
+    },
+    "execute_sandbox": {
+      "execution_id": "exec_fixture",
+      "backend": "docker",
+      "action": "test",
+      "status": "succeeded",
+      "exit_code": 0,
+      "stdout": "ok\n",
+      "stderr": "",
+      "duration_ms": 12,
+      "timed_out": false,
+      "cancelled": false,
+      "future_field": "ignored-by-v2-client"
+    },
+    "cancel_execution": {
+      "status": "cancelled",
+      "execution_id": "exec_fixture",
+      "future_field": true
     }
   }
 }

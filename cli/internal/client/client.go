@@ -49,6 +49,32 @@ type CancelRunResponse struct {
 	Queued int     `json:"queued"`
 }
 
+type ExecutionRequest struct {
+	ExecutionID    string  `json:"execution_id"`
+	Backend        string  `json:"backend"`
+	Action         string  `json:"action"`
+	Workspace      string  `json:"workspace"`
+	TimeoutSeconds float64 `json:"timeout_seconds"`
+}
+
+type ExecutionResponse struct {
+	ExecutionID string `json:"execution_id"`
+	Backend     string `json:"backend"`
+	Action      string `json:"action"`
+	Status      string `json:"status"`
+	ExitCode    int    `json:"exit_code"`
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	DurationMS  int64  `json:"duration_ms"`
+	TimedOut    bool   `json:"timed_out"`
+	Cancelled   bool   `json:"cancelled"`
+}
+
+type CancelExecutionResponse struct {
+	Status      string `json:"status"`
+	ExecutionID string `json:"execution_id"`
+}
+
 type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
 }
@@ -118,6 +144,23 @@ func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendM
 func (c Client) CancelRun(ctx context.Context, sessionID string) (CancelRunResponse, error) {
 	var out CancelRunResponse
 	if err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/cancel", struct{}{}, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) Execute(ctx context.Context, payload ExecutionRequest) (ExecutionResponse, error) {
+	var out ExecutionResponse
+	if err := c.postJSON(ctx, "/v1/executions", payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) CancelExecution(ctx context.Context, executionID string) (CancelExecutionResponse, error) {
+	var out CancelExecutionResponse
+	path := "/v1/executions/" + url.PathEscape(executionID) + "/cancel"
+	if err := c.postJSON(ctx, path, struct{}{}, &out); err != nil {
 		return out, err
 	}
 	return out, nil
