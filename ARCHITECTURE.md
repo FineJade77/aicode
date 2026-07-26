@@ -247,22 +247,22 @@ Runtime prompt 由几层组成：
 
 ### 11.1 User Config
 
-用户级配置通常位于 `~/.aicode/config.yaml`，包含：
+用户级配置位于 `~/.aicode/config.toml`，包含：
 
 - `ui`: 默认语言、输出风格等交互设置。
-- `runtime`: host、port、state 目录、audit 目录、HTTP timeout。
+- `runtime`: Runtime URL 和 port。
 - `models.main`: 常规 Agent 模型。
 - `models.reviewer`: review 模式模型。
 - `models.summarizer`: 历史压缩模型。
-- `providers.openai_compatible`: OpenAI-compatible endpoint、API key env、timeout、retry 等。
-- `providers.anthropic`: Anthropic endpoint、API key env、timeout、retry 等。
+- `provider.openai_compatible`: OpenAI-compatible endpoint、API key env、timeout。
+- `provider.anthropic`: Anthropic endpoint、API key env、timeout。
 - `pricing`: 本地成本估算所需单价。
 
 遗留的 `models.default`、`models.planner`、`models.coder` 已不再作为推荐配置入口，保留主要是为了向后兼容和迁移期容错。
 
 ### 11.2 Project Config
 
-项目级配置位于 `.aicode/config.yaml`，包含：
+项目级配置位于 `.aicode/config.json`，包含：
 
 - `defaultLanguage`: 项目默认输出语言。
 - `commands.test/build/lint`: 项目推荐命令。

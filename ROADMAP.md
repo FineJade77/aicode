@@ -1,12 +1,14 @@
 # aicode Roadmap
 
-更新日期：2026-07-21
+更新日期：2026-07-26
 
 本文是当前项目的状态路线图，用来回答三个问题：
 
 1. 哪些核心能力已经完成。
 2. 哪些能力已经有 MVP，但还值得升级。
 3. 后续继续做时，哪些任务优先级最高。
+
+具体实施顺序以 [本地 Coding Agent 优化执行路线](LOCAL_AGENT_ROADMAP.md) 为准。该文档把本路线图中的剩余能力收敛为 P0/P1/P2 工作包，包含目标架构、依赖关系、验收标准、质量门槛和 Issue 拆分；本文继续作为能力状态清单维护。
 
 状态标记：
 
@@ -76,7 +78,7 @@
 - [x] OpenAI-compatible provider。
 - [x] Anthropic provider。
 - [x] `main` / `reviewer` / `summarizer` 三角色模型路由。
-- [x] provider timeout / retry 配置。
+- [x] provider timeout 配置。
 - [x] 本地 pricing 配置。
 - [x] `aicode models` 查看当前路由。
 - [x] 遗留 `models.default/planner/coder` 从用户文档和推荐配置中移除。
@@ -136,7 +138,7 @@
 - [x] review mode 只读工具。
 - [x] `review_diff` 确定性规则。
 - [x] secret、敏感路径、debug 输出、大 diff、TODO/FIXME、前端 XSS、反序列化、TLS/权限等规则。
-- [x] `.aicode/config.yaml` 中配置 disabled rules、large diff threshold、max findings。
+- [x] `.aicode/config.json` 中配置 disabled rules、large diff threshold、max findings。
 - [x] `aicode review-rules`。
 - [x] `aicode config review list/docs/enable/disable/set/unset/prune`。
 
@@ -162,11 +164,11 @@
 - [x] ARCHITECTURE 已按当前实现重写。
 - [x] ROADMAP 已改为当前状态路线图。
 
-## 4. 近期优先级
+## 4. 既有增量 Backlog
 
-这一组适合继续做“小而实用”的增量，风险小，收益直接。
+这一组记录 2026-07-26 前已识别的小型增量及完成状态，不再表示全局执行顺序。未完成事项应并入优化执行路线对应工作包，避免形成第二套优先级。
 
-### P0: 收敛安全语义
+### 4.1 收敛安全语义
 
 - [x] 把 `explain` 升级为硬只读 mode。
   - [x] Runtime 不向 `explain` 暴露 `bash` / `edit_file`（`tool_schemas_for_mode`）。
@@ -185,7 +187,7 @@
   - 英文模式下也明确 project rules 的安全边界。
   - review/commit-message/explain mode 的 prompt 约束保持一致。
 
-### P1: 收敛配置体验
+### 4.2 收敛配置体验
 
 - [ ] 给遗留 `models.default/planner/coder` 增加迁移提示。
   - `config show/list/docs` 不推荐旧键。
@@ -194,10 +196,11 @@
 
 - [ ] 统一 provider 配置命名。
   - CLI 文档、README、Runtime env 注入保持一致。
-  - Anthropic timeout/retry 配置在 CLI 中完整可见。
+  - Anthropic timeout 配置在 CLI 中完整可见。
+  - 明确各 provider 的错误重试策略，并通过测试固定行为。
   - `aicode models --json` 能辅助排查 provider 配置。
 
-### P1: 依赖管理
+### 4.3 依赖管理
 
 - [x] Python 运行依赖集中到 `runtime/pyproject.toml`。
 - [x] Python 测试依赖集中到 `runtime[dev]` extra。
@@ -207,7 +210,7 @@
 - [ ] 评估是否需要 Go 工具依赖 pinning，例如 lint 工具的 `tools.go`。
 - [x] CI 中固定依赖安装和 cache 路径：`.github/workflows/ci.yml` 通过 `make deps-python`（锁文件）安装，`setup-python` 启用 `cache: pip`。
 
-### P1: 补齐 Docker Sandbox MVP
+### 4.4 补齐 Docker Sandbox MVP
 
 - [ ] 支持可控写入目录。
   - 默认仍只读。
@@ -226,11 +229,13 @@
   - resource limit。
   - audit command hash。
 
-## 5. 中期升级
+## 5. 候选中期能力
 
 ### 5.1 上下文引擎
 
 当前 `related_files` 已能解决一部分源码/测试同名、引用搜索和邻近文件问题。下一步不建议把复杂索引塞回 Agent Loop，而是作为可选只读工具逐步增强。
+
+该方向由执行路线的 WP2.4 管理：只有任务级 eval 证明文本搜索是主要失败原因时才启动，不默认排在交互模式、本地 provider 和评测体系之前。
 
 - [ ] SQLite workspace index。
 - [ ] 文件 mtime/hash 缓存。
@@ -316,9 +321,10 @@ aicode "重构这个模块，但保持行为一致"
 - 有最小测试覆盖。
 - 有失败路径处理。
 - 涉及写入时必须经过 approval flow。
-- 涉及 shell 时必须经过 Policy Engine。
+- 涉及进程执行时必须经过统一 ExecutionBackend 和 Policy。
 - 涉及模型调用时必须记录 usage。
 - 涉及安全策略时必须记录 audit。
+- 涉及 Agent 行为时必须提供对应 eval 或说明尚缺的评测覆盖。
 - 涉及用户可见行为时同步 README 或 ARCHITECTURE。
 - 涉及路线图状态变化时同步本文件。
 
@@ -332,16 +338,17 @@ make test-python
 文档变更至少运行：
 
 ```bash
-git diff --check README.md ARCHITECTURE.md ROADMAP.md
+git diff --check
 ```
 
 ## 9. 下一轮建议
 
 最建议按这个顺序继续：
 
-1. pending approval 恢复端到端测试。
-2. prompt 安全层级回归测试。
-3. Docker Sandbox artifact 导出设计和最小实现。
-4. `related_files` 索引化增强。
+1. [WP0.4](LOCAL_AGENT_ROADMAP.md#wp04-协议与文档单一事实来源)：盘点 tool/event contract 并增加漂移测试。
+2. [WP0.1](LOCAL_AGENT_ROADMAP.md#wp01-可安装可诊断的分发包)：定义版本化 Runtime 安装布局，先跑通 clean-home E2E。
+3. [WP0.2](LOCAL_AGENT_ROADMAP.md#wp02-统一执行信任与审计边界)：引入 ExecutionBackend，统一 Agent bash 和 sandbox。
+4. [WP0.3](LOCAL_AGENT_ROADMAP.md#wp03-模型感知可持久化的上下文管理)：持久化 compaction，并在模型调用前按窗口预算。
+5. [WP1.3](LOCAL_AGENT_ROADMAP.md#wp13-agent-任务级评测与-trace)：建立最小评测骨架，再推进 REPL 和本地 provider profile。
 
-这样可以继续强化当前项目最关键的三个优势：安全边界清楚、状态可恢复、上下文获取更省心。
+以上顺序优先把“能运行”升级为“可安装、可信任、可评测”；索引、subagent 和插件继续由评测结果触发。

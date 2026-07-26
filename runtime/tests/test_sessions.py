@@ -100,7 +100,7 @@ def test_session_store_migrates_old_schema(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_session_events_assign_ids_and_support_independent_subscribers() -> None:
     events = SessionEvents()
-    await events.put({"type": "one"})
+    await events.put({"type": "run.started"})
 
     first = events.subscribe(after=0)
     second = events.subscribe(after=0)
@@ -121,11 +121,11 @@ async def test_session_events_default_after_marks_latest_run_start() -> None:
     events = SessionEvents()
     await events.put({"type": "final"})
     events.set_default_after(events.last_event_id())
-    await events.put({"type": "plan.created"})
+    await events.put({"type": "run.started"})
 
     replay = events.events_after(events.default_after())
 
-    assert [event["type"] for event in replay] == ["plan.created"]
+    assert [event["type"] for event in replay] == ["run.started"]
 
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_session_store_persists_events(tmp_path: Path) -> None:
     store = SessionStore(db_path)
     session = store.create(workspace="/repo", language="zh-CN")
 
-    await session.events.put({"type": "plan.created"})
+    await session.events.put({"type": "run.started"})
     await session.events.put({"type": "final", "summary": "done"})
     await store.flush()
 
@@ -143,7 +143,7 @@ async def test_session_store_persists_events(tmp_path: Path) -> None:
 
     assert restored is not None
     events = restored.events.events_after(0)
-    assert [event["type"] for event in events] == ["plan.created", "final"]
+    assert [event["type"] for event in events] == ["run.started", "final"]
     assert [event["event_id"] for event in events] == [1, 2]
 
 
@@ -239,7 +239,7 @@ async def test_session_store_expires_unresolved_edit_approval_after_restart(tmp_
 async def test_session_events_trim_retained_events() -> None:
     events = SessionEvents(max_events=3)
     for index in range(5):
-        await events.put({"type": f"event.{index}"})
+        await events.put({"type": "final", "summary": str(index)})
 
     retained = events.events_after(0)
 
@@ -293,7 +293,7 @@ async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
     session = store.create(workspace="/repo", language="zh-CN")
 
     for index in range(4):
-        await session.events.put({"type": f"event.{index}"})
+        await session.events.put({"type": "final", "summary": str(index)})
     await store.flush()
 
     with sqlite3.connect(db_path) as conn:
@@ -346,8 +346,8 @@ async def test_event_writer_survives_individual_write_failures(tmp_path: Path, m
 
     monkeypatch.setattr(store, "_write_event_sync", flaky_write)
 
-    await session.events.put({"type": "one"})
-    await session.events.put({"type": "two"})
+    await session.events.put({"type": "run.started"})
+    await session.events.put({"type": "final"})
     await store.flush()
     status = store.event_writer_status()
 

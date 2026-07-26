@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.events.types import validate_event
+
 
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
@@ -63,6 +65,7 @@ class SessionEvents:
 
     async def put(self, event: dict[str, Any]) -> None:
         event = dict(event)
+        validate_event(event)
         if self._current_run_id and "run_id" not in event:
             event["run_id"] = self._current_run_id
         if "event_id" not in event:

@@ -15,9 +15,11 @@ docs/       设计与开发计划
 
 核心文档：
 
-- `ARCHITECTURE.md`: 当前架构和关键设计
-- `ROADMAP.md`: 路线图和剩余计划
-- `schemas/config.schema.json`: 项目级 `.aicode/config.json` schema
+- [ARCHITECTURE.md](ARCHITECTURE.md)：当前架构和关键设计
+- [ROADMAP.md](ROADMAP.md)：能力状态和剩余计划
+- [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md)：从当前 MVP 到本地日用 Agent 的 P0/P1/P2 工作包、依赖和验收标准
+- [TASKS.md](TASKS.md)：按依赖执行的任务台账、当前状态和完成记录
+- [schemas/config.schema.json](schemas/config.schema.json)：项目级 `.aicode/config.json` schema
 
 ## 已具备能力
 
