@@ -243,9 +243,20 @@ func ResolveRuntime() (RuntimeInstallation, error) {
 	return RuntimeInstallation{
 		RuntimeDir: runtimeDir,
 		Python:     runtimePythonOverride(),
-		Version:    strings.TrimSpace(os.Getenv("AICODE_RUNTIME_VERSION")),
+		Version:    sourceRuntimeVersion(runtimeDir),
 		Source:     "source-checkout",
 	}, nil
+}
+
+func sourceRuntimeVersion(runtimeDir string) string {
+	if explicit := strings.TrimSpace(os.Getenv("AICODE_RUNTIME_VERSION")); explicit != "" {
+		return explicit
+	}
+	content, err := os.ReadFile(filepath.Join(filepath.Dir(runtimeDir), "VERSION"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
 }
 
 func sourceRuntimeFrom(start string) (string, error) {

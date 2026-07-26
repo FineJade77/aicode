@@ -26,7 +26,7 @@ User
   v
 Go CLI
   |-- chat / review / diff / test / explain / commit-message
-  |-- config / sessions / usage / models / review-rules
+  |-- config / sessions / usage / models / doctor / review-rules
   |-- --sandbox docker test|build|lint
   |
   | HTTP + SSE, localhost token auth
@@ -81,6 +81,7 @@ CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置
 - `review-rules`: 查看当前审查规则和保护路径。
 - `config`: 查看或修改用户配置。
 - `daemon`: 管理 Runtime daemon。
+- `doctor`: 只读检查安装、版本、Python/依赖、端口、provider 和 Docker；不启动 daemon，不请求外部 provider。
 - `--sandbox docker test|build|lint`: 在 Docker 隔离环境运行项目命令。
 
 CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
@@ -104,7 +105,7 @@ daemon 解析 Runtime 的顺序：
 2. 根据当前 CLI 可执行文件定位 `<prefix>/lib/aicode/manifest.json`，使用其中版本化 Runtime 和 venv Python。
 3. 从当前目录向父目录查找源码 checkout 的 `runtime/`，仅作为开发 fallback。
 
-manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和 `..` 逃逸。安装启动 E2E 在临时 HOME、临时 prefix 和源码目录外 workspace 中覆盖 install → start → status → stop。
+manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和 `..` 逃逸。`aicode doctor [--json]` 使用与 daemon 相同的 Runtime 解析路径，并区分阻断运行的 error 与可选能力/尚未启动服务的 warning。安装启动 E2E 在临时 HOME、临时 prefix 和源码目录外 workspace 中覆盖 install → doctor → start → status → stop。
 
 ### 3.3 Python Runtime
 

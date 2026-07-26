@@ -67,6 +67,21 @@ port="$(
 "$binary" config set runtime.port "$port" >/dev/null
 
 cd "$workspace"
+doctor_before="$("$binary" doctor --json)"
+AICODE_DOCTOR_JSON="$doctor_before" AICODE_EXPECTED_VERSION="$version" "$python_bin" -c '
+import json
+import os
+
+report = json.loads(os.environ["AICODE_DOCTOR_JSON"])
+checks = {check["name"]: check for check in report["checks"]}
+assert report["cli_version"] == os.environ["AICODE_EXPECTED_VERSION"]
+assert checks["installation"]["status"] == "ok"
+assert checks["installation"]["details"]["source"] == "install-manifest"
+assert checks["version"]["status"] == "ok"
+assert checks["python"]["status"] == "ok"
+assert checks["port"]["status"] == "warn"
+'
+
 "$binary" daemon start >/dev/null
 
 status_output=""
@@ -86,10 +101,23 @@ if [[ "$status_output" != *"status: ok"* || "$status_output" != *"version: $vers
   exit 1
 fi
 
+doctor_after="$("$binary" doctor --json)"
+AICODE_DOCTOR_JSON="$doctor_after" "$python_bin" -c '
+import json
+import os
+
+report = json.loads(os.environ["AICODE_DOCTOR_JSON"])
+checks = {check["name"]: check for check in report["checks"]}
+assert report["status"] in {"ok", "warn"}
+assert checks["version"]["status"] == "ok"
+assert checks["port"]["status"] == "ok"
+assert checks["port"]["details"]["daemon_status"] == "ok"
+'
+
 test -f "$state_home/runtime.pid"
 test -f "$state_home/runtime.token"
 "$binary" daemon stop >/dev/null
 test ! -e "$state_home/runtime.pid"
 test ! -e "$state_home/runtime.token"
 
-echo "clean-home install/start/status/stop passed"
+echo "clean-home install/doctor/start/status/stop passed"

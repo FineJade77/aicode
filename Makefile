@@ -6,6 +6,7 @@ GOENV := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE)
 BINDIR ?= $(CURDIR)/bin
 AICODE_BIN ?= $(BINDIR)/aicode
 AICODE_VERSION ?= $(shell tr -d '[:space:]' < $(CURDIR)/VERSION)
+GO_LDFLAGS ?= -X github.com/FineJade77/aicode/cli/internal/version.Value=$(AICODE_VERSION)
 INSTALL_PREFIX ?= $(HOME)/.local
 INSTALL_PYTHON ?= python3
 INSTALL_SYSTEM_SITE_PACKAGES ?= 0
@@ -14,7 +15,7 @@ INSTALL_FLAGS := $(if $(filter 1,$(INSTALL_SYSTEM_SITE_PACKAGES)),--system-site-
 
 build:
 	mkdir -p $(BINDIR)
-	$(GOENV) go build -o $(AICODE_BIN) ./cli
+	$(GOENV) go build -ldflags "$(GO_LDFLAGS)" -o $(AICODE_BIN) ./cli
 
 install: build
 	"$(INSTALL_PYTHON)" scripts/install.py \

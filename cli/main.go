@@ -10,6 +10,7 @@ import (
 	"github.com/FineJade77/aicode/cli/internal/cmd/commitmsgcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/configcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/daemoncmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/doctorcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/modelscmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/resumecmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/runtimeio"
@@ -48,6 +49,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "daemon":
 		return daemoncmd.Run(cfg, args[1:])
+	case "doctor":
+		return doctorcmd.Run(cfg, args[1:])
 	case "config":
 		return configcmd.Run(cfg, args[1:])
 	case "sessions":
@@ -110,6 +113,7 @@ func printHelp() {
   aicode usage --today [--json]
   aicode usage --session <session_id> [--json]
   aicode models [--json]
+  aicode doctor [--json]
   aicode config init
   aicode config show
   aicode config list

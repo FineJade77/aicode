@@ -102,6 +102,15 @@ make install INSTALL_PREFIX=/path/to/prefix
 
 安装过程先在 staging 目录完成 Runtime、venv 和依赖验证，再原子更新当前 manifest；失败不会提前切换当前 Runtime。daemon 的解析顺序是 `AICODE_RUNTIME_DIR`、安装 manifest、源码 checkout fallback。
 
+安装后可先运行只读诊断。默认输出人类可读提示，CI 或安装脚本可使用 JSON：
+
+```bash
+aicode doctor
+aicode doctor --json
+```
+
+doctor 检查 Runtime 安装、CLI/Runtime/daemon 版本、Python 3.11+ 与关键依赖、Runtime 端口、provider 配置/API key 环境变量，以及可选的 Docker daemon。它不会启动 Runtime，也不会向 provider 发送请求；未配置 API key、未安装 Docker 或 daemon 尚未启动会显示 warning，核心安装、版本、Python 或端口冲突才返回非零退出码。
+
 下文默认 `aicode` 已经在 `PATH` 中。如果不安装，也可以用 `./bin/aicode` 替代。
 
 配置模型 API key。默认 provider 是 OpenAI-compatible：
@@ -141,6 +150,8 @@ aicode commit-message
 ```bash
 aicode daemon status
 aicode daemon stop
+aicode doctor
+aicode doctor --json
 aicode sessions
 aicode resume --last
 aicode resume --last "继续刚才的任务"

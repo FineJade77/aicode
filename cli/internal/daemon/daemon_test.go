@@ -143,6 +143,26 @@ func TestSourceRuntimeFromNestedDirectory(t *testing.T) {
 	}
 }
 
+func TestSourceRuntimeVersionReadsRepositoryVersion(t *testing.T) {
+	root := t.TempDir()
+	runtimeDir := filepath.Join(root, "runtime")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "VERSION"), []byte("1.2.3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sourceRuntimeVersion(runtimeDir); got != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3", got)
+	}
+
+	t.Setenv("AICODE_RUNTIME_VERSION", "dev")
+	if got := sourceRuntimeVersion(runtimeDir); got != "dev" {
+		t.Fatalf("override version = %q, want dev", got)
+	}
+}
+
 func TestManifestPathForInstalledExecutable(t *testing.T) {
 	prefix := t.TempDir()
 	executable := filepath.Join(prefix, "bin", "aicode")
