@@ -1,4 +1,4 @@
-.PHONY: build install test-install-e2e deps deps-go deps-python test test-go test-python compile-python tidy-go lock-python
+.PHONY: build install test-install-e2e deps deps-go deps-python test test-go test-python eval-smoke compile-python tidy-go lock-python
 
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
@@ -12,6 +12,7 @@ INSTALL_PYTHON ?= python3
 INSTALL_SYSTEM_SITE_PACKAGES ?= 0
 INSTALL_SKIP_DEPS ?= 0
 INSTALL_FLAGS := $(if $(filter 1,$(INSTALL_SYSTEM_SITE_PACKAGES)),--system-site-packages,) $(if $(filter 1,$(INSTALL_SKIP_DEPS)),--skip-deps,)
+EVAL_OUTPUT_ROOT ?= $(CURDIR)/.artifacts/evals
 
 build:
 	mkdir -p $(BINDIR)
@@ -54,7 +55,13 @@ test-go:
 test-python:
 	python3 -m pytest -q
 
+eval-smoke:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite smoke \
+		--output-root "$(EVAL_OUTPUT_ROOT)" \
+		--baseline "$(CURDIR)/evals/baselines/deterministic-smoke.v1.json"
+
 compile-python:
-	cd runtime && python3 -m compileall app
+	python3 -m compileall -x 'evals/fixtures' runtime/app evals
 
 tidy-go: deps-go

@@ -52,6 +52,17 @@ jobs:
       - name: pytest
         run: make test-python
 
+      - name: Deterministic agent eval smoke
+        run: make eval-smoke
+
+      - name: Upload eval traces and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-smoke
+          path: .artifacts/evals/
+          if-no-files-found: error
+
   install-e2e:
     name: Clean-home install E2E
     runs-on: ubuntu-latest

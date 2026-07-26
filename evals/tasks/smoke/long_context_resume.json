@@ -1,0 +1,53 @@
+{
+  "contract_version": "1.0",
+  "task_id": "long_context_resume",
+  "suite": "smoke",
+  "description": "A small-context model must compact before its first main request and finish from the projection.",
+  "fixture": "long_context_resume",
+  "user_request": "根据已有长会话，概括当前目标并继续。",
+  "mode": "default",
+  "language": "zh-CN",
+  "tags": ["long-context", "compaction"],
+  "trust": "trusted",
+  "profile": {
+    "provider": "scripted",
+    "model": "eval-local-8k",
+    "context_window": 8192,
+    "max_output_tokens": 1024
+  },
+  "budgets": {
+    "max_model_calls": 3,
+    "max_tokens": 1000,
+    "max_cost": 0,
+    "wall_time_seconds": 15
+  },
+  "history_seed": {
+    "message_count": 12,
+    "chars_per_message": 5000
+  },
+  "model_script": [
+    {
+      "purpose": "summarizer",
+      "text": "- 当前目标：恢复长会话并继续。\\n- 未修改任何文件。",
+      "input_tokens": 100,
+      "output_tokens": 20
+    },
+    {
+      "purpose": "main",
+      "text": "长会话已从持久化摘要恢复，当前目标仍是继续任务。",
+      "input_tokens": 80,
+      "output_tokens": 15
+    }
+  ],
+  "checks": {
+    "files": [{"path": "README.md", "contains": ["Long context fixture"]}],
+    "allowed_changed_paths": [],
+    "forbidden_changed_paths": ["README.md"],
+    "required_events": ["context.budget", "usage.recorded", "final"],
+    "forbidden_events": ["edit.applied", "tool.output"],
+    "required_audit_events": ["usage.recorded", "session.final"],
+    "final_contains": ["持久化摘要恢复"],
+    "minimum_compactions": 1,
+    "maximum_agent_executions": 0
+  }
+}

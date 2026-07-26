@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/eval-report.schema.json",
+  "x-aicode-contract-version": "1.0",
+  "title": "aicode Eval Suite Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_version",
+    "suite",
+    "runner",
+    "started_at",
+    "finished_at",
+    "repetitions",
+    "passed",
+    "source_versions",
+    "metrics",
+    "baseline",
+    "runs"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract_version": {"const": "1.0"},
+    "suite": {"type": "string"},
+    "runner": {"type": "string"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "repetitions": {"type": "integer", "minimum": 1},
+    "passed": {"type": "boolean"},
+    "source_versions": {"type": "object"},
+    "metrics": {
+      "type": "object",
+      "required": [
+        "task_count",
+        "run_count",
+        "success_rate",
+        "pass_at_1",
+        "pass_at_k",
+        "safety_rate",
+        "unauthorized_modification_rate",
+        "dangerous_command_execution_rate",
+        "approval_accuracy",
+        "total_input_tokens",
+        "total_output_tokens",
+        "total_estimated_cost",
+        "total_duration_ms",
+        "total_model_calls",
+        "total_tool_calls"
+      ]
+    },
+    "baseline": {"type": ["object", "null"]},
+    "runs": {"type": "array"}
+  },
+  "additionalProperties": false
+}

@@ -439,7 +439,23 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 
 这套模型的目标是降低本地 Agent 的误操作风险，而不是提供强沙箱级隔离。强隔离任务应优先使用 Docker Sandbox 或未来更完整的 sandbox 后端。
 
-## 19. Repository Layout
+## 19. Agent Eval And Trace
+
+`evals/` 提供独立于真实 provider 的任务级评测层。CI profile 使用 scripted model，但仍调用真实 Agent Loop、ModelRouter、PolicyEngine、ExecutionService、SessionStore 和 compaction 路径，因此可以稳定捕获 Agent 行为回归，而不把外部模型波动引入普通 CI。
+
+每个 eval task 固定 fixture、请求、mode、provider/model capability、turn/token/cost/wall-time 预算、审批策略、scripted model turns 和确定性 checks。Runner 将 fixture 复制到独立临时目录，创建带固定时间与 identity 的初始 Git commit；grader 依据测试命令、文件断言、changed/forbidden paths、event/audit、approval 和 compaction 规则评分。
+
+每个 run 生成 schema v1 trace manifest，包含：
+
+- task/fixture digest、初始 commit 和 replay task reference；
+- model、prompt、tool schema、policy 和 compaction prompt fingerprint；
+- model call、tool call、policy decision、edit、verification 和 usage 定位信息；
+- diff path/numstat/content hash、grader checks 和预算结果；
+- token、cost、latency、model/tool turns、安全与 approval 指标。
+
+Agent shell command、模型正文、tool output 和 edit/diff 正文不会完整写入 trace；使用 hash、字符数、安全字段和已脱敏错误定位问题。Suite 同时输出 JSON 与 Markdown report，并与提交的 baseline threshold/fingerprint 比较。CI 跑 deterministic smoke，真实模型完整任务集保留为手动或定时 profile。
+
+## 20. Repository Layout
 
 ```text
 .
@@ -457,12 +473,14 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 │       ├── sessions/       # SQLite-backed sessions/events/approvals
 │       ├── tools/          # tool registry and implementations
 │       └── usage/          # usage tracking
-├── tests/                  # integration and behavior tests
+├── evals/                  # tasks, isolated fixtures, graders, runner and baselines
+├── schemas/                # runtime and eval contracts
+├── runtime/tests/          # integration and behavior tests
 ├── README.md               # user-facing guide
 └── ARCHITECTURE.md         # this document
 ```
 
-## 20. Current Gaps
+## 21. Current Gaps
 
 仍可继续推进的方向：
 
@@ -471,6 +489,6 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 - 增强多 provider fallback 和 per-route 健康检查。
 - 补充更细的恢复语义，例如跨进程 approval continuation。
 - 提供更完整的英文 CLI 文案。
-- 增加端到端测试覆盖 daemon restart、SSE resume、approval recovery 和 sandbox audit。
+- 扩展真实模型完整评测集与定时 baseline，覆盖跨文件修改、边界测试和失败后二次修复。
 
 架构目标保持不变：先把本地 Agent 的安全边界、可恢复性和可解释性做扎实，再逐步扩展更复杂的执行环境和产品形态。

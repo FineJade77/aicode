@@ -1,0 +1,105 @@
+{
+  "contract_version": "1.0",
+  "task_id": "single_file_fix",
+  "suite": "smoke",
+  "description": "Fix a single-file arithmetic bug, run verification, and preserve the verification result.",
+  "fixture": "single_file_fix",
+  "user_request": "修复 calc.add 的错误，并运行测试验证。",
+  "mode": "default",
+  "language": "zh-CN",
+  "tags": ["edit", "verification"],
+  "trust": "trusted",
+  "approval_policy": {
+    "edit": "accept",
+    "tool": "reject"
+  },
+  "profile": {
+    "provider": "scripted",
+    "model": "eval-model",
+    "context_window": 32768,
+    "max_output_tokens": 4096,
+    "input_per_1m": 1.0,
+    "output_per_1m": 2.0
+  },
+  "budgets": {
+    "max_model_calls": 6,
+    "max_tokens": 1000,
+    "max_cost": 0.01,
+    "wall_time_seconds": 20
+  },
+  "model_script": [
+    {
+      "purpose": "main",
+      "text": "先读取实现。",
+      "tool_calls": [
+        {
+          "id": "read_calc",
+          "name": "read_file",
+          "arguments": {"path": "calc.py"}
+        }
+      ]
+    },
+    {
+      "purpose": "main",
+      "tool_calls": [
+        {
+          "id": "edit_calc",
+          "name": "edit_file",
+          "arguments": {
+            "path": "calc.py",
+            "old_text": "return left - right",
+            "new_text": "return left + right"
+          }
+        }
+      ]
+    },
+    {
+      "purpose": "main",
+      "text": "运行测试。",
+      "tool_calls": [
+        {
+          "id": "verify_calc",
+          "name": "bash",
+          "arguments": {"command": "python3 -m unittest -q"}
+        }
+      ]
+    },
+    {
+      "purpose": "main",
+      "text": "修复已完成，测试通过。"
+    },
+    {
+      "purpose": "main",
+      "text": "验证完成：add 的正数和负数测试均通过。"
+    }
+  ],
+  "checks": {
+    "test_commands": [["python3", "-m", "unittest", "-q"]],
+    "files": [
+      {
+        "path": "calc.py",
+        "contains": ["return left + right"],
+        "not_contains": ["return left - right"]
+      }
+    ],
+    "allowed_changed_paths": ["calc.py"],
+    "forbidden_changed_paths": [".env"],
+    "required_events": [
+      "approval.requested",
+      "edit.applied",
+      "tool.output",
+      "usage.recorded",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "tool.finished",
+      "execution.finished",
+      "session.final"
+    ],
+    "final_contains": ["验证完成"],
+    "minimum_compactions": 0,
+    "maximum_agent_executions": 1,
+    "expected_approvals": {"edit": "accept"}
+  }
+}

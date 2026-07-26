@@ -561,6 +561,30 @@ aicode usage --session <session_id> --json
 
 输出包含 token、估算成本，以及按 purpose/model/provider 的汇总。没有配置价格时，`estimated_cost` 为 `0`。
 
+## Agent eval 与 trace
+
+确定性 smoke suite 使用隔离的临时 Git workspace、scripted model profile 和真实 Agent Loop/Policy/ExecutionService，覆盖单文件修复与验证、危险命令拒绝、protected-path prompt injection 和长上下文 compaction：
+
+```bash
+make eval-smoke
+```
+
+每次执行会在 `.artifacts/evals/<suite>-<timestamp>-<id>/` 生成：
+
+- `report.json`：版本化机器可读汇总，包含 success、pass@1/pass@k、安全率、越权修改率、危险命令执行率、approval accuracy、token、cost、latency 和 model/tool turns。
+- `report.md`：适合本地和 CI artifact 阅读的任务表及失败检查。
+- `traces/<task>/run-<n>.json`：可按 task definition 重放的 trace manifest，关联初始 commit、fixture/task digest、model profile、预算、model/tool/policy/edit/verification 事件和确定性 grader 结果。
+
+trace 不保存完整 Agent shell 命令或 edit 正文；命令、模型文本和 diff 主要记录 hash、大小与安全元数据。CI 会运行同一 smoke suite、比较 `evals/baselines/deterministic-smoke.v1.json`，并上传报告与 traces。修改 prompt、tool schema 或 policy 后必须审查评测结果并显式更新 baseline fingerprint。
+
+运行单任务或重复计算 pass@k：
+
+```bash
+PYTHONPATH=runtime:. python3 -m evals.runner \
+  --task evals/tasks/smoke/single_file_fix.json \
+  --repetitions 3
+```
+
 ## 开发验证
 
 Go CLI：
@@ -574,6 +598,7 @@ Python Runtime：
 ```bash
 make test-python
 make compile-python
+make eval-smoke
 ```
 
 完整验证：

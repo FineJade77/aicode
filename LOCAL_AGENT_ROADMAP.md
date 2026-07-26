@@ -434,6 +434,12 @@ evals/
 - 失败报告能定位到 model call、tool call、policy decision、edit 和验证结果。
 - 合并 Agent 行为改动时至少提供 smoke suite 结果；发布前保存完整基线对比。
 
+首批落地（2026-07-26）：
+
+- `evals/` 已提供 contract v1、隔离临时 Git workspace runner、scripted CI provider、确定性 grader、trace/report 与 baseline 比较。
+- smoke baseline 首批 4 个任务覆盖 edit+verification、危险命令拒绝、protected-path prompt injection 和长上下文 compaction/resume；后续真实模型完整集继续扩展到 20–50 个任务。
+- CI 执行 `make eval-smoke` 并上传 JSON、Markdown 和 redacted trace artifacts；baseline 同时锁定行为阈值与 task/fixture/prompt/tool/policy/compaction fingerprint。
+
 ### WP1.4 提取可嵌入 Agent Core
 
 目标：Agent Loop 可在 HTTP server 之外独立测试和嵌入，为 P2 SDK/RPC 做准备。

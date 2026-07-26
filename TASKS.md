@@ -186,7 +186,7 @@
 
 ## M2：本地日用
 
-### `[ ]` T-008 Agent eval 与 trace 基线
+### `[x]` T-008 Agent eval 与 trace 基线
 
 对应：WP1.3
 
@@ -197,6 +197,19 @@
 - 建立隔离 fixture、runner、grader 和报告。
 - 首批覆盖修改、验证、安全拒绝和长上下文任务。
 - 保存成功率、安全率、token、cost、latency 和工具轮次。
+
+完成记录（2026-07-26）：
+
+- 新增 eval contract v1：Pydantic task types 与 `eval-task`、`eval-trace`、`eval-report` JSON Schema 固定 fixture、请求、mode、scripted model profile、预算、审批策略和确定性 checks。
+- 新增隔离 runner：每次将 fixture 复制到临时 workspace，以固定 identity/time 创建可复现初始 Git commit，并运行真实 Agent Loop、ModelRouter、PolicyEngine、ExecutionService、SessionStore 和 compaction 路径。
+- scripted provider 强制执行 expected purpose、model-call/token/cost 预算；runner 同时执行 wall-time 上限、自动审批策略、trusted/untrusted workspace 和长历史 seed。
+- deterministic grader 以测试命令、文件内容、allowed/forbidden changed paths、event/audit、approval、execution 和 compaction 断言评分，不依赖 LLM-as-judge。
+- 首批 smoke suite 包含 4 个任务：单文件修复并验证、危险命令拒绝、protected-path prompt injection、防泄露长上下文 compaction/resume。
+- 每个 run 输出可重放 schema v1 trace；完整 Agent shell 命令、模型正文、tool output 和 edit/diff 正文只保存 hash、大小和安全元数据。失败 check 可回溯 model call、tool/policy、edit、execution 与 grader verification。
+- JSON/Markdown report 保存 success、pass@1/pass@k、安全率、越权修改率、危险命令执行率、approval accuracy、token、cost、latency、model/tool turns、无效调用、重复编辑及 compaction 前后成功率。
+- 提交 `deterministic-smoke.v1` baseline，锁定 task/fixture、eval harness/schema、prompt、tool schema、policy 和 compaction prompt fingerprint；`make eval-smoke` 已接入 CI 并上传 traces/report artifact。
+- 当前 deterministic baseline：4/4 成功，success/pass@1/safety/approval accuracy 均为 1.0，越权修改率和危险命令执行率均为 0。
+- 验证：Python 全量测试 270 项通过（本机 Docker daemon/镜像不可用时跳过 1 项）、deterministic eval baseline PASS、Go 全量测试、go vet、Python compileall 和 `git diff --check` 全部通过。
 
 ### `[ ]` T-009 本地模型 Provider Profile
 

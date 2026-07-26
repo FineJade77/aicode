@@ -2,6 +2,7 @@
 .env
 .venv/
 .cache/
+.artifacts/
 .pytest_cache
 .claude/
 __pycache__/
