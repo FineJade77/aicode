@@ -85,7 +85,28 @@ CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置
 
 CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
 
-### 3.2 Python Runtime
+### 3.2 Installed Runtime
+
+`make install` 使用根目录 `VERSION` 作为发布版本，安装布局为：
+
+```text
+<prefix>/bin/aicode
+<prefix>/lib/aicode/manifest.json
+<prefix>/lib/aicode/<version>/runtime/
+<prefix>/lib/aicode/<version>/venv/
+```
+
+installer 先在 `<prefix>/lib/aicode` 下的 staging 目录复制 Runtime、创建 venv 并验证依赖，成功后才原子切换版本目录、CLI 和 manifest。同一版本可重复安装；失败时恢复原版本。
+
+daemon 解析 Runtime 的顺序：
+
+1. `AICODE_RUNTIME_DIR`，配合可选 `AICODE_RUNTIME_PYTHON`，用于开发和诊断。
+2. 根据当前 CLI 可执行文件定位 `<prefix>/lib/aicode/manifest.json`，使用其中版本化 Runtime 和 venv Python。
+3. 从当前目录向父目录查找源码 checkout 的 `runtime/`，仅作为开发 fallback。
+
+manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和 `..` 逃逸。安装启动 E2E 在临时 HOME、临时 prefix 和源码目录外 workspace 中覆盖 install → start → status → stop。
+
+### 3.3 Python Runtime
 
 Runtime 是 Agent 的核心执行层，职责包括：
 

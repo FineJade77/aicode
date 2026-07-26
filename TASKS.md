@@ -67,7 +67,7 @@
 - renderer 补齐 `approval.expired`、`error`，并适配当前 token-based `context.budget`。
 - 验证：Python contract/server 定向测试 24 项、Go client/renderer/cancel 定向测试、Python 全量测试 213 项、Go 全量测试、Python compile、`go vet` 和 `gofmt` 全部通过。
 
-### `[ ]` T-003 版本化 Runtime 安装布局
+### `[x]` T-003 版本化 Runtime 安装布局
 
 对应：WP0.1
 
@@ -79,6 +79,16 @@
 - daemon 优先从安装 manifest 解析 Runtime。
 - 保留 `AICODE_RUNTIME_DIR` 和源码 checkout 开发路径。
 - 增加 clean-home install/start/stop E2E。
+
+完成记录（2026-07-26）：
+
+- 新增根目录 `VERSION` 和 install manifest schema。
+- `make install` 安装 CLI、版本化 Runtime、独立 venv 和原子 manifest；默认前缀为 `~/.local`。
+- installer 支持同版本幂等重装；staging 或依赖验证失败时恢复原版本、CLI 和 manifest。
+- daemon 按 `AICODE_RUNTIME_DIR` → 安装 manifest → 源码 checkout fallback 解析 Runtime，并使用 manifest 指定的 venv Python。
+- manifest 路径必须相对安装根目录，拒绝绝对路径和 `..` 逃逸。
+- clean-home E2E 在临时 prefix、临时状态目录和源码外 workspace 覆盖 install → reinstall → failed install rollback → start → status → stop，并已接入 CI。
+- 验证：clean-home E2E、Python 全量测试 214 项、Go 全量测试、installer Python 编译与 shell 语法检查全部通过。
 
 ### `[ ]` T-004 `aicode doctor`
 

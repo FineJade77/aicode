@@ -10,6 +10,7 @@
 cli/        Go CLI
 runtime/    Python FastAPI Runtime daemon
 schemas/    配置、工具、事件 schema
+scripts/    安装器和 clean-home E2E
 docs/       设计与开发计划
 ```
 
@@ -49,7 +50,7 @@ docs/       设计与开发计划
 - Make，用于构建、安装和测试快捷命令
 - Docker，可选，仅 `--sandbox docker` 需要
 
-安装 Runtime Python 依赖，推荐使用锁定版本以保证可复现：
+源码开发或直接运行 `./bin/aicode` 时，先安装 Runtime Python 依赖；推荐使用锁定版本以保证可复现：
 
 ```bash
 python3 -m pip install -r runtime/requirements.lock.txt
@@ -77,12 +78,29 @@ make build
 ./bin/aicode "解释当前项目"
 ```
 
-安装到 `~/.local/bin/aicode`：
+完整安装到 `~/.local`：
 
 ```bash
 make install
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+`make install` 会构建 CLI，创建版本化 Runtime 和独立 Python venv，并从 `runtime/requirements.lock.txt` 安装依赖。默认布局：
+
+```text
+~/.local/bin/aicode
+~/.local/lib/aicode/manifest.json
+~/.local/lib/aicode/<version>/runtime/
+~/.local/lib/aicode/<version>/venv/
+```
+
+可用 `INSTALL_PREFIX` 安装到其它前缀：
+
+```bash
+make install INSTALL_PREFIX=/path/to/prefix
+```
+
+安装过程先在 staging 目录完成 Runtime、venv 和依赖验证，再原子更新当前 manifest；失败不会提前切换当前 Runtime。daemon 的解析顺序是 `AICODE_RUNTIME_DIR`、安装 manifest、源码 checkout fallback。
 
 下文默认 `aicode` 已经在 `PATH` 中。如果不安装，也可以用 `./bin/aicode` 替代。
 
@@ -161,6 +179,13 @@ Runtime 会把系统 prompt、项目配置、项目规则、项目记忆和对�
 ```bash
 cd runtime
 python3 -m uvicorn app.server.main:app --host 127.0.0.1 --port 8765
+```
+
+源码调试时可显式覆盖 Runtime 和 Python：
+
+```bash
+export AICODE_RUNTIME_DIR="/path/to/aicode/runtime"
+export AICODE_RUNTIME_PYTHON="python3"
 ```
 
 手动启动时默认没有 `AICODE_RUNTIME_TOKEN`，API 不启用认证，便于本地调试。通过 `aicode daemon start` 启动时，CLI 会生成：

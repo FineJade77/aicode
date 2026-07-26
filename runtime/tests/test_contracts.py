@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config.settings import Settings
 from app.events.sse import encode_sse
 from app.events.types import EVENT_TYPES
 from app.server.main import CancelRunResponse, CreateSessionResponse, SendMessageResponse
@@ -41,6 +42,16 @@ def test_runtime_events_match_canonical_schema() -> None:
     assert schema["x-aicode-contract-version"] == CONTRACT_VERSION
     assert len(schema_names) == len(set(schema_names))
     assert set(schema_names) == EVENT_TYPES
+
+
+def test_install_manifest_schema_and_runtime_version_share_source_version() -> None:
+    schema = load_schema("install-manifest.schema.json")
+    required = set(schema["required"])
+    source_version = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+    assert required == {"schema_version", "version", "runtime_dir", "python"}
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert source_version == Settings().version
 
 
 def test_http_response_fixture_matches_runtime_models() -> None:

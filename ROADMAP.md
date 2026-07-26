@@ -44,6 +44,7 @@
 | Prompt 国际化 | `[~]` | Runtime prompt 支持中英文；CLI 固定文案仍以中文为主。 |
 | 配置收敛 | `[~]` | 推荐 `main/reviewer/summarizer`，遗留键仍需迁移期兼容。 |
 | 依赖管理 | `[x]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，`requirements(-dev).lock.txt` 提供可复现安装。 |
+| 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home install/start/stop E2E 已接入 CI。 |
 | 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
 | CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
 
@@ -56,6 +57,9 @@
 - [x] CLI 自动启动 Runtime daemon。
 - [x] `daemon start/status/stop`。
 - [x] Runtime 本机 token 鉴权。
+- [x] `make install` 安装版本化 Runtime、独立 venv 和原子 manifest。
+- [x] daemon 按环境覆盖、安装 manifest、源码 checkout 顺序解析 Runtime。
+- [x] clean-home install/reinstall/rollback/start/status/stop E2E。
 - [x] `POST /v1/sessions` 创建 session。
 - [x] `POST /v1/sessions/{id}/messages` 发起 run。
 - [x] `GET /v1/sessions/{id}/events` SSE 事件流。

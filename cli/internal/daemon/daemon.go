@@ -20,6 +20,22 @@ import (
 	"github.com/FineJade77/aicode/cli/internal/config"
 )
 
+const installManifestSchemaVersion = 1
+
+type RuntimeInstallation struct {
+	RuntimeDir string
+	Python     string
+	Version    string
+	Source     string
+}
+
+type installManifest struct {
+	SchemaVersion int    `json:"schema_version"`
+	Version       string `json:"version"`
+	RuntimeDir    string `json:"runtime_dir"`
+	Python        string `json:"python"`
+}
+
 func tokenPath(home string) string {
 	return filepath.Join(home, "runtime.token")
 }
@@ -71,7 +87,7 @@ func Status(ctx context.Context, baseURL string) (map[string]any, error) {
 }
 
 func Start(cfg config.Config) error {
-	runtimeDir, err := RuntimeDir()
+	installation, err := ResolveRuntime()
 	if err != nil {
 		return err
 	}
@@ -99,7 +115,7 @@ func Start(cfg config.Config) error {
 	defer logFile.Close()
 
 	cmd := exec.Command(
-		"python3",
+		installation.Python,
 		"-m",
 		"uvicorn",
 		"app.server.main:app",
@@ -108,8 +124,11 @@ func Start(cfg config.Config) error {
 		"--port",
 		strconv.Itoa(cfg.Runtime.Port),
 	)
-	cmd.Dir = runtimeDir
+	cmd.Dir = installation.RuntimeDir
 	cmd.Env = append(cfg.RuntimeEnv(), "AICODE_RUNTIME_TOKEN="+token)
+	if installation.Version != "" {
+		cmd.Env = append(cmd.Env, "AICODE_RUNTIME_VERSION="+installation.Version)
+	}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -176,18 +195,67 @@ func WaitUntilReady(baseURL string, timeout time.Duration) error {
 }
 
 func RuntimeDir() (string, error) {
+	installation, err := ResolveRuntime()
+	if err != nil {
+		return "", err
+	}
+	return installation.RuntimeDir, nil
+}
+
+func ResolveRuntime() (RuntimeInstallation, error) {
 	if explicit := os.Getenv("AICODE_RUNTIME_DIR"); explicit != "" {
-		return explicit, nil
+		runtimeDir, err := filepath.Abs(explicit)
+		if err != nil {
+			return RuntimeInstallation{}, err
+		}
+		if err := validateRuntimeDir(runtimeDir); err != nil {
+			return RuntimeInstallation{}, err
+		}
+		return RuntimeInstallation{
+			RuntimeDir: runtimeDir,
+			Python:     runtimePythonOverride(),
+			Version:    strings.TrimSpace(os.Getenv("AICODE_RUNTIME_VERSION")),
+			Source:     "environment",
+		}, nil
+	}
+
+	if explicitManifest := os.Getenv("AICODE_INSTALL_MANIFEST"); explicitManifest != "" {
+		return runtimeInstallationFromManifest(explicitManifest)
+	}
+
+	if executable, err := os.Executable(); err == nil {
+		manifestPath := manifestPathForExecutable(executable)
+		if _, statErr := os.Stat(manifestPath); statErr == nil {
+			return runtimeInstallationFromManifest(manifestPath)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return RuntimeInstallation{}, fmt.Errorf("检查安装 manifest 失败: %w", statErr)
+		}
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
+		return RuntimeInstallation{}, err
+	}
+	runtimeDir, err := sourceRuntimeFrom(cwd)
+	if err != nil {
+		return RuntimeInstallation{}, err
+	}
+	return RuntimeInstallation{
+		RuntimeDir: runtimeDir,
+		Python:     runtimePythonOverride(),
+		Version:    strings.TrimSpace(os.Getenv("AICODE_RUNTIME_VERSION")),
+		Source:     "source-checkout",
+	}, nil
+}
+
+func sourceRuntimeFrom(start string) (string, error) {
+	cwd, err := filepath.Abs(start)
+	if err != nil {
 		return "", err
 	}
-
 	for {
 		candidate := filepath.Join(cwd, "runtime")
-		if _, err := os.Stat(filepath.Join(candidate, "app", "server", "main.py")); err == nil {
+		if err := validateRuntimeDir(candidate); err == nil {
 			return candidate, nil
 		}
 
@@ -199,4 +267,101 @@ func RuntimeDir() (string, error) {
 	}
 
 	return "", fmt.Errorf("未找到 runtime/app/server/main.py，可设置 AICODE_RUNTIME_DIR")
+}
+
+func runtimeInstallationFromManifest(path string) (RuntimeInstallation, error) {
+	manifestPath, err := filepath.Abs(path)
+	if err != nil {
+		return RuntimeInstallation{}, err
+	}
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return RuntimeInstallation{}, fmt.Errorf("读取安装 manifest 失败: %w", err)
+	}
+	var manifest installManifest
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		return RuntimeInstallation{}, fmt.Errorf("解析安装 manifest 失败: %w", err)
+	}
+	if manifest.SchemaVersion != installManifestSchemaVersion {
+		return RuntimeInstallation{}, fmt.Errorf(
+			"不支持的安装 manifest schema_version %d，当前支持 %d",
+			manifest.SchemaVersion,
+			installManifestSchemaVersion,
+		)
+	}
+	if strings.TrimSpace(manifest.Version) == "" {
+		return RuntimeInstallation{}, fmt.Errorf("安装 manifest 缺少 version")
+	}
+
+	root := filepath.Dir(manifestPath)
+	runtimeDir, err := resolveManifestPath(root, manifest.RuntimeDir, "runtime_dir")
+	if err != nil {
+		return RuntimeInstallation{}, err
+	}
+	python, err := resolveManifestPath(root, manifest.Python, "python")
+	if err != nil {
+		return RuntimeInstallation{}, err
+	}
+	if err := validateRuntimeDir(runtimeDir); err != nil {
+		return RuntimeInstallation{}, err
+	}
+	info, err := os.Stat(python)
+	if err != nil {
+		return RuntimeInstallation{}, fmt.Errorf("安装 manifest 的 Python 不可用: %w", err)
+	}
+	if info.IsDir() {
+		return RuntimeInstallation{}, fmt.Errorf("安装 manifest 的 python 指向目录: %s", python)
+	}
+	return RuntimeInstallation{
+		RuntimeDir: runtimeDir,
+		Python:     python,
+		Version:    manifest.Version,
+		Source:     "install-manifest",
+	}, nil
+}
+
+func manifestPathForExecutable(executable string) string {
+	resolved := executable
+	if evaluated, err := filepath.EvalSymlinks(executable); err == nil {
+		resolved = evaluated
+	}
+	prefix := filepath.Dir(filepath.Dir(resolved))
+	return filepath.Join(prefix, "lib", "aicode", "manifest.json")
+}
+
+func resolveManifestPath(root string, value string, field string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("安装 manifest 缺少 %s", field)
+	}
+	if filepath.IsAbs(value) {
+		return "", fmt.Errorf("安装 manifest 的 %s 必须是相对路径", field)
+	}
+	resolved := filepath.Join(root, filepath.Clean(value))
+	relative, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return "", fmt.Errorf("解析安装 manifest 的 %s 失败: %w", field, err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("安装 manifest 的 %s 不能逃逸安装目录", field)
+	}
+	return resolved, nil
+}
+
+func validateRuntimeDir(runtimeDir string) error {
+	entrypoint := filepath.Join(runtimeDir, "app", "server", "main.py")
+	info, err := os.Stat(entrypoint)
+	if err != nil {
+		return fmt.Errorf("Runtime entrypoint 不可用 %s: %w", entrypoint, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("Runtime entrypoint 不是文件: %s", entrypoint)
+	}
+	return nil
+}
+
+func runtimePythonOverride() string {
+	if explicit := strings.TrimSpace(os.Getenv("AICODE_RUNTIME_PYTHON")); explicit != "" {
+		return explicit
+	}
+	return "python3"
 }

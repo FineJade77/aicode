@@ -1,19 +1,32 @@
-.PHONY: build install deps deps-go deps-python test test-go test-python compile-python tidy-go lock-python
+.PHONY: build install test-install-e2e deps deps-go deps-python test test-go test-python compile-python tidy-go lock-python
 
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 GOENV := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE)
 BINDIR ?= $(CURDIR)/bin
 AICODE_BIN ?= $(BINDIR)/aicode
-INSTALL_BINDIR ?= $(HOME)/.local/bin
+AICODE_VERSION ?= $(shell tr -d '[:space:]' < $(CURDIR)/VERSION)
+INSTALL_PREFIX ?= $(HOME)/.local
+INSTALL_PYTHON ?= python3
+INSTALL_SYSTEM_SITE_PACKAGES ?= 0
+INSTALL_SKIP_DEPS ?= 0
+INSTALL_FLAGS := $(if $(filter 1,$(INSTALL_SYSTEM_SITE_PACKAGES)),--system-site-packages,) $(if $(filter 1,$(INSTALL_SKIP_DEPS)),--skip-deps,)
 
 build:
 	mkdir -p $(BINDIR)
 	$(GOENV) go build -o $(AICODE_BIN) ./cli
 
 install: build
-	mkdir -p $(INSTALL_BINDIR)
-	install -m 0755 $(AICODE_BIN) $(INSTALL_BINDIR)/aicode
+	"$(INSTALL_PYTHON)" scripts/install.py \
+		--source-root "$(CURDIR)" \
+		--prefix "$(INSTALL_PREFIX)" \
+		--version "$(AICODE_VERSION)" \
+		--cli "$(AICODE_BIN)" \
+		--python "$(INSTALL_PYTHON)" \
+		$(INSTALL_FLAGS)
+
+test-install-e2e:
+	bash scripts/test-install-e2e.sh
 
 deps: deps-go deps-python
 
