@@ -15,6 +15,7 @@ from app.server.main import (
     CreateSessionRequest,
     MessageRequest,
     bind_message_request_to_session,
+    cancel_run,
     create_session,
     daemon_status,
     emit_run_queued,
@@ -113,6 +114,65 @@ async def test_process_session_runs_serializes_queued_messages(monkeypatch: pyte
     assert seen == ["first", "second"]
     assert [event["summary"] for event in finals] == ["first", "second"]
     assert [event["run_id"] for event in finals] == [first_run.run_id, second_run.run_id]
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_stops_current_and_continues_queue(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
+    second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN")
+    first_run = session.enqueue_agent_run(first)
+    second_run = session.enqueue_agent_run(second)
+    first_started = asyncio.Event()
+    seen: list[str] = []
+    approval_ids: list[str] = []
+
+    async def fake_run_agent(target_session: Session, request: MessageRequest) -> None:
+        seen.append(request.message)
+        if request.message == "first":
+            approval = target_session.create_approval("tool", {"tool": "bash"})
+            approval_ids.append(approval.approval_id)
+            first_started.set()
+            await target_session.wait_for_approval(approval.approval_id)
+        await target_session.events.put({"type": "final", "summary": request.message})
+
+    monkeypatch.setattr("app.server.main.run_agent", fake_run_agent)
+    server.ensure_session_runner(session)
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+
+    response = await cancel_run(session.session_id)
+    assert response == {"status": "cancelled", "run_id": first_run.run_id, "queued": 1}
+
+    assert session.agent_runner_task is not None
+    await asyncio.wait_for(session.agent_runner_task, timeout=1)
+
+    events = session.events.events_after(0)
+    cancelled = [event for event in events if event["type"] == "run.cancelled"]
+    expired = [event for event in events if event["type"] == "approval.expired"]
+    finals = [event for event in events if event["type"] == "final"]
+    assert seen == ["first", "second"]
+    assert cancelled[0]["run_id"] == first_run.run_id
+    assert expired[0]["approval_id"] == approval_ids[0]
+    assert session.approvals[approval_ids[0]].accepted is False
+    assert [(event["run_id"], event.get("status")) for event in finals] == [
+        (first_run.run_id, "cancelled"),
+        (second_run.run_id, None),
+    ]
+    assert session.to_dict()["agent"]["running"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_is_idempotent_when_session_is_idle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    monkeypatch.setattr(server, "store", store)
+    session = store.create(workspace=str(tmp_path), language="zh-CN")
+
+    response = await cancel_run(session.session_id)
+
+    assert response == {"status": "idle", "run_id": None, "queued": 0}
 
 
 @pytest.mark.asyncio

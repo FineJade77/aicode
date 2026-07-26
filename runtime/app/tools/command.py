@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Sequence
 
 
+PROCESS_DRAIN_TIMEOUT_SECONDS = 1.0
+
+
 @dataclass(slots=True)
 class CommandResult:
     command: list[str]
@@ -75,21 +78,23 @@ async def collect_process_result(proc: asyncio.subprocess.Process, command: list
 
 
 async def terminate_process(proc: asyncio.subprocess.Process) -> tuple[bytes | None, bytes | None]:
-    if proc.returncode is None:
-        killed_group = False
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            killed_group = True
-        except (ProcessLookupError, PermissionError):
-            pass
-        if not killed_group and proc.returncode is None:
-            with suppress(ProcessLookupError):
-                proc.kill()
+    # Every process is created with start_new_session=True, so its PID is also
+    # the process-group ID. Kill that group even if the shell leader has already
+    # exited: a background child may still own the captured stdout/stderr pipes.
+    killed_group = False
     try:
-        return await proc.communicate()
-    except (RuntimeError, ValueError):
+        os.killpg(proc.pid, signal.SIGKILL)
+        killed_group = True
+    except (ProcessLookupError, PermissionError):
+        pass
+    if not killed_group and proc.returncode is None:
+        with suppress(ProcessLookupError):
+            proc.kill()
+    try:
+        return await asyncio.wait_for(proc.communicate(), timeout=PROCESS_DRAIN_TIMEOUT_SECONDS)
+    except (TimeoutError, RuntimeError, ValueError):
         with suppress(Exception):
-            await proc.wait()
+            await asyncio.wait_for(proc.wait(), timeout=PROCESS_DRAIN_TIMEOUT_SECONDS)
         return None, None
 
 

@@ -312,6 +312,8 @@ func RenderEvent(event map[string]any) {
 		fmt.Println(stringValue(event["message"]))
 	case "run.started":
 		fmt.Println(stringValue(event["message"]))
+	case "run.cancelled":
+		fmt.Println(stringValue(event["message"]))
 	case "assistant.delta":
 		fmt.Print(stringValue(event["text"]))
 	case "tool.started":

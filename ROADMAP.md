@@ -59,6 +59,7 @@
 - [x] `GET /v1/sessions/{id}/events` SSE 事件流。
 - [x] `assistant.delta` 流式输出。
 - [x] `run.started`、`tool.started`、`tool.output`、`approval.*`、`edit.*`、`usage.recorded`、`final` 等事件。
+- [x] 当前 run 取消、阶段/最后进度观测，以及取消后继续消费 session 队列。
 
 ### 3.2 Agent Loop v2
 

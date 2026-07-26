@@ -7,7 +7,7 @@
   "properties": {
     "type": {
       "type": "string",
-      "description": "Machine-readable event type. v2 SSE stream emits: session.created, run.queued, run.started, assistant.delta, tool.started, tool.output, tool.denied, tool.error, tool.rejected, approval.requested, edit.applied, edit.rejected, edit.auto_approved, usage.recorded, context.budget, error, final."
+      "description": "Machine-readable event type. v2 SSE stream emits: session.created, run.queued, run.started, run.cancelled, assistant.delta, tool.started, tool.output, tool.denied, tool.error, tool.rejected, approval.requested, approval.expired, edit.applied, edit.rejected, edit.auto_approved, usage.recorded, context.budget, error, final."
     },
     "session_id": {
       "type": "string"

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.sessions.store import SessionEvents, SessionStore, normalize_cache_limit, normalize_event_limit
+from app.sessions.store import Session, SessionEvents, SessionStore, normalize_cache_limit, normalize_event_limit
 
 
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
@@ -474,6 +474,21 @@ def test_session_with_active_agent_runner_is_never_evicted(tmp_path: Path) -> No
             pass
 
     asyncio.run(run())
+
+
+def test_session_status_exposes_active_run_progress() -> None:
+    session = Session(session_id="sess_test", workspace="/repo", language="zh-CN")
+
+    session.start_agent_run("run_test")
+    session.mark_agent_progress("tool.bash")
+    agent = session.to_dict()["agent"]
+
+    assert agent["current_run_id"] == "run_test"
+    assert agent["stage"] == "tool.bash"
+    assert agent["started_at"] is not None
+    assert agent["last_progress_at"] is not None
+    assert agent["elapsed_seconds"] >= 0
+    assert agent["stalled_seconds"] >= 0
 
 
 def test_normalize_cache_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch) -> None:

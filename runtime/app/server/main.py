@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -198,6 +198,65 @@ async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
     return {"status": "rejected", "approval_id": request.approval_id}
 
 
+@app.post("/v1/sessions/{session_id}/cancel")
+async def cancel_run(session_id: str) -> dict[str, Any]:
+    session = require_session(session_id)
+    task = session.agent_runner_task
+    run_id = session.current_run_id
+    if task is None or task.done() or run_id is None:
+        return {
+            "status": "idle",
+            "run_id": None,
+            "queued": session.agent_queue.qsize(),
+        }
+
+    session.mark_agent_progress("cancelling")
+    task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        await task
+    session.agent_runner_task = None
+
+    for approval in session.expire_pending_approvals():
+        await session.events.put(
+            {
+                "type": "approval.expired",
+                "run_id": run_id,
+                "approval_id": approval.approval_id,
+                "kind": approval.kind,
+                "message": "当前任务已取消，待确认操作已过期。",
+            }
+        )
+
+    message = "当前任务已取消。"
+    audit.record(
+        "run.cancelled",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={"run_id": run_id, "queued": session.agent_queue.qsize()},
+    )
+    await session.events.put(
+        {
+            "type": "run.cancelled",
+            "run_id": run_id,
+            "status": "cancelled",
+            "message": message,
+        }
+    )
+    await session.events.put(
+        {
+            "type": "final",
+            "run_id": run_id,
+            "status": "cancelled",
+            "summary": message,
+        }
+    )
+
+    queued = session.agent_queue.qsize()
+    if queued:
+        ensure_session_runner(session)
+    return {"status": "cancelled", "run_id": run_id, "queued": queued}
+
+
 @app.get("/v1/usage")
 async def usage(today: bool = False, session_id: str | None = None) -> dict[str, Any]:
     day = datetime_utc_today() if today else None
@@ -285,6 +344,7 @@ async def process_session_runs(session: Session) -> None:
 
 
 async def process_session_run(session: Session, queued: QueuedAgentRun) -> None:
+    session.start_agent_run(queued.run_id)
     session.events.set_current_run_id(queued.run_id)
     try:
         await emit_run_started(session, queued)
@@ -312,6 +372,13 @@ async def emit_run_queued(session: Session, queued: QueuedAgentRun, was_running:
 
 
 async def emit_run_started(session: Session, queued: QueuedAgentRun) -> None:
+    session.mark_agent_progress("agent.loop")
+    audit.record(
+        "run.started",
+        session_id=session.session_id,
+        workspace=session.workspace,
+        data={"run_id": queued.run_id},
+    )
     await session.events.put(
         {
             "type": "run.started",

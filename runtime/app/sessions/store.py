@@ -164,10 +164,21 @@ class Session:
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
     agent_queue: asyncio.Queue[QueuedAgentRun] = field(default_factory=asyncio.Queue)
     agent_runner_task: asyncio.Task[Any] | None = None
+    current_run_id: str | None = None
+    current_run_stage: str | None = None
+    current_run_started_at: datetime | None = None
+    current_run_last_progress_at: datetime | None = None
     auto_accept_edits: bool = False
     message_appender: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        elapsed_seconds = None
+        stalled_seconds = None
+        if self.current_run_started_at is not None:
+            elapsed_seconds = max(0, int((now - self.current_run_started_at).total_seconds()))
+        if self.current_run_last_progress_at is not None:
+            stalled_seconds = max(0, int((now - self.current_run_last_progress_at).total_seconds()))
         return {
             "session_id": self.session_id,
             "workspace": self.workspace,
@@ -179,6 +190,12 @@ class Session:
             "agent": {
                 "running": self.agent_runner_active(),
                 "queued": self.agent_queue.qsize(),
+                "current_run_id": self.current_run_id,
+                "stage": self.current_run_stage,
+                "started_at": self.current_run_started_at.isoformat() if self.current_run_started_at else None,
+                "last_progress_at": self.current_run_last_progress_at.isoformat() if self.current_run_last_progress_at else None,
+                "elapsed_seconds": elapsed_seconds,
+                "stalled_seconds": stalled_seconds,
             },
         }
 
@@ -199,8 +216,25 @@ class Session:
         except asyncio.QueueEmpty:
             return None
 
+    def start_agent_run(self, run_id: str) -> None:
+        now = datetime.now(timezone.utc)
+        self.current_run_id = run_id
+        self.current_run_stage = "starting"
+        self.current_run_started_at = now
+        self.current_run_last_progress_at = now
+
+    def mark_agent_progress(self, stage: str) -> None:
+        if self.current_run_id is None:
+            return
+        self.current_run_stage = stage
+        self.current_run_last_progress_at = datetime.now(timezone.utc)
+
     def finish_agent_run(self) -> None:
         self.agent_queue.task_done()
+        self.current_run_id = None
+        self.current_run_stage = None
+        self.current_run_started_at = None
+        self.current_run_last_progress_at = None
 
     def agent_runner_active(self) -> bool:
         return self.agent_runner_task is not None and not self.agent_runner_task.done()
@@ -224,6 +258,13 @@ class Session:
 
     def expire_approval(self, approval_id: str) -> bool:
         return self.resolve_approval(approval_id, accepted=False)
+
+    def expire_pending_approvals(self) -> list[PendingApproval]:
+        expired: list[PendingApproval] = []
+        for approval in self.approvals.values():
+            if approval.accepted is None and self.expire_approval(approval.approval_id):
+                expired.append(approval)
+        return expired
 
     async def wait_for_approval(self, approval_id: str, timeout_seconds: float = 300.0) -> bool | None:
         approval = self.approvals.get(approval_id)

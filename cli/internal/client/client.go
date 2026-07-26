@@ -43,6 +43,12 @@ type SendMessageResponse struct {
 	RunID  string `json:"run_id"`
 }
 
+type CancelRunResponse struct {
+	Status string `json:"status"`
+	RunID  string `json:"run_id"`
+	Queued int    `json:"queued"`
+}
+
 type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
 }
@@ -104,6 +110,14 @@ func (c Client) CreateSession(ctx context.Context, payload CreateSessionRequest)
 func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendMessageRequest) (SendMessageResponse, error) {
 	var out SendMessageResponse
 	if err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/messages", payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) CancelRun(ctx context.Context, sessionID string) (CancelRunResponse, error) {
+	var out CancelRunResponse
+	if err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/cancel", struct{}{}, &out); err != nil {
 		return out, err
 	}
 	return out, nil

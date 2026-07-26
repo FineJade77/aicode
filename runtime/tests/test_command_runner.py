@@ -1,10 +1,11 @@
 import asyncio
+import shlex
 import sys
 from pathlib import Path
 
 import pytest
 
-from app.tools.command import run_command
+from app.tools.command import run_command, run_shell_command
 
 
 def grandchild_marker_command(marker: Path) -> str:
@@ -39,6 +40,19 @@ async def test_run_command_timeout_kills_process_group(tmp_path: Path) -> None:
     assert result.timed_out
     await asyncio.sleep(1)
     assert not marker.exists(), "grandchild process leaked past the command timeout"
+
+
+@pytest.mark.asyncio
+async def test_shell_timeout_kills_background_child_after_shell_exits(tmp_path: Path) -> None:
+    marker = tmp_path / "background_marker"
+    child = f"import pathlib, time; time.sleep(0.8); pathlib.Path({str(marker)!r}).write_text('leaked', encoding='utf-8')"
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(child)} &"
+
+    result = await asyncio.wait_for(run_shell_command(command, cwd=tmp_path, timeout=0.05), timeout=2)
+
+    assert result.timed_out
+    await asyncio.sleep(1)
+    assert not marker.exists(), "background child leaked after its shell leader exited"
 
 
 @pytest.mark.asyncio

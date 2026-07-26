@@ -30,6 +30,7 @@ docs/       设计与开发计划
 - Policy Engine 三态闸门：`allow` / `ask` / `deny`。
 - review 模式只读；commit-message 模式无工具，只根据 CLI 提供的 diff 生成提交信息。
 - SQLite session/message 持久化，支持 resume。
+- 同一 session 的 run 串行排队；支持查看当前阶段并取消卡住的 run。
 - 本地 JSONL 审计日志，`edit.applied` 记录 `diff_bytes` 与 `patch_hash`，不记录完整 diff。
 - token/cost 本地统计，支持按天、session、purpose/model/provider 查看。
 - 多仓库只读分析。
@@ -193,6 +194,64 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 如果 daemon 重启或 session 恢复时发现未决 approval，Runtime 会把这些 approval 标记为 expired/rejected，并发出对应事件，避免恢复后一直悬挂等待。
 
 审计日志会记录 session、tool call、approval、edit、usage、final、error、sandbox 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；sandbox 审计记录 command hash 而不是原始命令。
+
+### 排队或疑似卡死时排查
+
+同一 session 一次只执行一个 run，后续消息会排队。先查看当前 run 的状态：
+
+```bash
+aicode resume --last
+# 或查看全部 session
+aicode sessions
+```
+
+返回结果中的 `agent` 字段包含：
+
+- `current_run_id`: 当前 run。
+- `stage`: 当前阶段，例如 `model.request`、`model.stream`、`tool.bash`、`approval.edit`。
+- `elapsed_seconds`: 当前 run 已运行多久。
+- `stalled_seconds`: 距离最近一次进度更新多久。
+- `queued`: 后面还有多少个 run。
+
+取消当前 run：
+
+```bash
+aicode cancel --last
+# 或
+aicode cancel <session_id>
+```
+
+取消会向 Runtime 的当前任务发送 cancellation；如果正在运行 `bash`，其进程组也会被终止。当前 run 会写入 `run.cancelled` 和 `final` 事件，队列中的下一条任务随后自动开始。
+
+实时看 Runtime 和结构化审计日志：
+
+```bash
+tail -f ~/.aicode/runtime.log
+tail -f ~/.aicode/audit.jsonl
+```
+
+按 session 或 run 过滤审计事件：
+
+```bash
+tail -f ~/.aicode/audit.jsonl \
+  | jq -c 'select(.session_id == "sess_xxx" or .data.run_id == "run_xxx")'
+```
+
+判断卡点时可以看最后一组事件：
+
+- `run.started` 之后长期没有 `tool.started`：通常卡在模型请求或模型流。
+- 有 `tool.started`、没有对应 `tool.finished`：卡在该工具；`bash` 受配置的命令超时限制。
+- 最后是 `approval.requested`：CLI 正在等待确认，默认最多等待 300 秒。
+- `runtime.log` 出现异常但没有 `final`：属于 Runtime 异常路径，应保留日志和相应 `session_id` / `run_id`。
+
+shell 命令把服务放到后台时，shell 可能先退出，而后台进程继续持有 Runtime 捕获的 stdout/stderr 管道。Runtime 的超时和取消清理会始终按创建时的进程组 ID 终止整个进程组，并对管道排空设置二次超时，避免这类后台子进程让 run 永久悬挂。
+
+旧版本尚未包含 `cancel` 时，可用下面的兜底方式终止整个 Runtime；这会中断所有 session 的当前 run：
+
+```bash
+aicode daemon stop
+aicode daemon start
+```
 
 ## 用户级配置
 

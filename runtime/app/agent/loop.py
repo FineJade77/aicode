@@ -54,9 +54,11 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
     result: CompletionResult | None = None
 
     async def on_delta(text: str) -> None:
+        session.mark_agent_progress("model.stream")
         await session.events.put({"type": "assistant.delta", "text": text})
 
     for _step in range(budget.max_steps):
+        session.mark_agent_progress("model.request")
         result = await runtime.model_router.stream_complete(
             purpose=purpose, system=system, messages=history, tools=tools,
             on_text_delta=on_delta, max_tokens=budget.max_tokens_per_call,
@@ -76,6 +78,7 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
             break
 
         for call in result.tool_calls:
+            session.mark_agent_progress(f"tool.{call.name}")
             output, applied = await execute_gated(session, request, call, runtime, policy, context)
             applied_edits += applied
             reply = tool_message(call.id, output)
@@ -87,6 +90,7 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
         note = user_note(localized(request.language, BUDGET_NOTE_ZH, BUDGET_NOTE_EN))
         history.append(note)
         persist_message(session, note)
+        session.mark_agent_progress("model.request")
         result = await runtime.model_router.stream_complete(
             purpose=purpose, system=system, messages=history, tools=[], on_text_delta=on_delta,
         )
@@ -222,6 +226,7 @@ async def execute_gated(
             )
             return f"[{reason}]", 0
 
+    session.mark_agent_progress(f"tool.{call.name}")
     result = await run_tool(call.name, call.arguments, context)
     if result.success:
         output = truncate_tool_output(call.name, result.text)
@@ -370,6 +375,7 @@ def elapsed_ms(started: float) -> int:
 
 async def request_approval(session: Session, request: Any, kind: str, payload: dict[str, Any]) -> bool | None:
     approval = session.create_approval(kind, payload)
+    session.mark_agent_progress(f"approval.{kind}")
     message = localized(request.language, "等待用户确认", "waiting for user approval")
     await session.events.put({"type": "approval.requested", "approval_id": approval.approval_id, "kind": kind, "message": message, **payload})
     return await session.wait_for_approval(approval.approval_id)

@@ -299,6 +299,7 @@ Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清
 - `GET /v1/sessions/{session_id}`
 - `POST /v1/sessions/{session_id}/messages`
 - `GET /v1/sessions/{session_id}/events`
+- `POST /v1/sessions/{session_id}/cancel`
 - `POST /v1/sessions/{session_id}/approve`
 - `POST /v1/sessions/{session_id}/reject`
 - `GET /v1/usage`
@@ -307,6 +308,8 @@ Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清
 - `GET /v1/review/rules`
 
 所有 Runtime API 默认只监听本机地址，并通过 CLI 写入的 token 做本地鉴权。401 通常表示 CLI 读取的 daemon token 与当前 Runtime 不一致。
+
+运行中的 session 还在内存中维护 `current_run_id`、当前阶段、开始时间和最后进度时间。`GET /v1/sessions/{id}` 与 session 列表会返回这些字段，用于区分模型流、工具执行和审批等待。取消当前 run 时 Runtime 会取消 runner task；命令工具会在收到 cancellation 后终止整个子进程组，然后队列继续消费下一条 run。
 
 ## 14. Persistence
 

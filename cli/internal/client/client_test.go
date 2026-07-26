@@ -136,6 +136,32 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 	}
 }
 
+func TestCancelRunReturnsCancelledRun(t *testing.T) {
+	var gotPath string
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		if r.Method != http.MethodPost {
+			return nil, fmt.Errorf("method = %s, want POST", r.Method)
+		}
+		return jsonResponse(`{"status":"cancelled","run_id":"run_123","queued":2}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	response, err := api.CancelRun(ctx, "sess_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/sessions/sess_1/cancel" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if response.Status != "cancelled" || response.RunID != "run_123" || response.Queued != 2 {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
 func TestApproveSendsAcceptAll(t *testing.T) {
 	var got map[string]any
 	c := New("http://runtime.test", "")

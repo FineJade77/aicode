@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/FineJade77/aicode/cli/internal/cmd/agentrun"
+	"github.com/FineJade77/aicode/cli/internal/cmd/cancelcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/commitmsgcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/configcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/daemoncmd"
@@ -59,6 +60,8 @@ func run(args []string) error {
 		return configcmd.ReviewRules(cfg)
 	case "resume":
 		return resumecmd.Run(cfg, args[1:])
+	case "cancel":
+		return cancelcmd.Run(cfg, args[1:])
 	case "review":
 		return agentrun.Run(cfg, "review", "请审查当前代码变更。")
 	case "diff":
@@ -99,8 +102,10 @@ func printHelp() {
 	  aicode --sandbox docker lint
 	  aicode sessions
   aicode resume --last
-  aicode resume --last "继续刚才的任务"
-  aicode resume <session_id> "继续这个会话"
+	  aicode resume --last "继续刚才的任务"
+	  aicode resume <session_id> "继续这个会话"
+	  aicode cancel --last
+	  aicode cancel <session_id>
   aicode usage [--json]
   aicode usage --today [--json]
   aicode usage --session <session_id> [--json]
