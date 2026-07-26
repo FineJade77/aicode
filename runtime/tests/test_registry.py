@@ -67,6 +67,32 @@ async def test_read_file_protected(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_read_file_rejects_mandatory_git_config(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text(
+        '[remote "origin"]\nurl = https://token@example.test/repo.git\n',
+        encoding="utf-8",
+    )
+
+    result = await run_tool("read_file", {"path": ".git/config"}, make_context(tmp_path))
+
+    assert not result.success
+    assert "受保护路径" in result.error
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (tmp_path / "link.txt").symlink_to(outside)
+
+    result = await run_tool("read_file", {"path": "link.txt"}, make_context(tmp_path))
+
+    assert not result.success
+    assert "workspace" in result.error
+
+
+@pytest.mark.asyncio
 async def test_search_finds_matches(tmp_path):
     (tmp_path / "a.py").write_text("def login():\n    pass\n", encoding="utf-8")
     (tmp_path / "b.md").write_text("login docs\n", encoding="utf-8")
@@ -85,6 +111,46 @@ async def test_search_excludes_protected_path(tmp_path):
     assert "app.py" in result.text
     assert ".env" not in result.text
     assert "SECRET" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_search_python_fallback_rejects_symlink_escape(tmp_path, monkeypatch):
+    outside = tmp_path.parent / "outside-search.txt"
+    outside.write_text("provider needle secret\n", encoding="utf-8")
+    (tmp_path / "linked.py").symlink_to(outside)
+    monkeypatch.setattr("app.tools.registry.shutil.which", lambda _name: None)
+
+    result = await run_tool("search", {"query": "needle"}, make_context(tmp_path))
+
+    assert result.success
+    assert "linked.py" not in result.text
+    assert "provider needle secret" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_list_files_hides_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "outside-list"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    result = await run_tool("list_files", {"max_depth": 2}, make_context(tmp_path))
+
+    assert result.success
+    assert "linked-dir" not in result.text
+    assert "secret.txt" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_tool_output_redacts_known_runtime_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+    (tmp_path / "ordinary.txt").write_text("value=provider-secret-value\n", encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "ordinary.txt"}, make_context(tmp_path))
+
+    assert result.success
+    assert "provider-secret-value" not in result.text
+    assert "[REDACTED]" in result.text
 
 
 @pytest.mark.asyncio
@@ -172,6 +238,20 @@ async def test_related_files_skips_protected_matches(tmp_path):
     assert result.success
     paths = [item["path"] for item in result.data["related"]]
     assert "secret/test_auth.py" not in paths
+
+
+@pytest.mark.asyncio
+async def test_related_files_skips_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "outside-related.py"
+    outside.write_text("from src.auth import login\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
+    (tmp_path / "linked_auth.py").symlink_to(outside)
+
+    result = await run_tool("related_files", {"path": "src/auth.py"}, make_context(tmp_path))
+
+    assert result.success
+    assert "linked_auth.py" not in result.text
 
 
 @pytest.mark.asyncio

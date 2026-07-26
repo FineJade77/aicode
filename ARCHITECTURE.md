@@ -9,7 +9,7 @@
 - 用户通过 Go CLI 发起对话、代码审查、diff 分析、测试修复、提交信息生成等任务。
 - Python Runtime 作为本机 daemon 提供会话、模型调用、工具执行、审批、SSE 事件和持久化能力。
 - Agent 默认在用户的本地 workspace 内工作，读写都经过策略层和审批层。
-- Docker Sandbox 是 CLI 侧的本地命令隔离能力，用于安全运行 `test`、`build`、`lint`。
+- Docker Sandbox 是 Runtime ExecutionBackend 的本地隔离能力，用于安全运行 `test`、`build`、`lint`。
 
 非目标：
 
@@ -26,7 +26,7 @@ User
   v
 Go CLI
   |-- chat / review / diff / test / explain / commit-message
-  |-- config / sessions / usage / models / doctor / review-rules
+  |-- config / trust / sessions / usage / models / doctor / review-rules
   |-- --sandbox docker test|build|lint
   |
   | HTTP + SSE, localhost token auth
@@ -78,6 +78,7 @@ CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置
 - `config`: 查看或修改用户配置。
 - `daemon`: 管理 Runtime daemon。
 - `doctor`: 只读检查安装、版本、Python/依赖、端口、provider 和 Docker；不启动 daemon，不请求外部 provider。
+- `trust`: 查看、授予或移除仓库外 Project Trust。
 - `--sandbox docker test|build|lint`: 在 Docker 隔离环境运行项目命令。
 
 CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
@@ -95,6 +96,8 @@ CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已�
 - 不记录原始命令的 execution audit。
 
 Agent `bash`、`rg` 搜索、review git 命令和编辑后的模型验证都走 Host backend。`test/build/lint` sandbox 由 Docker backend 执行，保持 workspace 只读、默认禁网、`.env*` 遮蔽和资源限制。正常 `daemon stop` 会先请求 Runtime 取消全部活跃 execution，再终止 daemon。
+
+Host backend 不继承完整 Runtime 环境：默认只复制 PATH、locale、terminal 和必要 toolchain root 等最小非敏感 allowlist，并把 HOME/XDG/TMP 重定向到按 canonical workspace 隔离、权限为 `0700` 的 execution home。API key、Runtime token、credentials、全局 build cache 路径和任意未列出的自定义变量不会进入项目子进程。Runtime 内部调用 `git`/`rg` 时会先解析绝对 executable，并拒绝 workspace PATH hijack。
 
 ### 3.2 Installed Runtime
 
@@ -233,7 +236,9 @@ Policy 层对每个工具调用做本地判定：
 - `review`、`commit_message`、`explain` 这类只读 mode 中，非只读工具会被拒绝。
 - `edit_file` 默认进入 edit approval。
 - `bash` 根据命令风险分类为 allow、ask 或 deny。
-- 命中保护路径、越界路径或危险命令时，会拒绝或要求审批。
+- `bash` 同时解析 shell statement、wrapper、路径参数和 glob；命中 mandatory/project protected path、home、workspace/`../`/symlink 逃逸或危险命令时直接 deny。
+- `untrusted` workspace 的项目测试命令至少进入 ask；只有显式 trust 后的低风险项目命令可以自动执行。
+- deny 不能由 approval 覆盖。
 
 审批事件通过 SSE 暴露给 CLI：
 
@@ -243,6 +248,12 @@ Policy 层对每个工具调用做本地判定：
 - `approval.expired`
 
 Pending approval 的恢复策略是保守的：Runtime 重启或 session 恢复时，未完成审批会被标记为 expired/rejected，并写入对应事件，避免内存里的 `asyncio.Event` 丢失后造成悬挂状态。
+
+### 8.1 Project Trust
+
+TrustStore 默认位于 `~/.aicode/trust.json` 或 `$AICODE_HOME/trust.json`，使用版本化 schema、`0600` 权限和原子写入。key 是 canonical workspace 路径的 SHA-256；entry 绑定路径、`trusted` level、credential-free Git remote 和更新时间。
+
+仓库内 `.aicode/config.json`、rules 和 memory 均不能声明 trust。Git remote 与记录不一致、workspace 消失或记录不存在时，Runtime 返回 `untrusted`。CLI 通过 `GET/POST /v1/trust` 和 `POST /v1/trust/remove` 管理这份仓库外状态。
 
 ## 9. Edit Path
 
@@ -298,7 +309,7 @@ Runtime prompt 由几层组成：
 
 - `defaultLanguage`: 项目默认输出语言。
 - `commands.test/build/lint`: 项目推荐命令。
-- `protectedPaths`: 需要写入保护的路径。
+- `protectedPaths`: 项目追加的保护路径；Runtime/CLI 始终与 `.env*`、SSH/GPG/cloud credentials、包管理凭证和私钥 mandatory patterns 合并，仓库配置不能移除系统规则。
 - `review`: 审查规则和严重级别设置。
 - `workspaces`: 多 workspace root。
 
@@ -326,6 +337,11 @@ Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清
 主要 API：
 
 - `GET /v1/daemon/status`
+- `GET /v1/trust`
+- `POST /v1/trust`
+- `POST /v1/trust/remove`
+- `POST /v1/executions`
+- `POST /v1/executions/{execution_id}/cancel`
 - `POST /v1/sessions`
 - `GET /v1/sessions`
 - `GET /v1/sessions/{session_id}`
@@ -353,6 +369,7 @@ Runtime 持久化以下内容：
 - approval 状态。
 - usage records。
 - audit JSONL。
+- 仓库外 Project Trust store。
 
 历史消息会在接近上下文预算时被压缩，压缩结果作为摘要继续参与后续 prompt。
 
@@ -366,7 +383,7 @@ Runtime 持久化以下内容：
 - edit proposal / applied。
 - `execution.started` / `execution.finished`（覆盖 Host 与 Docker）。
 
-敏感字段会尽量脱敏，例如 API key、token、authorization header 和常见 secret 环境变量。写入 patch 时，审计记录使用 `patch_hash` 等摘要信息辅助追踪，避免不必要地扩散完整敏感内容。
+敏感字段会尽量脱敏，例如 API key、token、authorization header 和常见 secret 环境变量；已知 Runtime secret 也会从 neutral fields、tool output 和 SSE 中替换。写入 patch 时，审计记录使用 `patch_hash` 等摘要信息辅助追踪，避免不必要地扩散完整敏感内容。
 
 Usage 记录按模型、session 和时间聚合 token 与成本估算。成本来自本地 `pricing` 配置，适合做近似统计，不等同于 provider 账单。
 
@@ -405,7 +422,10 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 
 - 仓库内容不可信，尤其是 prompt、文档和脚本。
 - 模型输出不可信，必须经过工具 schema、policy 和 approval。
+- workspace 默认 untrusted；Project Trust 只保存在仓库外。
 - 写入必须限制在 workspace root 内。
+- file 与 shell 共享 mandatory/project protected path 和 symlink 边界。
+- Host 子进程使用环境变量 allowlist，不能继承 provider/runtime secret。
 - 项目规则不能覆盖系统安全策略。
 - 风险 bash 命令必须可审计、可拒绝。
 - Runtime token 只用于本机 CLI 与 daemon 通信，不是公网认证方案。
@@ -424,6 +444,8 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 │       ├── config/         # user/project config loading
 │       ├── models/         # provider clients and router
 │       ├── policy/         # tool policy engine
+│       ├── project/        # project config, detection and external trust store
+│       ├── security/       # secret classification and output redaction
 │       ├── server/         # FastAPI routes
 │       ├── sessions/       # SQLite-backed sessions/events/approvals
 │       ├── tools/          # tool registry and implementations

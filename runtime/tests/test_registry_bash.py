@@ -46,3 +46,18 @@ async def test_bash_timeout_kills_grandchild_process(tmp_path):
 
     await asyncio.sleep(2.5)
     assert not marker.exists(), "grandchild process leaked past the tool timeout"
+
+
+@pytest.mark.asyncio
+async def test_bash_does_not_inherit_provider_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("AICODE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+
+    result = await run_tool(
+        "bash",
+        {"command": "printf %s \"$OPENAI_API_KEY\""},
+        ToolContext(workspace=tmp_path, trust_level="trusted"),
+    )
+
+    assert result.success
+    assert "must-not-leak" not in result.text

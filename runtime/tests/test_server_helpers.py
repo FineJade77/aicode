@@ -11,6 +11,7 @@ from app.execution.models import ExecutionResult, ExecutionStatus
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.detect import detect_test_command
+from app.project.trust import TrustStore
 from app.server import main as server
 from app.server.main import (
     CreateSessionRequest,
@@ -27,6 +28,10 @@ from app.server.main import (
     process_session_runs,
     review_rules,
     SandboxExecutionRequest,
+    get_trust,
+    remove_project_trust,
+    trust_project,
+    TrustRequest,
 )
 from app.sessions.store import Session
 from app.sessions.store import SessionStore
@@ -307,6 +312,29 @@ async def test_cancel_execution_endpoint_is_idempotent(monkeypatch: pytest.Monke
     response = await cancel_execution("exec_api")
 
     assert response == {"status": "cancelled", "execution_id": "exec_api"}
+
+
+@pytest.mark.asyncio
+async def test_project_trust_endpoints_store_state_outside_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = TrustStore(tmp_path / "state" / "trust.json")
+    monkeypatch.setattr(server, "trust_store", store)
+    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+
+    initial = await get_trust(str(workspace))
+    trusted = await trust_project(TrustRequest(workspace=str(workspace)))
+    listed = await get_trust()
+    removed = await remove_project_trust(TrustRequest(workspace=str(workspace)))
+
+    assert initial["level"] == "untrusted"
+    assert trusted["level"] == "trusted"
+    assert listed["projects"][0]["workspace"] == str(workspace.resolve())
+    assert removed["level"] == "untrusted"
+    assert removed["removed"] is True
 
 
 class FakeExecutionService:

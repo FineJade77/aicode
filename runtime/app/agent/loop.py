@@ -46,6 +46,11 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
     history.append(current_user_message)
     persist_message(session, current_user_message)
     tools = tool_schemas_for_mode(request.mode)
+    trust_status = (
+        runtime.trust_store.status(Path(request.workspace))
+        if runtime.trust_store is not None
+        else {"level": "trusted"}
+    )
     context = build_tool_context(
         request.workspace,
         request.mode,
@@ -53,6 +58,7 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
         execution=runtime.execution,
         session_id=session.session_id,
         run_id=session.current_run_id or "",
+        trust_level=str(trust_status["level"]),
     )
     purpose = "reviewer" if request.mode == "review" else "main"
     budget = TurnBudget()
@@ -106,7 +112,7 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
         history.append(message)
         persist_message(session, message)
 
-    summary = result.text if result is not None else ""
+    summary = str(message.get("content") or "") if result is not None else ""
     runtime.audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode})
     await session.events.put({"type": "final", "summary": summary})
 
@@ -175,7 +181,15 @@ async def execute_gated(
         )
         return f"[工具参数校验失败] {message}", 0
 
-    gate = policy.gate(call.name, call.arguments, mode=request.mode, language=request.language)
+    gate = policy.gate(
+        call.name,
+        call.arguments,
+        mode=request.mode,
+        language=request.language,
+        workspace=context.workspace,
+        protected_paths=context.protected_paths,
+        trust_level=context.trust_level,
+    )
     audit_args = tool_audit_arguments(call.name, call.arguments)
     runtime.audit.record(
         "tool.started",

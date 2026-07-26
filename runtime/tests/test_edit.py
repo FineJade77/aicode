@@ -62,6 +62,17 @@ def test_protected_path_rejected(tmp_path):
         build_edit_proposal(tmp_path, {"path": ".env", "new_text": "SECRET=1"}, [".env"])
 
 
+def test_runtime_secret_value_cannot_be_written(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+
+    with pytest.raises(EditError, match="敏感环境变量"):
+        build_edit_proposal(
+            tmp_path,
+            {"path": "config.py", "new_text": 'KEY = "provider-secret-value"\n'},
+            [],
+        )
+
+
 def test_stale_detection_create_collision(tmp_path):
     proposal = build_edit_proposal(tmp_path, {"path": "new/b.py", "new_text": "print(1)\n"}, [])
     target = tmp_path / "new" / "b.py"

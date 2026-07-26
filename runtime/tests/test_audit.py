@@ -95,5 +95,13 @@ def test_redact_keeps_token_usage_counts() -> None:
     assert value["api_token"] == "[REDACTED]"
 
 
+def test_redact_removes_known_secret_from_neutral_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+
+    value = redact({"message_preview": "please use provider-secret-value"})
+
+    assert value["message_preview"] == "please use [REDACTED]"
+
+
 def test_stable_hash_is_deterministic() -> None:
     assert stable_hash("abc") == stable_hash("abc")

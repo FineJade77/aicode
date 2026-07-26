@@ -2,7 +2,7 @@
 
 这些 fixture 是 Python Runtime 与 Go CLI 共享的 v2 contract 样本。
 
-- `http-responses.v2.json`：CLI 使用的关键 HTTP response，包括可空的 `cancel_run.run_id`。
+- `http-responses.v2.json`：CLI 使用的关键 HTTP response，包括可空的 `cancel_run.run_id`、execution 和 Project Trust。
 - `sse-events.v2.json`：所有 v2 Runtime event、终态顺序和前向兼容样本。
 
 兼容规则：

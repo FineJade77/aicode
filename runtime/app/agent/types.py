@@ -17,3 +17,4 @@ class AgentRuntime:
     audit: Any
     policy: Any = None
     execution: Any = None
+    trust_store: Any = None

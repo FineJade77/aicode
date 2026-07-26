@@ -22,6 +22,7 @@ docs/       设计与开发计划
 - [TASKS.md](TASKS.md)：按依赖执行的任务台账、当前状态和完成记录
 - [schemas/config.schema.json](schemas/config.schema.json)：项目级 `.aicode/config.json` schema
 - [schemas/execution.schema.json](schemas/execution.schema.json)：Host/Docker 共用 execution request/result contract
+- [schemas/project-trust.schema.json](schemas/project-trust.schema.json)：仓库外 Project Trust store contract
 
 ## 已具备能力
 
@@ -30,8 +31,9 @@ docs/       设计与开发计划
 - 原生 function calling Agent Loop，支持 OpenAI-compatible provider 和 Anthropic provider。
 - 工具集：`read_file`、`search`、`list_files`、`related_files`、`bash`、`edit_file`、`review_diff`。
 - `edit_file` 逐次展示 unified diff，支持 `y` 单次应用、`a` 本 session 后续自动应用、其它输入拒绝。
-- protected paths、stale 文件检测、非 UTF-8 文件拒绝编辑。
+- 仓库外 Project Trust、shell 路径风险分析、mandatory protected paths、stale 文件检测和非 UTF-8 文件拒绝编辑。
 - Policy Engine 三态闸门：`allow` / `ask` / `deny`。
+- Host 子进程使用最小环境变量 allowlist 和隔离 HOME，不继承 provider/runtime secret。
 - review 模式只读；commit-message 模式无工具，只根据 CLI 提供的 diff 生成提交信息。
 - SQLite session/message 持久化，支持 resume。
 - 同一 session 的 run 串行排队；支持查看当前阶段并取消卡住的 run。
@@ -153,6 +155,10 @@ aicode daemon status
 aicode daemon stop
 aicode doctor
 aicode doctor --json
+aicode trust status
+aicode trust add
+aicode trust remove
+aicode trust list
 aicode sessions
 aicode resume --last
 aicode resume --last "继续刚才的任务"
@@ -233,6 +239,27 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 如果 daemon 重启或 session 恢复时发现未决 approval，Runtime 会把这些 approval 标记为 expired/rejected，并发出对应事件，避免恢复后一直悬挂等待。
 
 审计日志会记录 session、tool call、approval、edit、usage、final、error、execution 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；Host/Docker execution 都记录 command hash 而不是原始命令。
+
+## Project Trust 与本地执行安全
+
+workspace 默认是 `untrusted`。`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令不会直接自动落到 Host；用户需要逐次批准，或显式改用 Docker sandbox。确认仓库可信后可执行：
+
+```bash
+aicode trust status
+aicode trust add
+aicode trust list
+aicode trust remove
+```
+
+Trust 不写入仓库，也不能通过 `.aicode/config.json`、rules 或 memory 自行提升。记录默认位于 `~/.aicode/trust.json`（设置 `AICODE_HOME` 时为 `$AICODE_HOME/trust.json`），绑定 canonical workspace 路径和可选的 credential-free Git remote；remote 变化后状态自动回到 `untrusted`。文件使用 `0600` 权限和原子替换。
+
+Host shell 同时经过命令风险与路径风险检查：
+
+- `../`、workspace 外绝对路径、用户 home、symlink 逃逸和敏感 glob 命中会被拒绝，`deny` 不能由 approval 覆盖。
+- `.env*`、SSH/GPG、AWS/Azure/GCloud/Kubernetes 配置、`.netrc`、包管理凭证和私钥是 mandatory protected paths；仓库配置只能增加保护，不能移除这些系统规则。
+- protected paths 同时约束 file/search/list/related/edit 工具和 shell；搜索、目录遍历也不会跟随逃逸 symlink。
+- Host 子进程只继承非敏感 allowlist，并使用按 workspace 隔离、权限为 `0700` 的 `HOME` / XDG 目录；provider key、Runtime token 和任意自定义环境变量默认不传入，Runtime 内部 `git`/`rg` 也会拒绝 workspace PATH hijack。
+- 已知 Runtime secret 会从 tool output、SSE 和 audit 中脱敏，也不能直接写入文件或作为 shell 字面值执行。
 
 ### 排队或疑似卡死时排查
 
@@ -413,7 +440,7 @@ export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25
 
 - `defaultLanguage`: 项目级输出语言，创建 session 时优先于用户级 `ui.language`。
 - `commands.*`: 常用项目命令，会注入 prompt；`commands.test/build/lint` 也会被 Docker sandbox 使用。
-- `protectedPaths`: 受保护路径；读取、搜索、review 和编辑都会跳过或拦截。
+- `protectedPaths`: 项目追加的受保护路径；读取、搜索、list/related、review、编辑和 shell 都会跳过或拦截。系统 mandatory patterns 始终合并生效，不能移除。
 - `review.disabledRules`: 禁用指定 review 规则。
 - `review.largeDiffThreshold`: 大 diff 提醒阈值，默认 `500`。
 - `review.maxFindings`: review finding 最大数量，默认 `50`。

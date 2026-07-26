@@ -2,13 +2,27 @@ package projectconfig
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
 func DefaultProtectedPaths() []string {
-	return []string{".env", ".env.*", "secrets/**", "infra/prod/**"}
+	return append(MandatoryProtectedPaths(), "secrets/**", "infra/prod/**")
+}
+
+func MandatoryProtectedPaths() []string {
+	return []string{
+		".env", ".env.*", "**/.env", "**/.env.*",
+		".ssh/**", "**/.ssh/**", ".gnupg/**", "**/.gnupg/**",
+		".aws/**", "**/.aws/**", ".azure/**", "**/.azure/**",
+		".kube/**", "**/.kube/**", ".config/gcloud/**", "**/.config/gcloud/**",
+		".config/gh/**", "**/.config/gh/**", ".docker/**", "**/.docker/**",
+		".git/config", "**/.git/config", ".git-credentials", "**/.git-credentials",
+		".netrc", "**/.netrc", ".npmrc", "**/.npmrc", ".pypirc", "**/.pypirc",
+		"*.pem", "**/*.pem", "*.key", "**/*.key",
+	}
 }
 
 func ListProtectedPaths(workspacePath string) (string, []string, bool, error) {
@@ -53,6 +67,9 @@ func RemoveProtectedPath(workspacePath string, pattern string) (string, bool, []
 	}
 
 	values, _ := effectiveProtectedPaths(raw)
+	if containsString(MandatoryProtectedPaths(), pattern) {
+		return path, false, values, fmt.Errorf("系统敏感 protected path 不可移除: %s", pattern)
+	}
 	removed := containsString(values, pattern)
 	values = removeValue(values, pattern)
 	sort.Strings(values)
@@ -77,6 +94,9 @@ func effectiveProtectedPaths(raw map[string]any) ([]string, bool) {
 		return values, false
 	}
 	values := stringList(raw["protectedPaths"])
+	for _, mandatory := range MandatoryProtectedPaths() {
+		values = appendUnique(values, mandatory)
+	}
 	sort.Strings(values)
 	return values, true
 }

@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.events.types import validate_event
+from app.security.secrets import redact_known_environment_secrets
 
 
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
@@ -52,7 +53,7 @@ class SessionEvents:
         on_event: Callable[[dict[str, Any]], None] | None = None,
         max_events: int | None = None,
     ) -> None:
-        self._events = [dict(event) for event in events or []]
+        self._events = [redact_known_environment_secrets(dict(event)) for event in events or []]
         self._condition = asyncio.Condition()
         self._on_event = on_event
         self._read_after = 0
@@ -64,7 +65,7 @@ class SessionEvents:
         self._trim_retained_events()
 
     async def put(self, event: dict[str, Any]) -> None:
-        event = dict(event)
+        event = redact_known_environment_secrets(dict(event))
         validate_event(event)
         if self._current_run_id and "run_id" not in event:
             event["run_id"] = self._current_run_id

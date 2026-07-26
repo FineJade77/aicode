@@ -29,6 +29,16 @@ def test_load_history_converts_legacy(session, tmp_path):
     assert history[1]["role"] == "assistant"
 
 
+def test_load_history_redacts_known_runtime_secret(session, monkeypatch):
+    sess, store = session
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+    store.append_message(sess, {"role": "tool", "content": "provider-secret-value"})
+
+    history = load_history(sess)
+
+    assert history[0]["content"] == "[REDACTED]"
+
+
 def test_truncate_tool_output_layers():
     long_text = "x" * 20_000
     truncated = truncate_tool_output("bash", long_text)

@@ -20,8 +20,47 @@ class ReviewConfig:
     max_findings: int = 50
 
 
+def mandatory_protected_paths() -> list[str]:
+    return [
+        ".env",
+        ".env.*",
+        "**/.env",
+        "**/.env.*",
+        ".ssh/**",
+        "**/.ssh/**",
+        ".gnupg/**",
+        "**/.gnupg/**",
+        ".aws/**",
+        "**/.aws/**",
+        ".azure/**",
+        "**/.azure/**",
+        ".kube/**",
+        "**/.kube/**",
+        ".config/gcloud/**",
+        "**/.config/gcloud/**",
+        ".config/gh/**",
+        "**/.config/gh/**",
+        ".docker/**",
+        "**/.docker/**",
+        ".git/config",
+        "**/.git/config",
+        ".git-credentials",
+        "**/.git-credentials",
+        ".netrc",
+        "**/.netrc",
+        ".npmrc",
+        "**/.npmrc",
+        ".pypirc",
+        "**/.pypirc",
+        "*.pem",
+        "**/*.pem",
+        "*.key",
+        "**/*.key",
+    ]
+
+
 def default_protected_paths() -> list[str]:
-    return [".env", ".env.*", "secrets/**", "infra/prod/**"]
+    return [*mandatory_protected_paths(), "secrets/**", "infra/prod/**"]
 
 
 @dataclass(slots=True)
@@ -57,7 +96,7 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
         project_name=as_optional_str(raw.get("projectName")),
         default_language=as_optional_str(raw.get("defaultLanguage")),
         commands={str(key): str(value) for key, value in commands.items()} if isinstance(commands, dict) else {},
-        protected_paths=[str(value) for value in protected_paths] if isinstance(protected_paths, list) else default_protected_paths(),
+        protected_paths=effective_protected_paths(protected_paths),
         workspaces=parse_workspaces(workspaces),
         review=parse_review_config(review),
     )
@@ -107,3 +146,14 @@ def bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return min(max(parsed, minimum), maximum)
+
+
+def effective_protected_paths(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return default_protected_paths()
+    values = mandatory_protected_paths()
+    for value in raw:
+        text = str(value)
+        if text not in values:
+            values.append(text)
+    return values

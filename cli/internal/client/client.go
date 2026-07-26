@@ -75,6 +75,19 @@ type CancelExecutionResponse struct {
 	ExecutionID string `json:"execution_id"`
 }
 
+type TrustStatus struct {
+	Workspace      string `json:"workspace"`
+	Level          string `json:"level"`
+	GitRemote      string `json:"git_remote"`
+	RecordedRemote string `json:"recorded_remote"`
+	Reason         string `json:"reason"`
+	Removed        bool   `json:"removed,omitempty"`
+}
+
+type TrustListResponse struct {
+	Projects []TrustStatus `json:"projects"`
+}
+
 type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
 }
@@ -164,6 +177,38 @@ func (c Client) CancelExecution(ctx context.Context, executionID string) (Cancel
 		return out, err
 	}
 	return out, nil
+}
+
+func (c Client) GetTrust(ctx context.Context, workspace string) (TrustStatus, error) {
+	var out TrustStatus
+	value, err := c.GetJSON(ctx, "/v1/trust?workspace="+url.QueryEscape(workspace))
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
+func (c Client) ListTrust(ctx context.Context) (TrustListResponse, error) {
+	var out TrustListResponse
+	value, err := c.GetJSON(ctx, "/v1/trust")
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
+func (c Client) TrustProject(ctx context.Context, workspace string) (TrustStatus, error) {
+	var out TrustStatus
+	err := c.postJSON(ctx, "/v1/trust", map[string]string{"workspace": workspace}, &out)
+	return out, err
+}
+
+func (c Client) RemoveTrust(ctx context.Context, workspace string) (TrustStatus, error) {
+	var out TrustStatus
+	err := c.postJSON(ctx, "/v1/trust/remove", map[string]string{"workspace": workspace}, &out)
+	return out, err
 }
 
 func (c Client) Approve(ctx context.Context, sessionID string, approvalID string, acceptAll bool) error {
@@ -366,6 +411,14 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, out any)
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func remarshalJSON(value any, out any) error {
+	content, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(content, out)
 }
 
 type RuntimeHTTPError struct {

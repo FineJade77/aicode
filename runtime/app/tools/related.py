@@ -11,6 +11,7 @@ from app.tools.base import (
     ToolError,
     ToolResult,
     display_path,
+    is_within_workspace,
     is_protected_path,
     reject_protected_path,
     resolve_tool_workspace,
@@ -179,6 +180,8 @@ def iter_related_files(root: Path, protected_paths: list[str]) -> list[Path]:
         if len(files) >= MAX_SCAN_FILES:
             break
         if not file_path.is_file():
+            continue
+        if not is_within_workspace(root, file_path):
             continue
         try:
             rel = file_path.relative_to(root)

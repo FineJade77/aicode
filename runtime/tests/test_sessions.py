@@ -111,9 +111,25 @@ async def test_session_events_assign_ids_and_support_independent_subscribers() -
     assert first_event == second_event
     assert first_event["event_id"] == 1
     assert events.last_event_id() == 1
-
     await first.aclose()
     await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_events_redact_known_runtime_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+    events = SessionEvents()
+
+    await events.put({"type": "tool.output", "tool": "bash", "text": "provider-secret-value"})
+
+    event = events.events_after(0)[0]
+    assert "provider-secret-value" not in event["text"]
+    assert event["text"] == "[REDACTED]"
+
+    restored = SessionEvents(
+        events=[{"type": "tool.output", "tool": "bash", "text": "provider-secret-value", "event_id": 1}]
+    )
+    assert restored.events_after(0)[0]["text"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio

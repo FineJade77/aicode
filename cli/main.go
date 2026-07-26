@@ -15,6 +15,7 @@ import (
 	"github.com/FineJade77/aicode/cli/internal/cmd/resumecmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/runtimeio"
 	"github.com/FineJade77/aicode/cli/internal/cmd/sandboxcmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/trustcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/usagecmd"
 	"github.com/FineJade77/aicode/cli/internal/config"
 )
@@ -51,6 +52,8 @@ func run(args []string) error {
 		return daemoncmd.Run(cfg, args[1:])
 	case "doctor":
 		return doctorcmd.Run(cfg, args[1:])
+	case "trust":
+		return trustcmd.Run(cfg, args[1:])
 	case "config":
 		return configcmd.Run(cfg, args[1:])
 	case "sessions":
@@ -97,23 +100,24 @@ func printHelp() {
   aicode review
   aicode review-rules
   aicode explain src/foo.ts
-	  aicode diff
-	  aicode test
-	  aicode commit-message
-	  aicode --sandbox docker test
-	  aicode --sandbox docker build
-	  aicode --sandbox docker lint
-	  aicode sessions
+  aicode diff
+  aicode test
+  aicode commit-message
+  aicode --sandbox docker test
+  aicode --sandbox docker build
+  aicode --sandbox docker lint
+  aicode sessions
   aicode resume --last
-	  aicode resume --last "继续刚才的任务"
-	  aicode resume <session_id> "继续这个会话"
-	  aicode cancel --last
-	  aicode cancel <session_id>
+  aicode resume --last "继续刚才的任务"
+  aicode resume <session_id> "继续这个会话"
+  aicode cancel --last
+  aicode cancel <session_id>
   aicode usage [--json]
   aicode usage --today [--json]
   aicode usage --session <session_id> [--json]
   aicode models [--json]
   aicode doctor [--json]
+  aicode trust [status|add|remove|list] [--json]
   aicode config init
   aicode config show
   aicode config list

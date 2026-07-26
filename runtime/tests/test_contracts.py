@@ -7,7 +7,15 @@ from app.config.settings import Settings
 from app.events.sse import encode_sse
 from app.events.types import EVENT_TYPES
 from app.execution.models import ExecutionStatus
-from app.server.main import CancelExecutionResponse, CancelRunResponse, CreateSessionResponse, ExecutionResponse, SendMessageResponse
+from app.server.main import (
+    CancelExecutionResponse,
+    CancelRunResponse,
+    CreateSessionResponse,
+    ExecutionResponse,
+    SendMessageResponse,
+    TrustListResponse,
+    TrustStatusResponse,
+)
 from app.sessions.store import SessionEvents
 from app.tools.registry import TOOL_SCHEMAS
 
@@ -63,6 +71,16 @@ def test_execution_schema_matches_runtime_terminal_states() -> None:
     assert schema["$defs"]["request"]["oneOf"]
 
 
+def test_project_trust_schema_is_external_and_versioned() -> None:
+    schema = load_schema("project-trust.schema.json")
+    project = next(iter(schema["properties"]["projects"]["patternProperties"].values()))
+
+    assert schema["x-aicode-contract-version"] == "1.0"
+    assert schema["properties"]["schema_version"]["const"] == 1
+    assert set(project["required"]) == {"workspace", "level", "git_remote", "updated_at"}
+    assert project["properties"]["level"]["const"] == "trusted"
+
+
 def test_http_response_fixture_matches_runtime_models() -> None:
     fixture = load_fixture("http-responses.v2.json")
     responses = fixture["responses"]
@@ -80,6 +98,10 @@ def test_http_response_fixture_matches_runtime_models() -> None:
     assert execution.execution_id == "exec_fixture"
     assert execution.status == "succeeded"
     assert CancelExecutionResponse.model_validate(responses["cancel_execution"]).status == "cancelled"
+    assert TrustStatusResponse.model_validate(responses["trust_status"]).level == "untrusted"
+    assert TrustStatusResponse.model_validate(responses["trust_project"]).level == "trusted"
+    assert TrustListResponse.model_validate(responses["trust_list"]).projects[0].level == "trusted"
+    assert TrustStatusResponse.model_validate(responses["trust_removed"]).removed is True
 
 
 def test_sse_fixture_covers_v2_events_and_round_trips() -> None:

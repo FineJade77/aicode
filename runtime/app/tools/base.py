@@ -22,6 +22,7 @@ class ToolContext:
     session_id: str = ""
     run_id: str = ""
     tool_call_id: str = ""
+    trust_level: str = "trusted"
 
 
 @dataclass(slots=True)
@@ -60,6 +61,14 @@ def resolve_workspace_path(workspace: Path, raw_path: str | None = None) -> Path
     except ValueError as exc:
         raise ToolError("路径越过 workspace 边界") from exc
     return candidate
+
+
+def is_within_workspace(workspace: Path, path: Path) -> bool:
+    try:
+        path.resolve().relative_to(workspace.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def resolve_tool_workspace(context: ToolContext, raw_workspace: Any = None) -> tuple[Path, str]:

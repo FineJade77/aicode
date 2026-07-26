@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -37,7 +38,7 @@ async def run_command(
     execution: ExecutionService | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> CommandResult:
-    argv = tuple(str(part) for part in command)
+    argv = resolve_internal_argv(tuple(str(part) for part in command), cwd)
     request = _request(
         cwd=cwd,
         timeout=timeout,
@@ -47,6 +48,21 @@ async def run_command(
     )
     result = await (execution or ExecutionService()).execute(request)
     return _command_result(list(argv), result)
+
+
+def resolve_internal_argv(argv: tuple[str, ...], cwd: Path) -> tuple[str, ...]:
+    executable = argv[0]
+    if "/" in executable or "\\" in executable:
+        return argv
+    resolved_text = shutil.which(executable)
+    if not resolved_text:
+        return argv
+    resolved = Path(resolved_text).resolve()
+    try:
+        resolved.relative_to(cwd.resolve())
+    except ValueError:
+        return (str(resolved), *argv[1:])
+    raise ValueError(f"拒绝执行 workspace PATH 中的内部工具: {executable}")
 
 
 async def run_shell_command(
@@ -92,6 +108,9 @@ def _request(
         session_id=str(metadata.get("session_id") or ""),
         run_id=str(metadata.get("run_id") or ""),
         tool_call_id=str(metadata.get("tool_call_id") or ""),
+        allowed_roots=(cwd.expanduser().resolve(),),
+        masked_paths=tuple(str(value) for value in metadata.get("masked_paths") or ()),
+        trust_level=str(metadata.get("trust_level") or "unspecified"),
         limits=ResourceLimits(timeout_seconds=timeout),
     )
 

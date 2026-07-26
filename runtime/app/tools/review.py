@@ -211,6 +211,8 @@ class ReviewDiffTool:
             "session_id": context.session_id,
             "run_id": context.run_id,
             "tool_call_id": context.tool_call_id,
+            "masked_paths": context.protected_paths,
+            "trust_level": context.trust_level,
         }
         proc = await run_review_diff(context.workspace, path_filter, execution=context.execution, metadata=metadata)
         if proc.returncode != 0:

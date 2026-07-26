@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.security.secrets import contains_known_environment_secret
 from app.tools.base import ToolError, display_path, reject_protected_path, resolve_workspace_path
 
 
@@ -53,6 +54,8 @@ def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[
     old_text = str(arguments.get("old_text") or "")
     new_text = str(arguments.get("new_text") or "")
     delete = bool(arguments.get("delete"))
+    if contains_known_environment_secret(old_text) or contains_known_environment_secret(new_text):
+        raise EditError("编辑内容包含 Runtime 敏感环境变量值，已拒绝写入")
 
     if delete:
         if not target.is_file():

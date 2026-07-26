@@ -21,6 +21,7 @@ from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.config import load_project_config
 from app.project.detect import detect_project_command
+from app.project.trust import TrustStore
 from app.server.auth import auth_middleware
 from app.sessions.store import QueuedAgentRun, Session, store
 from app.tools.review import review_rules_data
@@ -29,7 +30,14 @@ from app.usage.store import summarize_usage
 model_router = ModelRouter.from_settings(settings)
 audit = AuditLogger.from_env()
 execution_service = ExecutionService(audit=audit)
-agent_runtime = AgentRuntime(model_router=model_router, audit=audit, policy=PolicyEngine(), execution=execution_service)
+trust_store = TrustStore.from_env()
+agent_runtime = AgentRuntime(
+    model_router=model_router,
+    audit=audit,
+    policy=PolicyEngine(),
+    execution=execution_service,
+    trust_store=trust_store,
+)
 
 
 @asynccontextmanager
@@ -106,6 +114,23 @@ class ExecutionResponse(BaseModel):
     cancelled: bool
 
 
+class TrustRequest(BaseModel):
+    workspace: str
+
+
+class TrustStatusResponse(BaseModel):
+    workspace: str
+    level: Literal["trusted", "untrusted"]
+    git_remote: str
+    recorded_remote: str
+    reason: str
+    removed: bool | None = None
+
+
+class TrustListResponse(BaseModel):
+    projects: list[TrustStatusResponse]
+
+
 @app.get("/v1/daemon/status")
 async def daemon_status() -> dict[str, Any]:
     return {
@@ -167,6 +192,46 @@ async def cancel_execution(execution_id: str) -> dict[str, str]:
 async def prepare_daemon_stop() -> dict[str, Any]:
     await execution_service.cancel_all()
     return {"status": "ready", "executions": execution_service.status()}
+
+
+@app.get("/v1/trust", response_model=TrustStatusResponse | TrustListResponse)
+async def get_trust(workspace: str | None = None) -> Any:
+    try:
+        if workspace:
+            return trust_store.status(Path(workspace))
+        return {"projects": trust_store.list()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/v1/trust", response_model=TrustStatusResponse)
+async def trust_project(request: TrustRequest) -> dict[str, Any]:
+    try:
+        status = trust_store.trust(Path(request.workspace))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    audit.record(
+        "project.trust.changed",
+        workspace=status["workspace"],
+        data={"level": "trusted", "git_remote_hash": stable_hash(status["git_remote"]) if status["git_remote"] else ""},
+    )
+    return status
+
+
+@app.post("/v1/trust/remove", response_model=TrustStatusResponse)
+async def remove_project_trust(request: TrustRequest) -> dict[str, Any]:
+    try:
+        workspace = Path(request.workspace).expanduser().resolve()
+        removed = trust_store.remove(workspace)
+        status = trust_store.status(workspace)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    audit.record(
+        "project.trust.changed",
+        workspace=str(workspace),
+        data={"level": "untrusted", "removed": removed},
+    )
+    return {**status, "removed": removed}
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)

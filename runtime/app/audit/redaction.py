@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.security.secrets import redact_known_environment_secrets
+
 
 SENSITIVE_KEY_FRAGMENTS = {
     "api_key",
@@ -47,6 +49,7 @@ def redact_value_for_key(key: str, value: Any) -> Any:
 
 
 def truncate(value: str) -> str:
+    value = redact_known_environment_secrets(value)
     if len(value) <= MAX_STRING_LENGTH:
         return value
     return value[:MAX_STRING_LENGTH] + "...[TRUNCATED]"

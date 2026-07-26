@@ -7,6 +7,7 @@ from app.tools.base import (
     ToolContext,
     ToolResult,
     display_path,
+    is_within_workspace,
     is_protected_path,
     resolve_tool_workspace,
     resolve_workspace_path,
@@ -52,6 +53,8 @@ def walk(
     for child in sorted(root.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
         if len(out) >= limit:
             return
+        if not is_within_workspace(workspace, child):
+            continue
         if child.name in IGNORED_DIRS:
             continue
         rel = display_path(workspace, child)
@@ -59,7 +62,7 @@ def walk(
             continue
         suffix = "/" if child.is_dir() else ""
         out.append(scoped_display_path(workspace_name, workspace, child) + suffix)
-        if child.is_dir() and depth < max_depth:
+        if child.is_dir() and not child.is_symlink() and depth < max_depth:
             walk(
                 child,
                 workspace,

@@ -114,6 +114,42 @@ assert checks["port"]["status"] == "ok"
 assert checks["port"]["details"]["daemon_status"] == "ok"
 '
 
+trust_before="$("$binary" trust status --json)"
+AICODE_TRUST_JSON="$trust_before" "$python_bin" -c '
+import json
+import os
+
+status = json.loads(os.environ["AICODE_TRUST_JSON"])
+assert status["level"] == "untrusted"
+assert status["reason"] == "not_recorded"
+'
+
+trust_added="$("$binary" trust add --json)"
+trust_list="$("$binary" trust list --json)"
+AICODE_TRUST_JSON="$trust_added" AICODE_TRUST_LIST_JSON="$trust_list" AICODE_STATE_HOME="$state_home" "$python_bin" -c '
+import json
+import os
+from pathlib import Path
+
+status = json.loads(os.environ["AICODE_TRUST_JSON"])
+listed = json.loads(os.environ["AICODE_TRUST_LIST_JSON"])
+trust_path = Path(os.environ["AICODE_STATE_HOME"]) / "trust.json"
+assert status["level"] == "trusted"
+assert len(listed["projects"]) == 1
+assert listed["projects"][0]["level"] == "trusted"
+assert trust_path.stat().st_mode & 0o777 == 0o600
+'
+
+trust_removed="$("$binary" trust remove --json)"
+AICODE_TRUST_JSON="$trust_removed" "$python_bin" -c '
+import json
+import os
+
+status = json.loads(os.environ["AICODE_TRUST_JSON"])
+assert status["level"] == "untrusted"
+assert status["removed"] is True
+'
+
 test -f "$state_home/runtime.pid"
 test -f "$state_home/runtime.token"
 "$binary" daemon stop >/dev/null

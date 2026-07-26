@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from app.project.config import load_project_config
+from app.security.secrets import redact_known_environment_secrets
 from app.tools.base import (
     IGNORED_DIRS,
     ToolContext,
     ToolError,
     ToolResult,
+    is_within_workspace,
     is_protected_path,
     reject_protected_path,
     resolve_tool_workspace,
@@ -150,6 +152,7 @@ def build_tool_context(
     execution: Any = None,
     session_id: str = "",
     run_id: str = "",
+    trust_level: str = "trusted",
 ) -> ToolContext:
     project_config = load_project_config(Path(workspace))
     return ToolContext(
@@ -164,6 +167,7 @@ def build_tool_context(
         execution=execution,
         session_id=session_id,
         run_id=run_id,
+        trust_level=trust_level,
     )
 
 
@@ -235,6 +239,9 @@ async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -
 
 
 def with_duration(result: ToolResult, started: float) -> ToolResult:
+    result.text = redact_known_environment_secrets(result.text)
+    result.error = redact_known_environment_secrets(result.error)
+    result.data = redact_known_environment_secrets(result.data)
     result.duration_ms = max(0, int((time.perf_counter() - started) * 1000))
     return result
 
@@ -304,6 +311,8 @@ async def _search_with_rg(
     ]
     if glob_pattern:
         command.extend(["--glob", glob_pattern])
+    for protected_path in context.protected_paths:
+        command.extend(["--glob", f"!{protected_path}"])
     command.extend(["-e", query])
 
     proc = await run_command(
@@ -317,6 +326,8 @@ async def _search_with_rg(
             "session_id": context.session_id,
             "run_id": context.run_id,
             "tool_call_id": context.tool_call_id,
+            "masked_paths": context.protected_paths,
+            "trust_level": context.trust_level,
         },
     )
     returncode = proc.returncode if proc.returncode is not None else -1
@@ -362,6 +373,8 @@ def _search_with_python(
         if len(matches) >= limit:
             break
         if not file_path.is_file():
+            continue
+        if not is_within_workspace(root, file_path):
             continue
         if any(part in IGNORED_DIRS for part in file_path.parts):
             continue
@@ -411,6 +424,8 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
             "session_id": context.session_id,
             "run_id": context.run_id,
             "tool_call_id": context.tool_call_id,
+            "masked_paths": context.protected_paths,
+            "trust_level": context.trust_level,
         },
     )
     data = {

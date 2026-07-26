@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/project-trust.schema.json",
+  "x-aicode-contract-version": "1.0",
+  "title": "aicode Project Trust Store",
+  "type": "object",
+  "required": ["schema_version", "projects"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "projects": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-f0-9]{64}$": {
+          "type": "object",
+          "required": ["workspace", "level", "git_remote", "updated_at"],
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Canonical absolute workspace path."
+            },
+            "level": {
+              "const": "trusted"
+            },
+            "git_remote": {
+              "type": "string",
+              "description": "Optional credential-free remote identity captured when trust was granted."
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

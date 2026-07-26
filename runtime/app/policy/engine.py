@@ -3,8 +3,13 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from app.security.secrets import contains_known_environment_secret
+from app.tools.base import is_protected_path
 
 
 READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "related_files", "review_diff"}
@@ -58,6 +63,25 @@ _STATEMENT_PUNCTUATION = "();<>|&\n"
 # they stay inside the sub-command's token list and are handled by the
 # inline-ask-floor substring check instead.
 _SEP_OPERATOR_CHARS = set(";&|\n")
+_SHELL_WRAPPERS = {"sh", "bash", "zsh", "dash", "fish"}
+_SYSTEM_EXECUTABLE_ROOTS = tuple(Path(value).resolve() for value in ("/bin", "/usr/bin"))
+_SENSITIVE_PATH_MARKERS = {
+    ".env",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".docker",
+    ".kube",
+    ".netrc",
+    ".git-credentials",
+    "credentials",
+    "id_rsa",
+    "id_ed25519",
+    "private_key",
+    "service-account",
+    "gcloud",
+}
 
 
 def _reason(language: str, zh: str, en: str) -> str:
@@ -75,7 +99,17 @@ class GateDecision:
 class PolicyEngine:
     """Small, conservative policy layer for Phase 1 tool execution."""
 
-    def gate(self, tool_name: str, args: dict[str, Any], mode: str = "default", language: str = "zh-CN") -> GateDecision:
+    def gate(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        mode: str = "default",
+        language: str = "zh-CN",
+        *,
+        workspace: Path | None = None,
+        protected_paths: list[str] | None = None,
+        trust_level: str = "trusted",
+    ) -> GateDecision:
         if tool_name in READ_ONLY_TOOLS_V2:
             return GateDecision("allow", "low")
         if mode in READ_ONLY_MODES:
@@ -87,13 +121,37 @@ class PolicyEngine:
         if tool_name == "edit_file":
             return GateDecision("ask", "medium", _reason(language, "文件写入需要 inline diff 确认", "file writes require inline diff confirmation"))
         if tool_name == "bash":
-            return self.gate_bash(str(args.get("command", "")), language=language)
+            return self.gate_bash(
+                str(args.get("command", "")),
+                language=language,
+                workspace=workspace,
+                protected_paths=protected_paths,
+                trust_level=trust_level,
+            )
         return GateDecision("deny", "high", _reason(language, f"未知工具: {tool_name}", f"unknown tool: {tool_name}"))
 
-    def gate_bash(self, command: str, language: str = "zh-CN") -> GateDecision:
+    def gate_bash(
+        self,
+        command: str,
+        language: str = "zh-CN",
+        *,
+        workspace: Path | None = None,
+        protected_paths: list[str] | None = None,
+        trust_level: str = "trusted",
+    ) -> GateDecision:
         command = command.strip()
         if not command:
             return GateDecision("deny", "low", _reason(language, "空命令", "empty command"))
+        if contains_known_environment_secret(command):
+            return GateDecision(
+                "deny",
+                "high",
+                _reason(
+                    language,
+                    "命令包含 Runtime 敏感环境变量值",
+                    "command contains a sensitive Runtime environment value",
+                ),
+            )
 
         ask_floor = any(token in command for token in _INLINE_ASK_FLOOR_TOKENS)
 
@@ -103,7 +161,16 @@ class PolicyEngine:
             return GateDecision("deny", "high", str(exc))
         ask_floor = ask_floor or sep_floor
 
-        decisions = [self._classify_single(segment, language) for segment in segments]
+        path_decision = self._gate_paths(
+            segments,
+            workspace=workspace,
+            protected_paths=protected_paths or [],
+            language=language,
+        )
+        if path_decision is not None:
+            return path_decision
+
+        decisions = [self._classify_single(segment, language, trust_level=trust_level) for segment in segments]
         decisions = [decision for decision in decisions if decision is not None]
 
         if not decisions:
@@ -204,7 +271,13 @@ class PolicyEngine:
                     parts = parts[1:]
         return parts
 
-    def _classify_single(self, parts: list[str], language: str = "zh-CN") -> GateDecision | None:
+    def _classify_single(
+        self,
+        parts: list[str],
+        language: str = "zh-CN",
+        *,
+        trust_level: str = "trusted",
+    ) -> GateDecision | None:
         if not parts:
             return None
         parts = self._normalize_parts(parts)
@@ -215,10 +288,45 @@ class PolicyEngine:
         if executable in DENY_EXECUTABLES or basename in DENY_EXECUTABLES:
             return GateDecision("deny", "high", _reason(language, f"禁止执行高风险命令: {executable}", f"high-risk command is not allowed: {executable}"))
         if executable == "git" or basename == "git":
-            return self._gate_git(parts, language)
+            git_decision = self._gate_git(parts, language)
+            if (
+                git_decision.verdict == "allow"
+                and trust_level != "trusted"
+                and not self._bare_executable_is_system(executable)
+            ):
+                return GateDecision(
+                    "ask",
+                    "medium",
+                    _reason(
+                        language,
+                        "未信任 workspace 的 git executable 需要确认",
+                        "the git executable for an untrusted workspace needs confirmation",
+                    ),
+                )
+            return git_decision
         if self._is_low_risk_test(parts):
+            if trust_level != "trusted":
+                return GateDecision(
+                    "ask",
+                    "medium",
+                    _reason(
+                        language,
+                        "当前 workspace 尚未信任，项目命令需要确认或改用 Docker sandbox",
+                        "the workspace is untrusted; project commands need approval or Docker sandbox",
+                    ),
+                )
             return GateDecision("allow", "low")
-        if executable in ALLOW_EXECUTABLES:
+        if basename in ALLOW_EXECUTABLES and self._direct_allow_executable(executable):
+            if trust_level != "trusted" and not self._bare_executable_is_system(executable):
+                return GateDecision(
+                    "ask",
+                    "medium",
+                    _reason(
+                        language,
+                        "未信任 workspace 的 PATH 命令需要确认",
+                        "PATH command in an untrusted workspace needs confirmation",
+                    ),
+                )
             return GateDecision("allow", "low")
         return GateDecision("ask", "medium", _reason(language, f"命令需要确认后执行: {executable}", f"command needs confirmation before running: {executable}"))
 
@@ -239,12 +347,169 @@ class PolicyEngine:
         return GateDecision("ask", "medium", _reason(language, f"git {subcommand} 需要确认后执行", f"git {subcommand} needs confirmation before running"))
 
     def _is_low_risk_test(self, parts: list[str]) -> bool:
-        if parts[0] == "pytest":
+        executable = os.path.basename(parts[0])
+        if executable == "pytest":
             return True
-        if parts[0] == "go" and len(parts) >= 2 and parts[1] == "test":
+        if executable == "go" and len(parts) >= 2 and parts[1] == "test":
             return True
-        if parts[0] in {"npm", "pnpm", "yarn"} and "test" in parts[1:]:
+        if executable in {"npm", "pnpm", "yarn"} and "test" in parts[1:]:
             return True
-        if parts[0] in {"python", "python3"} and len(parts) >= 3 and parts[1] == "-m" and parts[2] in {"pytest", "unittest"}:
+        if executable in {"python", "python3"} and len(parts) >= 3 and parts[1] == "-m" and parts[2] in {"pytest", "unittest"}:
             return True
         return False
+
+    def _gate_paths(
+        self,
+        segments: list[list[str]],
+        *,
+        workspace: Path | None,
+        protected_paths: list[str],
+        language: str,
+    ) -> GateDecision | None:
+        if workspace is None:
+            return None
+        root = workspace.expanduser().resolve()
+        for segment in segments:
+            parts = self._normalize_parts(segment)
+            if not parts:
+                continue
+            for executable_token in dict.fromkeys((segment[0], parts[0])):
+                executable_decision = self._gate_executable_path(executable_token, root, language)
+                if executable_decision is not None:
+                    return executable_decision
+            executable = os.path.basename(parts[0])
+            if executable in _SHELL_WRAPPERS and "-c" in parts:
+                index = parts.index("-c")
+                if index + 1 < len(parts):
+                    nested = self.gate_bash(
+                        parts[index + 1],
+                        language=language,
+                        workspace=root,
+                        protected_paths=protected_paths,
+                    )
+                    if nested.verdict == "deny":
+                        return nested
+            path_tokens = [*segment[1:], *parts[1:]]
+            for token in dict.fromkeys(path_tokens):
+                decision = self._gate_path_token(token, root, protected_paths, language)
+                if decision is not None:
+                    return decision
+        return None
+
+    def _gate_executable_path(
+        self,
+        token: str,
+        workspace: Path,
+        language: str,
+    ) -> GateDecision | None:
+        if "/" not in token and "\\" not in token:
+            return None
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = workspace / candidate
+        resolved = candidate.resolve(strict=False)
+        if self._is_system_executable_path(resolved):
+            return None
+        try:
+            resolved.relative_to(workspace)
+        except ValueError:
+            return self._path_deny(
+                language,
+                "命令尝试执行 workspace 外的路径",
+                "command attempts to execute a path outside the workspace",
+            )
+        return None
+
+    def _gate_path_token(
+        self,
+        raw_token: str,
+        workspace: Path,
+        protected_paths: list[str],
+        language: str,
+    ) -> GateDecision | None:
+        token = raw_token.strip()
+        if not token or token == ".":
+            return None
+        if token.startswith("-") and "=" not in token:
+            return None
+        if "=" in token and token.startswith("-"):
+            token = token.split("=", 1)[1]
+        token = token.rstrip(",;")
+        lowered = token.lower().replace("\\", "/")
+        if "://" in lowered:
+            return None
+        if (
+            lowered == ".."
+            or lowered.startswith("../")
+            or "/../" in lowered
+            or lowered.endswith("/..")
+            or lowered.startswith("~/")
+            or "$home" in lowered
+            or "${home}" in lowered
+        ):
+            return self._path_deny(language, "命令路径越过 workspace 或引用用户 home", "command path escapes the workspace or references user home")
+        if self._is_sensitive_token(lowered):
+            return self._path_deny(language, "命令尝试访问敏感路径", "command attempts to access a sensitive path")
+
+        if any(marker in token for marker in ("*", "?", "[")) and not Path(token).is_absolute():
+            try:
+                matches = list(workspace.glob(token))[:100]
+            except (OSError, ValueError):
+                matches = []
+            for match in matches:
+                decision = self._gate_resolved_path(match, workspace, protected_paths, language)
+                if decision is not None:
+                    return decision
+
+        path_like = "/" in token or token.startswith(".") or Path(token).is_absolute()
+        candidate = Path(token).expanduser()
+        if not candidate.is_absolute():
+            candidate = workspace / candidate
+        if not path_like and not candidate.exists():
+            return None
+        return self._gate_resolved_path(candidate, workspace, protected_paths, language)
+
+    def _gate_resolved_path(
+        self,
+        candidate: Path,
+        workspace: Path,
+        protected_paths: list[str],
+        language: str,
+    ) -> GateDecision | None:
+        resolved = candidate.resolve(strict=False)
+        try:
+            relative = resolved.relative_to(workspace)
+        except ValueError:
+            return self._path_deny(language, "命令路径越过 workspace 边界", "command path escapes the workspace boundary")
+        relative_text = relative.as_posix()
+        if is_protected_path(relative_text, protected_paths) or self._is_sensitive_token(relative_text.lower()):
+            return self._path_deny(language, "命令尝试访问 protected/masked path", "command attempts to access a protected/masked path")
+        return None
+
+    @staticmethod
+    def _is_sensitive_token(value: str) -> bool:
+        parts = {part for part in value.replace("\\", "/").split("/") if part}
+        if any(marker in parts for marker in _SENSITIVE_PATH_MARKERS):
+            return True
+        return any(part.startswith(".env") for part in parts)
+
+    @staticmethod
+    def _path_deny(language: str, zh: str, en: str) -> GateDecision:
+        return GateDecision("deny", "high", _reason(language, zh, en))
+
+    @staticmethod
+    def _direct_allow_executable(executable: str) -> bool:
+        if "/" not in executable and "\\" not in executable:
+            return True
+        return PolicyEngine._is_system_executable_path(Path(executable).resolve(strict=False))
+
+    @staticmethod
+    def _is_system_executable_path(path: Path) -> bool:
+        return any(path.parent == root for root in _SYSTEM_EXECUTABLE_ROOTS)
+
+    @staticmethod
+    def _bare_executable_is_system(executable: str) -> bool:
+        if "/" in executable or "\\" in executable:
+            return PolicyEngine._is_system_executable_path(Path(executable).resolve(strict=False))
+        resolved = shutil.which(executable)
+        return bool(resolved and PolicyEngine._is_system_executable_path(Path(resolved).resolve(strict=False)))

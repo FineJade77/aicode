@@ -24,7 +24,11 @@ def test_parse_project_config() -> None:
     assert config.project_name == "demo"
     assert config.default_language == "en-US"
     assert config.commands["test"] == "python3 -m pytest tests/unit"
-    assert config.protected_paths == [".env", "secret/**"]
+    assert ".env" in config.protected_paths
+    assert ".ssh/**" in config.protected_paths
+    assert ".docker/**" in config.protected_paths
+    assert ".git/config" in config.protected_paths
+    assert "secret/**" in config.protected_paths
     assert config.workspaces[0].name == "api"
     assert config.review.disabled_rules == ["large_diff"]
     assert config.review.large_diff_threshold == 1200

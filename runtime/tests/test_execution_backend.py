@@ -11,6 +11,7 @@ import pytest
 
 from app.audit.logger import AuditLogger
 from app.execution.docker import DockerExecutionBackend
+from app.execution.host import build_subprocess_environment, isolated_execution_home
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus, ResourceLimits
 from app.execution.service import ExecutionService
 
@@ -154,3 +155,67 @@ async def test_docker_backend_integration_when_local_image_is_available(tmp_path
 
     assert result.status == ExecutionStatus.SUCCEEDED
     assert result.stdout == "execution-ok"
+
+
+@pytest.mark.asyncio
+async def test_host_environment_allowlist_excludes_provider_and_runtime_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AICODE_HOME", str(tmp_path / "aicode-home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+    monkeypatch.setenv("AICODE_RUNTIME_TOKEN", "runtime-secret")
+    monkeypatch.setenv("SAFE_CUSTOM_VALUE", "should-not-pass")
+    script = (
+        "import json, os; print(json.dumps({key: os.getenv(key) for key in "
+        "['OPENAI_API_KEY','ANTHROPIC_API_KEY','AICODE_RUNTIME_TOKEN','SAFE_CUSTOM_VALUE','HOME','PATH','TMPDIR']}))"
+    )
+
+    result = await ExecutionService().execute(
+        ExecutionRequest(
+            workspace=tmp_path,
+            argv=(sys.executable, "-c", script),
+            limits=ResourceLimits(timeout_seconds=5),
+        )
+    )
+    environment = json.loads(result.stdout)
+
+    assert environment["OPENAI_API_KEY"] is None
+    assert environment["ANTHROPIC_API_KEY"] is None
+    assert environment["AICODE_RUNTIME_TOKEN"] is None
+    assert environment["SAFE_CUSTOM_VALUE"] is None
+    assert environment["HOME"] == str(isolated_execution_home(tmp_path))
+    assert environment["PATH"]
+    assert environment["TMPDIR"] == str(isolated_execution_home(tmp_path) / "tmp")
+
+
+def test_explicit_environment_allowlist_cannot_request_sensitive_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    environment = build_subprocess_environment(("OPENAI_API_KEY", "PATH"))
+
+    assert environment == {"PATH": "/usr/bin:/bin"}
+
+
+def test_isolated_execution_home_is_private_and_scoped_per_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AICODE_HOME", str(tmp_path / "state"))
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    first_home = isolated_execution_home(first)
+    second_home = isolated_execution_home(second)
+
+    assert first_home != second_home
+    assert first_home.parent == second_home.parent
+    assert first_home.stat().st_mode & 0o777 == 0o700
+    assert second_home.stat().st_mode & 0o777 == 0o700

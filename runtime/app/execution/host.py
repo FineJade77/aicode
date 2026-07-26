@@ -1,15 +1,39 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import signal
+import tempfile
 import time
 from contextlib import suppress
+from pathlib import Path
 
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus
+from app.security.secrets import sensitive_env_key
 
 
 PROCESS_DRAIN_TIMEOUT_SECONDS = 1.0
+DEFAULT_HOST_ENV_KEYS = {
+    "PATH",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "TERM",
+    "COLORTERM",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PATHEXT",
+    "CI",
+    "GOROOT",
+    "JAVA_HOME",
+    "SDKROOT",
+}
 
 
 class HostExecutionBackend:
@@ -25,9 +49,7 @@ class HostExecutionBackend:
         if request.allowed_roots and not any(_is_within(workspace, root) for root in request.allowed_roots):
             return self._failure(request, started, "workspace 不在 allowed_roots 内")
 
-        env = None
-        if request.env_allowlist is not None:
-            env = {key: value for key, value in os.environ.items() if key in request.env_allowlist}
+        env = build_subprocess_environment(request.env_allowlist, workspace=workspace)
 
         stderr_target = asyncio.subprocess.STDOUT if request.merge_stderr else asyncio.subprocess.PIPE
         try:
@@ -145,6 +167,49 @@ def decode_output(raw: bytes | None) -> str:
     if not raw:
         return ""
     return raw.decode("utf-8", errors="replace")
+
+
+def build_subprocess_environment(
+    allowlist: tuple[str, ...] | None,
+    *,
+    workspace: Path | None = None,
+) -> dict[str, str]:
+    requested = set(allowlist) if allowlist is not None else DEFAULT_HOST_ENV_KEYS
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if (key in requested or (allowlist is None and key.startswith("LC_"))) and not sensitive_env_key(key)
+    }
+    if allowlist is None:
+        execution_home = isolated_execution_home(workspace)
+        execution_tmp = execution_home / "tmp"
+        execution_tmp.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(execution_tmp, 0o700)
+        environment["HOME"] = str(execution_home)
+        environment["XDG_CONFIG_HOME"] = str(execution_home / ".config")
+        environment["XDG_CACHE_HOME"] = str(execution_home / ".cache")
+        environment["TMPDIR"] = str(execution_tmp)
+        environment["TMP"] = str(execution_tmp)
+        environment["TEMP"] = str(execution_tmp)
+    return environment
+
+
+def isolated_execution_home(workspace: Path | None = None) -> Path:
+    configured = os.getenv("AICODE_EXECUTION_HOME", "").strip()
+    if configured:
+        base = Path(configured).expanduser()
+    else:
+        aicode_home = os.getenv("AICODE_HOME", "").strip()
+        base = Path(aicode_home).expanduser() / "execution-home" if aicode_home else (
+            Path(tempfile.gettempdir()) / f"aicode-execution-{os.getuid()}"
+        )
+    home = base
+    if workspace is not None:
+        workspace_hash = hashlib.sha256(str(workspace.resolve()).encode()).hexdigest()[:16]
+        home = base / workspace_hash
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(home, 0o700)
+    return home.resolve()
 
 
 def _is_within(path, root) -> bool:

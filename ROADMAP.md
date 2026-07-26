@@ -47,6 +47,8 @@
 | 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home install/start/stop E2E 已接入 CI。 |
 | 安装诊断 | `[x]` | `aicode doctor [--json]` 检查安装、版本、Python/依赖、端口、provider 和 Docker。 |
 | 统一执行后端 | `[x]` | Runtime Host/Docker backend 统一 execution contract、终态、取消、资源策略和 audit。 |
+| Project Trust | `[x]` | 默认 untrusted；仓库外 trust store 绑定 canonical workspace 与 credential-free Git remote。 |
+| Shell/secret 边界 | `[x]` | shell 路径风险、mandatory protected paths、symlink 防逃逸、Host env allowlist 和 SSE/audit secret 脱敏。 |
 | 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
 | CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
 
@@ -109,6 +111,13 @@
 - [x] review mode 只暴露只读工具。
 - [x] commit-message mode 不暴露工具。
 - [x] explain mode 硬只读：不暴露 `bash` / `edit_file`，Policy 层同时拒绝对应工具调用。
+- [x] Project Trust 存储在仓库外；仓库配置和 rules 不能自行提升 trust。
+- [x] untrusted workspace 的项目命令需要 approval 或 Docker sandbox。
+- [x] shell 同时分析命令风险、路径风险、glob、home、`../` 和 symlink 逃逸。
+- [x] `.env*`、SSH/GPG/cloud credentials、包管理凭证和私钥是不可移除的 mandatory protected paths。
+- [x] file/search/list/related/edit 与 shell 共享 protected path 边界。
+- [x] Host 子进程使用环境变量 allowlist 和隔离 HOME，不继承 provider/runtime secret。
+- [x] 已知 Runtime secret 不进入 tool output、SSE 或 audit，也不能直接写文件/拼入 shell。
 
 ### 3.5 Edit Approval
 
@@ -354,10 +363,9 @@ git diff --check
 
 最建议按这个顺序继续：
 
-1. [WP0.4](LOCAL_AGENT_ROADMAP.md#wp04-协议与文档单一事实来源)：盘点 tool/event contract 并增加漂移测试。
-2. [WP0.1](LOCAL_AGENT_ROADMAP.md#wp01-可安装可诊断的分发包)：定义版本化 Runtime 安装布局，先跑通 clean-home E2E。
-3. [WP0.2](LOCAL_AGENT_ROADMAP.md#wp02-统一执行信任与审计边界)：引入 ExecutionBackend，统一 Agent bash 和 sandbox。
-4. [WP0.3](LOCAL_AGENT_ROADMAP.md#wp03-模型感知可持久化的上下文管理)：持久化 compaction，并在模型调用前按窗口预算。
-5. [WP1.3](LOCAL_AGENT_ROADMAP.md#wp13-agent-任务级评测与-trace)：建立最小评测骨架，再推进 REPL 和本地 provider profile。
+1. [WP0.3](LOCAL_AGENT_ROADMAP.md#wp03-模型感知可持久化的上下文管理)：持久化 compaction，并在模型调用前按窗口预算。
+2. [WP1.3](LOCAL_AGENT_ROADMAP.md#wp13-agent-任务级评测与-trace)：建立最小评测骨架，先固定安全拒绝和长上下文任务。
+3. [WP1.1](LOCAL_AGENT_ROADMAP.md#wp11-常驻交互模式)：在可靠执行与 compaction 基础上实现常驻 REPL。
+4. [WP1.2](LOCAL_AGENT_ROADMAP.md#wp12-本地模型-provider-profile)：完善 no-auth localhost profile、capability probe 和失败诊断。
 
 以上顺序优先把“能运行”升级为“可安装、可信任、可评测”；索引、subagent 和插件继续由评测结果触发。

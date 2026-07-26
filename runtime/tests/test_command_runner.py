@@ -1,4 +1,5 @@
 import asyncio
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -67,3 +68,17 @@ async def test_run_command_cancel_kills_process_group(tmp_path: Path) -> None:
 
     await asyncio.sleep(1)
     assert not marker.exists(), "grandchild process leaked after command cancellation"
+
+
+@pytest.mark.asyncio
+async def test_internal_argv_rejects_workspace_path_hijack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_git = tmp_path / "git"
+    fake_git.write_text("#!/bin/sh\nprintf hijacked\n", encoding="utf-8")
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+    with pytest.raises(ValueError, match="workspace PATH"):
+        await run_command(["git", "--version"], cwd=tmp_path, timeout=5)

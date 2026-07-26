@@ -37,6 +37,14 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		key := ""
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/trust" && r.URL.Query().Get("workspace") != "":
+			key = "trust_status"
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/trust":
+			key = "trust_list"
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/trust/remove":
+			key = "trust_removed"
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/trust":
+			key = "trust_project"
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/executions":
 			key = "execute_sandbox"
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/executions/"):
@@ -111,6 +119,35 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	}
 	if cancelledExecution.Status != "cancelled" || cancelledExecution.ExecutionID != "exec_fixture" {
 		t.Fatalf("cancel execution response = %#v", cancelledExecution)
+	}
+
+	trustStatus, err := api.GetTrust(ctx, "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trustStatus.Level != "untrusted" || trustStatus.Workspace != "/workspace" {
+		t.Fatalf("trust status = %#v", trustStatus)
+	}
+	trusted, err := api.TrustProject(ctx, "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.Level != "trusted" {
+		t.Fatalf("trusted = %#v", trusted)
+	}
+	trustList, err := api.ListTrust(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trustList.Projects) != 1 || trustList.Projects[0].Level != "trusted" {
+		t.Fatalf("trust list = %#v", trustList)
+	}
+	removed, err := api.RemoveTrust(ctx, "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed.Removed || removed.Level != "untrusted" {
+		t.Fatalf("removed trust = %#v", removed)
 	}
 }
 

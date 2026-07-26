@@ -28,9 +28,20 @@
         "tool_call_id": {"type": "string"},
         "allowed_roots": {"type": "array", "items": {"type": "string"}},
         "writable_paths": {"type": "array", "items": {"type": "string"}},
-        "masked_paths": {"type": "array", "items": {"type": "string"}},
-        "env_allowlist": {"type": "array", "items": {"type": "string"}},
-        "trust_level": {"type": "string"},
+        "masked_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Paths that execution backends must hide or deny."
+        },
+        "env_allowlist": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Only these non-sensitive parent environment keys may reach the subprocess."
+        },
+        "trust_level": {
+          "type": "string",
+          "enum": ["trusted", "untrusted", "unspecified"]
+        },
         "network": {"type": "string"},
         "limits": {
           "type": "object",

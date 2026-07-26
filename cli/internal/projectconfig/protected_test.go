@@ -51,8 +51,10 @@ func TestAddProtectedPathPreservesExistingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertStringSet(t, values, []string{".env", "secret/**"})
+	want := append(MandatoryProtectedPaths(), "secret/**")
+	assertStringSet(t, values, want)
 	raw := readRawProjectConfig(t, configPath)
+	assertStringSet(t, stringList(raw["protectedPaths"]), want)
 	if raw["commands"].(map[string]any)["test"] != "go test ./..." {
 		t.Fatalf("commands not preserved: %#v", raw)
 	}
@@ -69,9 +71,26 @@ func TestRemoveProtectedPathCanOverrideDefault(t *testing.T) {
 	if !removed {
 		t.Fatal("expected removed")
 	}
-	assertStringSet(t, values, []string{".env", ".env.*", "infra/prod/**"})
+	want := append(MandatoryProtectedPaths(), "infra/prod/**")
+	assertStringSet(t, values, want)
 	raw := readRawProjectConfig(t, path)
-	assertStringSet(t, stringList(raw["protectedPaths"]), []string{".env", ".env.*", "infra/prod/**"})
+	assertStringSet(t, stringList(raw["protectedPaths"]), want)
+}
+
+func TestRemoveProtectedPathRejectsMandatoryPattern(t *testing.T) {
+	workspace := t.TempDir()
+
+	_, removed, values, err := RemoveProtectedPath(workspace, ".env")
+	if err == nil {
+		t.Fatal("expected mandatory protected path removal to fail")
+	}
+	if removed {
+		t.Fatal("mandatory protected path must remain")
+	}
+	assertStringSet(t, values, DefaultProtectedPaths())
+	if !strings.Contains(err.Error(), "不可移除") {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestResetProtectedPathsDeletesOverride(t *testing.T) {

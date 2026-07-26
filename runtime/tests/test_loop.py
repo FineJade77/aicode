@@ -10,6 +10,7 @@ from app.config.settings import Settings
 from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
+from app.project.trust import TrustStore
 from app.sessions.store import SessionStore
 from tests.fakes import FakeProvider, text_turn, tool_turn
 
@@ -82,6 +83,33 @@ async def test_tool_output_exposes_command_observability_fields(tmp_path):
     records = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
     finished = [record for record in records if record["event_type"] == "tool.finished"]
     assert finished and finished[0]["data"]["tool_call_id"] == "tc_1"
+
+
+@pytest.mark.asyncio
+async def test_untrusted_project_command_requires_approval_in_agent_loop(tmp_path):
+    runtime, fake = make_runtime(
+        [tool_turn("bash", {"command": "pytest --version"}), text_turn("未执行")],
+        tmp_path,
+    )
+    runtime.trust_store = TrustStore(tmp_path.parent / f"{tmp_path.name}-state" / "trust.json")
+    session = make_session(tmp_path)
+
+    async def reject_soon():
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            pending = [approval for approval in session.approvals.values() if approval.accepted is None]
+            if pending:
+                session.resolve_approval(pending[0].approval_id, accepted=False)
+                return
+
+    _task = asyncio.create_task(reject_soon())
+    await run_turn(session, Request(tmp_path), runtime)
+
+    approvals = events_of(session, "approval.requested")
+    assert approvals
+    assert approvals[0]["tool"] == "bash"
+    assert "未信任" in approvals[0]["reason"]
+    assert any("拒绝" in str(message.get("content")) for message in fake.calls[1].messages if message.get("role") == "tool")
 
 
 @pytest.mark.asyncio

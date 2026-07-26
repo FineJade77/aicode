@@ -135,7 +135,7 @@
 - 新增 Host success/timeout/cancel/process-group、Docker 隔离参数、HTTP contract、project command detection、safe audit 和可用时真实 Docker backend 集成测试。
 - 验证：Go 全量测试、go vet、Python 222 项通过（本机 Docker daemon/镜像不可用时跳过 1 项集成测试）、clean-home install/doctor/start/status/stop E2E 通过。
 
-### `[ ]` T-006 Project Trust 与 shell 路径安全
+### `[x]` T-006 Project Trust 与 shell 路径安全
 
 对应：WP0.2
 
@@ -147,6 +147,18 @@
 - protected/masked paths 同时约束 file tool 和 shell。
 - 子进程环境变量改为 allowlist。
 - 增加 workspace/symlink/secret 逃逸测试。
+
+完成记录：
+
+- 新增版本化仓库外 TrustStore 和 `aicode trust status|add|remove|list [--json]`；trust 绑定 canonical workspace 与去凭证 Git remote，remote 变化或 workspace 消失会回到 `untrusted`，store 以 `0600` 原子写入。
+- Agent Loop 每次 run 读取 trust level；untrusted workspace 的 `pytest`、`go test`、`npm test` 等项目命令进入 approval，trusted workspace 才能按低风险 policy 自动执行。
+- Policy 增加 shell statement/wrapper/path/glob 分析，拒绝 home、`../`、workspace 外绝对路径、path-qualified 外部 executable、protected path 和 symlink 逃逸；deny 不经过 approval。
+- `.env*`、SSH/GPG、AWS/Azure/GCloud/Kubernetes、`.netrc`、包管理凭证和私钥升级为 mandatory protected paths；项目配置只能追加，CLI 不允许移除系统规则。
+- read/search/list/related/edit 与 shell 共享路径保护；rg 和 Python fallback 均避免读取 protected path，文件遍历不会跟随逃逸 symlink。
+- Host backend 默认只继承最小非敏感环境变量 allowlist，并使用隔离 HOME/XDG；provider key、Runtime token 和任意未列出变量不进入子进程。
+- 已知 Runtime secret 会在 tool output、SSE 和 audit 中脱敏；包含这类值的 edit 或 shell 字面量直接拒绝。
+- 新增 Project Trust schema、HTTP fixture/Go client contract、Runtime API 和 trust change audit；README、ARCHITECTURE、ROADMAP 同步安全语义。
+- 验证：Python 全量测试 256 项通过（本机 Docker daemon/镜像不可用时跳过 1 项）、Go 全量测试、go vet、Python compileall、git diff check，以及包含 trust add/list/remove 的 clean-home install/doctor/start/status/stop E2E 全部通过。
 
 ### `[ ]` T-007 持久化、模型感知的 compaction
 

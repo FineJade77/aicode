@@ -22,6 +22,7 @@
     },
     "protectedPaths": {
       "type": "array",
+      "description": "项目额外 protected path glob。系统内置的 .env、SSH/GPG/cloud credentials 和私钥规则始终合并生效，不能由仓库配置移除；Project Trust 也不属于仓库配置。",
       "items": {
         "type": "string"
       }

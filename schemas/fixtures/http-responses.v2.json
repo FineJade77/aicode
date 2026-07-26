@@ -41,6 +41,43 @@
       "status": "cancelled",
       "execution_id": "exec_fixture",
       "future_field": true
+    },
+    "trust_status": {
+      "workspace": "/workspace",
+      "level": "untrusted",
+      "git_remote": "",
+      "recorded_remote": "",
+      "reason": "not_recorded",
+      "future_field": true
+    },
+    "trust_project": {
+      "workspace": "/workspace",
+      "level": "trusted",
+      "git_remote": "git@example.test:team/repo.git",
+      "recorded_remote": "git@example.test:team/repo.git",
+      "reason": "recorded",
+      "future_field": true
+    },
+    "trust_list": {
+      "projects": [
+        {
+          "workspace": "/workspace",
+          "level": "trusted",
+          "git_remote": "git@example.test:team/repo.git",
+          "recorded_remote": "git@example.test:team/repo.git",
+          "reason": "recorded"
+        }
+      ],
+      "future_field": true
+    },
+    "trust_removed": {
+      "workspace": "/workspace",
+      "level": "untrusted",
+      "git_remote": "",
+      "recorded_remote": "",
+      "reason": "not_recorded",
+      "removed": true,
+      "future_field": true
     }
   }
 }

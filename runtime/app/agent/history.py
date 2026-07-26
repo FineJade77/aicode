@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.security.secrets import redact_known_environment_secrets
 from app.sessions.store import Session
 
 HISTORY_TOKEN_BUDGET = 60_000
@@ -18,9 +19,14 @@ def load_history(session: Session) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
         if "role" in raw:
-            history.append(dict(raw))
+            history.append(redact_known_environment_secrets(dict(raw)))
         elif "message" in raw:
-            history.append({"role": "user", "content": str(raw["message"])})
+            history.append(
+                {
+                    "role": "user",
+                    "content": redact_known_environment_secrets(str(raw["message"])),
+                }
+            )
     return history
 
 

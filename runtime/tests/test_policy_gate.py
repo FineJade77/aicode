@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from app.policy.engine import PolicyEngine
@@ -8,8 +10,8 @@ def engine():
     return PolicyEngine()
 
 
-def gate_bash(engine, command, mode="default"):
-    return engine.gate("bash", {"command": command}, mode=mode)
+def gate_bash(engine, command, mode="default", **kwargs):
+    return engine.gate("bash", {"command": command}, mode=mode, **kwargs)
 
 
 def test_read_only_tools_allowed_in_review(engine):
@@ -191,3 +193,101 @@ def test_gate_verdict_unaffected_by_language(engine):
     # 语言只影响 reason 文本，不影响判定
     for cmd in ["ls", "sed -i s/a/b/ f", "git push origin main", "rm -rf /"]:
         assert engine.gate("bash", {"command": cmd}).verdict == engine.gate("bash", {"command": cmd}, language="en-US").verdict
+
+
+def test_untrusted_workspace_requires_approval_for_project_commands(engine, tmp_path):
+    for command in ["pytest", "go test ./...", "npm test", "python3 -m pytest"]:
+        decision = gate_bash(engine, command, workspace=tmp_path, trust_level="untrusted")
+        assert decision.verdict == "ask", command
+        assert "未信任" in decision.reason
+
+
+def test_trusted_workspace_allows_low_risk_project_commands(engine, tmp_path):
+    assert gate_bash(engine, "pytest", workspace=tmp_path, trust_level="trusted").verdict == "allow"
+
+
+def test_shell_denies_workspace_and_sensitive_path_escapes(engine, tmp_path):
+    outside = tmp_path.parent / "outside-secret"
+    outside.write_text("secret", encoding="utf-8")
+    (tmp_path / ".env").write_text("TOKEN=secret", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "key.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "escape-link").symlink_to(outside)
+
+    commands = [
+        "cat .env",
+        "cat ../outside-secret",
+        f"cat {outside}",
+        "cat secrets/key.txt",
+        "cat escape-link",
+        "sed -n 1p ~/.ssh/config",
+        "bash -c 'cat ../outside-secret'",
+    ]
+    for command in commands:
+        decision = gate_bash(
+            engine,
+            command,
+            workspace=tmp_path,
+            protected_paths=["secrets/**"],
+            trust_level="trusted",
+        )
+        assert decision.verdict == "deny", (command, decision)
+
+
+def test_shell_allows_paths_resolved_inside_workspace(engine, tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.py").write_text("print('ok')", encoding="utf-8")
+
+    assert gate_bash(engine, "cat src/a.py", workspace=tmp_path).verdict == "allow"
+    assert gate_bash(engine, "/bin/cat src/a.py", workspace=tmp_path).verdict == "allow"
+
+
+def test_shell_path_guard_expands_globs_before_execution(engine, tmp_path):
+    (tmp_path / ".env").write_text("TOKEN=secret", encoding="utf-8")
+
+    decision = gate_bash(engine, "cat .e*", workspace=tmp_path)
+
+    assert decision.verdict == "deny"
+
+
+def test_shell_path_guard_checks_env_wrapper_path_flags(engine, tmp_path):
+    outside = tmp_path.parent / "outside-env-cwd"
+    outside.mkdir(exist_ok=True)
+
+    decision = gate_bash(engine, f"env --chdir={outside} cat harmless.txt", workspace=tmp_path)
+
+    assert decision.verdict == "deny"
+
+
+def test_shell_rejects_literal_runtime_secret(engine, tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+
+    decision = gate_bash(engine, "printf provider-secret-value", workspace=tmp_path)
+
+    assert decision.verdict == "deny"
+    assert "敏感环境变量" in decision.reason
+
+
+def test_shell_rejects_path_qualified_executable_outside_workspace(engine, tmp_path):
+    fake_cat = tmp_path.parent / "cat"
+    fake_cat.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    decision = gate_bash(engine, f"{fake_cat} harmless.txt", workspace=tmp_path)
+
+    assert decision.verdict == "deny"
+
+
+def test_untrusted_shell_does_not_auto_allow_workspace_path_hijack(
+    engine,
+    tmp_path,
+    monkeypatch,
+):
+    fake_ls = tmp_path / "ls"
+    fake_ls.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_ls.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+    decision = gate_bash(engine, "ls", workspace=tmp_path, trust_level="untrusted")
+
+    assert decision.verdict == "ask"
