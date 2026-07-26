@@ -44,9 +44,9 @@ type SendMessageResponse struct {
 }
 
 type CancelRunResponse struct {
-	Status string `json:"status"`
-	RunID  string `json:"run_id"`
-	Queued int    `json:"queued"`
+	Status string  `json:"status"`
+	RunID  *string `json:"run_id"`
+	Queued int     `json:"queued"`
 }
 
 type ApprovalRequest struct {

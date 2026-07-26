@@ -3,18 +3,25 @@ from pathlib import Path
 
 import pytest
 
+from app.events.sse import encode_sse
 from app.events.types import EVENT_TYPES
+from app.server.main import CancelRunResponse, CreateSessionResponse, SendMessageResponse
 from app.sessions.store import SessionEvents
 from app.tools.registry import TOOL_SCHEMAS
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = REPOSITORY_ROOT / "schemas"
+FIXTURE_ROOT = SCHEMA_ROOT / "fixtures"
 CONTRACT_VERSION = "2.0"
 
 
 def load_schema(name: str) -> dict:
     return json.loads((SCHEMA_ROOT / name).read_text(encoding="utf-8"))
+
+
+def load_fixture(name: str) -> dict:
+    return json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
 
 
 def test_runtime_tools_match_canonical_schema() -> None:
@@ -34,6 +41,43 @@ def test_runtime_events_match_canonical_schema() -> None:
     assert schema["x-aicode-contract-version"] == CONTRACT_VERSION
     assert len(schema_names) == len(set(schema_names))
     assert set(schema_names) == EVENT_TYPES
+
+
+def test_http_response_fixture_matches_runtime_models() -> None:
+    fixture = load_fixture("http-responses.v2.json")
+    responses = fixture["responses"]
+
+    assert fixture["contract_version"] == CONTRACT_VERSION
+    assert CreateSessionResponse.model_validate(responses["create_session"]).session_id == "sess_fixture"
+    assert SendMessageResponse.model_validate(responses["send_message"]).run_id == "run_fixture"
+
+    cancelled = CancelRunResponse.model_validate(responses["cancel_run_cancelled"])
+    idle = CancelRunResponse.model_validate(responses["cancel_run_idle"])
+    assert cancelled.run_id == "run_fixture"
+    assert idle.status == "idle"
+    assert idle.run_id is None
+
+
+def test_sse_fixture_covers_v2_events_and_round_trips() -> None:
+    fixture = load_fixture("sse-events.v2.json")
+    events = fixture["events"]
+    event_types = [event["type"] for event in events]
+    event_ids = [event["event_id"] for event in events]
+
+    assert fixture["contract_version"] == CONTRACT_VERSION
+    assert set(event_types) == EVENT_TYPES
+    assert len(event_types) == len(set(event_types))
+    assert event_ids == sorted(set(event_ids))
+    assert event_types[-1] == "final"
+
+    for event in events:
+        encoded = encode_sse(event)
+        lines = encoded.splitlines()
+        assert lines[0] == f"id: {event['event_id']}"
+        assert lines[1] == f"event: {event['type']}"
+        assert json.loads(lines[2].removeprefix("data: ")) == event
+
+    assert fixture["forward_compat_event"]["type"] not in EVENT_TYPES
 
 
 @pytest.mark.asyncio

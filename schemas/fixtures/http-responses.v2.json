@@ -1,0 +1,28 @@
+{
+  "contract_version": "2.0",
+  "responses": {
+    "create_session": {
+      "session_id": "sess_fixture",
+      "future_field": "ignored-by-v2-client"
+    },
+    "send_message": {
+      "status": "accepted",
+      "run_id": "run_fixture",
+      "future_field": {
+        "trace_id": "trace_fixture"
+      }
+    },
+    "cancel_run_cancelled": {
+      "status": "cancelled",
+      "run_id": "run_fixture",
+      "queued": 1,
+      "future_field": true
+    },
+    "cancel_run_idle": {
+      "status": "idle",
+      "run_id": null,
+      "queued": 0,
+      "future_field": true
+    }
+  }
+}

@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -51,6 +51,17 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: str
+
+
+class SendMessageResponse(BaseModel):
+    status: Literal["accepted", "queued"]
+    run_id: str
+
+
+class CancelRunResponse(BaseModel):
+    status: Literal["cancelled", "idle"]
+    run_id: str | None
+    queued: int
 
 
 class MessageRequest(BaseModel):
@@ -112,7 +123,7 @@ async def get_session(session_id: str) -> dict[str, Any]:
     return session.to_dict()
 
 
-@app.post("/v1/sessions/{session_id}/messages")
+@app.post("/v1/sessions/{session_id}/messages", response_model=SendMessageResponse)
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
     effective_request = bind_message_request_to_session(session, request)
@@ -198,7 +209,7 @@ async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
     return {"status": "rejected", "approval_id": request.approval_id}
 
 
-@app.post("/v1/sessions/{session_id}/cancel")
+@app.post("/v1/sessions/{session_id}/cancel", response_model=CancelRunResponse)
 async def cancel_run(session_id: str) -> dict[str, Any]:
     session = require_session(session_id)
     task = session.agent_runner_task

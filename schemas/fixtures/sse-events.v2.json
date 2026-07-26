@@ -1,0 +1,179 @@
+{
+  "contract_version": "2.0",
+  "events": [
+    {
+      "event_id": 1,
+      "type": "session.created",
+      "session_id": "sess_fixture",
+      "workspace": "/workspace"
+    },
+    {
+      "event_id": 2,
+      "type": "run.queued",
+      "run_id": "run_fixture",
+      "status": "accepted",
+      "queue_position": 1,
+      "message": "任务已接收。"
+    },
+    {
+      "event_id": 3,
+      "type": "run.started",
+      "run_id": "run_fixture",
+      "message": "开始执行当前任务。"
+    },
+    {
+      "event_id": 4,
+      "type": "assistant.delta",
+      "run_id": "run_fixture",
+      "text": "正在检查"
+    },
+    {
+      "event_id": 5,
+      "type": "tool.started",
+      "run_id": "run_fixture",
+      "tool": "read_file",
+      "tool_call_id": "tool_fixture",
+      "args": {
+        "path": "README.md"
+      },
+      "risk_level": "low"
+    },
+    {
+      "event_id": 6,
+      "type": "tool.output",
+      "run_id": "run_fixture",
+      "tool": "read_file",
+      "tool_call_id": "tool_fixture",
+      "text": "# fixture",
+      "data": {
+        "path": "README.md",
+        "truncated": false
+      },
+      "duration_ms": 12,
+      "future_field": {
+        "cache_hit": true
+      }
+    },
+    {
+      "event_id": 7,
+      "type": "tool.denied",
+      "run_id": "run_fixture",
+      "tool": "bash",
+      "tool_call_id": "tool_denied",
+      "error": "策略拒绝",
+      "risk_level": "high"
+    },
+    {
+      "event_id": 8,
+      "type": "tool.rejected",
+      "run_id": "run_fixture",
+      "tool": "bash",
+      "tool_call_id": "tool_rejected",
+      "error": "用户拒绝",
+      "risk_level": "medium"
+    },
+    {
+      "event_id": 9,
+      "type": "tool.error",
+      "run_id": "run_fixture",
+      "tool": "bash",
+      "tool_call_id": "tool_error",
+      "error": "命令失败",
+      "duration_ms": 20,
+      "exit_code": 1,
+      "timed_out": false
+    },
+    {
+      "event_id": 10,
+      "type": "approval.requested",
+      "run_id": "run_fixture",
+      "approval_id": "appr_fixture",
+      "kind": "tool",
+      "tool": "bash",
+      "tool_call_id": "tool_approval",
+      "message": "等待用户确认"
+    },
+    {
+      "event_id": 11,
+      "type": "approval.expired",
+      "run_id": "run_fixture",
+      "approval_id": "appr_fixture",
+      "kind": "tool",
+      "tool_call_id": "tool_approval",
+      "message": "确认已过期"
+    },
+    {
+      "event_id": 12,
+      "type": "edit.auto_approved",
+      "run_id": "run_fixture",
+      "path": "app.py",
+      "tool_call_id": "tool_edit_auto"
+    },
+    {
+      "event_id": 13,
+      "type": "edit.applied",
+      "run_id": "run_fixture",
+      "path": "app.py",
+      "kind": "replace",
+      "tool_call_id": "tool_edit",
+      "patch_hash": "sha256:fixture",
+      "duration_ms": 8
+    },
+    {
+      "event_id": 14,
+      "type": "edit.rejected",
+      "run_id": "run_fixture",
+      "path": "config.py",
+      "tool_call_id": "tool_edit_rejected"
+    },
+    {
+      "event_id": 15,
+      "type": "usage.recorded",
+      "run_id": "run_fixture",
+      "provider": "fixture",
+      "model": "fixture-model",
+      "purpose": "main",
+      "input_tokens": 10,
+      "output_tokens": 5,
+      "estimated_cost": 0
+    },
+    {
+      "event_id": 16,
+      "type": "context.budget",
+      "run_id": "run_fixture",
+      "purpose": "history",
+      "compacted": true,
+      "before_tokens": 100,
+      "after_tokens": 50
+    },
+    {
+      "event_id": 17,
+      "type": "run.cancelled",
+      "run_id": "run_fixture",
+      "status": "cancelled",
+      "message": "当前任务已取消。"
+    },
+    {
+      "event_id": 18,
+      "type": "error",
+      "run_id": "run_fixture",
+      "error": "Agent execution failed",
+      "error_type": "RuntimeError"
+    },
+    {
+      "event_id": 19,
+      "type": "final",
+      "run_id": "run_fixture",
+      "status": "completed",
+      "summary": "fixture complete"
+    }
+  ],
+  "forward_compat_event": {
+    "event_id": 100,
+    "type": "future.progress",
+    "message": "future event",
+    "future_field": {
+      "percent": 50
+    }
+  }
+}

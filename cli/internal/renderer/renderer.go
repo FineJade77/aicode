@@ -345,6 +345,8 @@ func RenderEvent(event map[string]any) {
 		fmt.Printf("%s (%s)\n", detail, stringValue(event["error"]))
 	case "approval.requested":
 		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
+	case "approval.expired":
+		fmt.Printf("确认已过期: %s\n", stringValue(event["message"]))
 	case "edit.applied":
 		fmt.Printf("\n已应用编辑: %v (%v)\n", event["path"], event["kind"])
 	case "edit.rejected":
@@ -353,6 +355,8 @@ func RenderEvent(event map[string]any) {
 		fmt.Printf("\n[本会话已允许] 自动应用编辑: %v\n", event["path"])
 	case "usage.recorded":
 		fmt.Println(usageLine(event))
+	case "error":
+		fmt.Printf("\n错误: %s\n", stringValue(event["error"]))
 	case "final":
 		fmt.Printf("\n%s\n", stringValue(event["summary"]))
 	default:
@@ -427,6 +431,18 @@ func contextOutputLine(event map[string]any) string {
 func contextBudgetLine(event map[string]any) string {
 	if !boolValue(event["compacted"]) {
 		return ""
+	}
+	if event["before_tokens"] != nil || event["after_tokens"] != nil {
+		purpose := stringValue(event["purpose"])
+		if purpose == "" {
+			purpose = "model"
+		}
+		return fmt.Sprintf(
+			"上下文预算: %s %v -> %v tokens\n",
+			purpose,
+			event["before_tokens"],
+			event["after_tokens"],
+		)
 	}
 	var out strings.Builder
 	purpose := stringValue(event["purpose"])

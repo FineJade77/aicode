@@ -31,7 +31,11 @@ func Run(cfg config.Config, args []string) error {
 	}
 	switch response.Status {
 	case "cancelled":
-		fmt.Printf("已取消任务 %s；队列中剩余 %d 个任务。\n", response.RunID, response.Queued)
+		runID := ""
+		if response.RunID != nil {
+			runID = *response.RunID
+		}
+		fmt.Printf("已取消任务 %s；队列中剩余 %d 个任务。\n", runID, response.Queued)
 	case "idle":
 		fmt.Println("该会话当前没有正在执行的任务。")
 	default:

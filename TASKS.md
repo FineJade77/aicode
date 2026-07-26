@@ -46,7 +46,7 @@
 - 新增双向 drift tests。
 - 验证：定向测试 54 项、Python 全量测试 211 项、Go 全量测试、Python compile 和 `go vet` 全部通过。
 
-### `[ ]` T-002 HTTP/SSE contract fixture
+### `[x]` T-002 HTTP/SSE contract fixture
 
 对应：WP0.4
 
@@ -57,6 +57,15 @@
 - 为关键 SSE event 建立最小 fixture。
 - 增加 Go client/renderer 对 fixture 的兼容测试。
 - 明确未知字段和未知 event type 的兼容行为。
+
+完成记录（2026-07-26）：
+
+- 新增共享 `http-responses.v2.json` 与 `sse-events.v2.json` fixture，覆盖关键 HTTP response 和全部 v2 event。
+- Runtime 为 send/cancel endpoint 增加显式 response model。
+- Go client 支持 cancel idle response 的 nullable `run_id`。
+- 固定兼容规则：未知字段忽略或透传；未来 event 由 Go client 透传、renderer 回显 JSON；只有 `final` 结束 stream。
+- renderer 补齐 `approval.expired`、`error`，并适配当前 token-based `context.budget`。
+- 验证：Python contract/server 定向测试 24 项、Go client/renderer/cancel 定向测试、Python 全量测试 213 项、Go 全量测试、Python compile、`go vet` 和 `gofmt` 全部通过。
 
 ### `[ ]` T-003 版本化 Runtime 安装布局
 

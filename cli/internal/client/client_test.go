@@ -25,7 +25,7 @@ func TestStreamEventsReconnectsWithLastEventID(t *testing.T) {
 		requestCount++
 		switch requestCount {
 		case 1:
-			return sseResponse("id: 1\nevent: plan.created\ndata: {\"type\":\"plan.created\",\"event_id\":1}\n\n"), nil
+			return sseResponse("id: 1\nevent: run.started\ndata: {\"type\":\"run.started\",\"event_id\":1}\n\n"), nil
 		case 2:
 			secondAfter = r.URL.Query().Get("after")
 			secondLastEventID = r.Header.Get("Last-Event-ID")
@@ -52,7 +52,7 @@ func TestStreamEventsReconnectsWithLastEventID(t *testing.T) {
 	if secondLastEventID != "1" {
 		t.Fatalf("Last-Event-ID = %q, want 1", secondLastEventID)
 	}
-	if want := []string{"plan.created", "final"}; !reflect.DeepEqual(eventTypes, want) {
+	if want := []string{"run.started", "final"}; !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("events = %#v, want %#v", eventTypes, want)
 	}
 }
@@ -157,7 +157,7 @@ func TestCancelRunReturnsCancelledRun(t *testing.T) {
 	if gotPath != "/v1/sessions/sess_1/cancel" {
 		t.Fatalf("path = %q", gotPath)
 	}
-	if response.Status != "cancelled" || response.RunID != "run_123" || response.Queued != 2 {
+	if response.Status != "cancelled" || response.RunID == nil || *response.RunID != "run_123" || response.Queued != 2 {
 		t.Fatalf("response = %#v", response)
 	}
 }
