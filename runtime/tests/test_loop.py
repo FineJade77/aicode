@@ -3,11 +3,16 @@ import json
 
 import pytest
 
-from app.agent.loop import run_turn
+from app.agent.loop import complete_with_compaction, run_turn
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import Settings
-from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY
+from app.models.provider import (
+    TOOL_ARGUMENT_PARSE_ERROR_KEY,
+    ContextOverflowError,
+    StreamEvent,
+    Usage,
+)
 from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.trust import TrustStore
@@ -40,6 +45,30 @@ def events_of(session, event_type):
     return [e for e in session.events.events_after(0) if e.get("type") == event_type]
 
 
+class OverflowThenTextProvider:
+    provider_name = "fake"
+
+    def __init__(self, failures: int):
+        self.failures = failures
+        self.main_calls = 0
+        self.calls = []
+
+    def is_configured(self):
+        return True
+
+    async def stream_complete(self, request):
+        self.calls.append(request)
+        if request.purpose == "summarizer":
+            yield StreamEvent(type="text_delta", text="- 保留当前目标与验证结果")
+            yield StreamEvent(type="done", usage=Usage(20, 8), model="summary-model")
+            return
+        self.main_calls += 1
+        if self.main_calls <= self.failures:
+            raise ContextOverflowError("maximum context length exceeded")
+        yield StreamEvent(type="text_delta", text="恢复成功")
+        yield StreamEvent(type="done", usage=Usage(20, 8), model="main-model")
+
+
 @pytest.mark.asyncio
 async def test_plain_text_turn_emits_final(tmp_path):
     runtime, _ = make_runtime([text_turn("没什么要改的")], tmp_path)
@@ -48,6 +77,73 @@ async def test_plain_text_turn_emits_final(tmp_path):
     finals = events_of(session, "final")
     assert finals and "没什么要改的" in finals[0]["summary"]
     assert events_of(session, "assistant.delta")
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_forces_one_compaction_retry(tmp_path):
+    provider = OverflowThenTextProvider(failures=1)
+    router = ModelRouter(primary=provider, settings=Settings())
+    runtime = AgentRuntime(
+        model_router=router,
+        audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+        policy=PolicyEngine(),
+    )
+    store = SessionStore(path=tmp_path / "overflow.sqlite")
+    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    for index in range(4):
+        store.append_message(session, {"role": "user", "content": f"历史目标 {index}"})
+
+    async def on_delta(_text):
+        return None
+
+    history, result = await complete_with_compaction(
+        session=session,
+        runtime=runtime,
+        purpose="main",
+        system="system",
+        tools=[],
+        on_text_delta=on_delta,
+        max_tokens=1_024,
+    )
+
+    assert result.text == "恢复成功"
+    assert provider.main_calls == 2
+    assert len(session.compactions) == 1
+    assert history[0]["content"].startswith("[持久化历史摘要")
+    budget_event = events_of(session, "context.budget")[-1]
+    assert budget_event["forced"] is True
+    assert budget_event["reason"] == "provider_overflow"
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_is_never_retried_more_than_once(tmp_path):
+    provider = OverflowThenTextProvider(failures=99)
+    router = ModelRouter(primary=provider, settings=Settings())
+    runtime = AgentRuntime(
+        model_router=router,
+        audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+        policy=PolicyEngine(),
+    )
+    store = SessionStore(path=tmp_path / "overflow-twice.sqlite")
+    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    for index in range(4):
+        store.append_message(session, {"role": "user", "content": f"历史目标 {index}"})
+
+    async def on_delta(_text):
+        return None
+
+    with pytest.raises(ContextOverflowError):
+        await complete_with_compaction(
+            session=session,
+            runtime=runtime,
+            purpose="main",
+            system="system",
+            tools=[],
+            on_text_delta=on_delta,
+            max_tokens=1_024,
+        )
+
+    assert provider.main_calls == 2
 
 
 @pytest.mark.asyncio

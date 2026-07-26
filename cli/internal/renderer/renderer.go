@@ -82,6 +82,36 @@ func ModelRoutesTable(value any) string {
 	out.WriteString("\nRoutes\n")
 	writeKeyValueTable(&out, root["routes"], "ROUTE", "MODEL")
 
+	if capabilities, ok := root["capabilities"].(map[string]any); ok {
+		out.WriteString("\nContext Capabilities\n")
+		var table bytes.Buffer
+		writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(writer, "ROUTE\tPROVIDER\tMODEL\tCONTEXT\tMAX OUTPUT\tSOURCE")
+		keys := make([]string, 0, len(capabilities))
+		for key := range capabilities {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			row, ok := capabilities[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(
+				writer,
+				"%s\t%s\t%s\t%v\t%v\t%s\n",
+				key,
+				stringValue(row["provider"]),
+				stringValue(row["model"]),
+				row["context_window"],
+				row["max_output_tokens"],
+				stringValue(row["source"]),
+			)
+		}
+		writer.Flush()
+		out.WriteString(table.String())
+	}
+
 	if openai, ok := root["openai_compatible"].(map[string]any); ok {
 		out.WriteString("\nOpenAI-compatible\n")
 		out.WriteString(fmt.Sprintf("base_url: %s\n", stringValue(openai["base_url"])))

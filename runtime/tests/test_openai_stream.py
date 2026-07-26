@@ -5,7 +5,7 @@ import pytest
 
 from app.config.settings import OpenAICompatibleSettings
 from app.models.openai_compatible import OpenAICompatibleProvider, to_openai_messages, to_openai_tools
-from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ProviderError
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ContextOverflowError, ProviderError
 
 
 def sse_bytes(*chunks: str) -> bytes:
@@ -90,6 +90,23 @@ async def test_no_retry_on_400(monkeypatch):
     provider = make_provider(handler)
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
     with pytest.raises(ProviderError, match="HTTP 400"):
+        async for _ in provider.stream_complete(request):
+            pass
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_is_classified_without_transport_retry(monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "sk-test")
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, json={"error": {"code": "context_length_exceeded", "message": "maximum context length"}})
+
+    provider = make_provider(handler)
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
+    with pytest.raises(ContextOverflowError):
         async for _ in provider.stream_complete(request):
             pass
     assert calls["n"] == 1

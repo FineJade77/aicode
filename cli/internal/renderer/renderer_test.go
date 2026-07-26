@@ -172,6 +172,15 @@ func TestModelRoutesTable(t *testing.T) {
 			"reviewer":   "gpt-5",
 			"summarizer": "gpt-5-mini",
 		},
+		"capabilities": map[string]any{
+			"main": map[string]any{
+				"provider":          "openai_compatible",
+				"model":             "local-8k",
+				"context_window":    float64(8192),
+				"max_output_tokens": float64(2048),
+				"source":            "configured",
+			},
+		},
 		"openai_compatible": map[string]any{
 			"base_url":        "https://api.example.com/v1",
 			"api_key_env":     "OPENAI_API_KEY",
@@ -195,6 +204,9 @@ func TestModelRoutesTable(t *testing.T) {
 	assertContains(t, table, "primary: openai_compatible (configured: false)")
 	assertContains(t, table, "reviewer")
 	assertContains(t, table, "gpt-5")
+	assertContains(t, table, "Context Capabilities")
+	assertContains(t, table, "local-8k")
+	assertContains(t, table, "8192")
 	assertContains(t, table, "OpenAI-compatible")
 	assertContains(t, table, "base_url: https://api.example.com/v1")
 	assertContains(t, table, "Pricing (USD / per_1m_tokens)")

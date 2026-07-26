@@ -20,6 +20,7 @@ DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
 EVENT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_SESSION_CACHE_LIMIT = 200
+COMPACTION_SCHEMA_VERSION = 1
 
 
 @dataclass(slots=True)
@@ -44,6 +45,40 @@ class PendingApproval:
 class QueuedAgentRun:
     run_id: str
     request: Any
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionEntry:
+    compaction_id: int | None
+    session_id: str
+    schema_version: int
+    start_message_id: int
+    end_message_id: int
+    summary: str
+    provider: str
+    model: str
+    prompt_version: str
+    before_tokens: int
+    after_tokens: int
+    context_window: int
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "compaction_id": self.compaction_id,
+            "session_id": self.session_id,
+            "schema_version": self.schema_version,
+            "start_message_id": self.start_message_id,
+            "end_message_id": self.end_message_id,
+            "summary": self.summary,
+            "provider": self.provider,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
+            "before_tokens": self.before_tokens,
+            "after_tokens": self.after_tokens,
+            "context_window": self.context_window,
+            "created_at": self.created_at.isoformat(),
+        }
 
 
 class SessionEvents:
@@ -165,6 +200,8 @@ class Session:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     events: SessionEvents = field(default_factory=SessionEvents)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    message_ids: list[int] = field(default_factory=list)
+    compactions: list[CompactionEntry] = field(default_factory=list)
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
     agent_queue: asyncio.Queue[QueuedAgentRun] = field(default_factory=asyncio.Queue)
     agent_runner_task: asyncio.Task[Any] | None = None
@@ -173,7 +210,8 @@ class Session:
     current_run_started_at: datetime | None = None
     current_run_last_progress_at: datetime | None = None
     auto_accept_edits: bool = False
-    message_appender: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
+    message_appender: Callable[[dict[str, Any]], int | None] | None = field(default=None, repr=False)
+    compaction_appender: Callable[[CompactionEntry], CompactionEntry] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -208,11 +246,18 @@ class Session:
         self.agent_queue.put_nowait(queued)
         return queued
 
-    def append_message(self, message: dict[str, Any]) -> None:
+    def append_message(self, message: dict[str, Any]) -> int | None:
         if self.message_appender is not None:
-            self.message_appender(message)
-            return
+            return self.message_appender(message)
         self.messages.append(message)
+        self.message_ids.append(0)
+        return None
+
+    def append_compaction(self, entry: CompactionEntry) -> CompactionEntry:
+        if self.compaction_appender is not None:
+            return self.compaction_appender(entry)
+        self.compactions.append(entry)
+        return entry
 
     def next_agent_run(self) -> QueuedAgentRun | None:
         try:
@@ -355,7 +400,8 @@ class SessionStore:
             if row is None:
                 return None
             session = self._session_from_row(row)
-            session.messages = self._load_messages(conn, session.session_id)
+            session.messages, session.message_ids = self._load_message_records(conn, session.session_id)
+            session.compactions = self._load_compactions(conn, session.session_id)
             self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
             self._touch(session)
             return session
@@ -372,7 +418,8 @@ class SessionStore:
                 if session is None:
                     session = self._session_from_row(row)
                     self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
-                session.messages = self._load_messages(conn, session.session_id)
+                session.messages, session.message_ids = self._load_message_records(conn, session.session_id)
+                session.compactions = self._load_compactions(conn, session.session_id)
                 self._touch(session)
                 sessions.append(session.to_dict())
             return sessions
@@ -391,19 +438,19 @@ class SessionStore:
             if row is None:
                 return None
             session = self._session_from_row(row)
-            session.messages = self._load_messages(conn, session.session_id)
+            session.messages, session.message_ids = self._load_message_records(conn, session.session_id)
+            session.compactions = self._load_compactions(conn, session.session_id)
             self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
             self._touch(session)
             self._last_session_id = session.session_id
             return session
 
-    def append_message(self, session: Session, message: dict[str, Any]) -> None:
+    def append_message(self, session: Session, message: dict[str, Any]) -> int:
         self._ensure_schema()
         session.updated_at = datetime.now(timezone.utc)
         self._last_session_id = session.session_id
-        session.messages.append(message)
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "insert into messages (session_id, role, payload, created_at) values (?, ?, ?, ?)",
                 (
                     session.session_id,
@@ -416,6 +463,54 @@ class SessionStore:
                 "update sessions set updated_at = ? where session_id = ?",
                 (session.updated_at.isoformat(), session.session_id),
             )
+            message_id = int(cursor.lastrowid)
+        session.messages.append(message)
+        session.message_ids.append(message_id)
+        return message_id
+
+    def append_compaction(self, session: Session, entry: CompactionEntry) -> CompactionEntry:
+        self._ensure_schema()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                insert into compactions (
+                    session_id, schema_version, start_message_id, end_message_id, summary,
+                    provider, model, prompt_version, before_tokens, after_tokens,
+                    context_window, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session.session_id,
+                    entry.schema_version,
+                    entry.start_message_id,
+                    entry.end_message_id,
+                    entry.summary,
+                    entry.provider,
+                    entry.model,
+                    entry.prompt_version,
+                    entry.before_tokens,
+                    entry.after_tokens,
+                    entry.context_window,
+                    entry.created_at.isoformat(),
+                ),
+            )
+            stored = CompactionEntry(
+                compaction_id=int(cursor.lastrowid),
+                session_id=session.session_id,
+                schema_version=entry.schema_version,
+                start_message_id=entry.start_message_id,
+                end_message_id=entry.end_message_id,
+                summary=entry.summary,
+                provider=entry.provider,
+                model=entry.model,
+                prompt_version=entry.prompt_version,
+                before_tokens=entry.before_tokens,
+                after_tokens=entry.after_tokens,
+                context_window=entry.context_window,
+                created_at=entry.created_at,
+            )
+        session.compactions.append(stored)
+        return stored
 
     def event_writer_status(self) -> dict[str, Any]:
         return {
@@ -453,6 +548,25 @@ class SessionStore:
                 );
 
                 create index if not exists idx_messages_session_id on messages(session_id, id);
+
+                create table if not exists compactions (
+                    id integer primary key autoincrement,
+                    session_id text not null,
+                    schema_version integer not null,
+                    start_message_id integer not null,
+                    end_message_id integer not null,
+                    summary text not null,
+                    provider text not null,
+                    model text not null,
+                    prompt_version text not null,
+                    before_tokens integer not null,
+                    after_tokens integer not null,
+                    context_window integer not null,
+                    created_at text not null,
+                    foreign key (session_id) references sessions(session_id)
+                );
+
+                create index if not exists idx_compactions_session_id on compactions(session_id, id);
 
                 create table if not exists events (
                     id integer primary key autoincrement,
@@ -500,6 +614,7 @@ class SessionStore:
             max_events=self.event_limit,
         )
         session.message_appender = lambda message: self.append_message(session, message)
+        session.compaction_appender = lambda entry: self.append_compaction(session, entry)
 
     def _append_event(self, session_id: str, event: dict[str, Any]) -> None:
         sequence = int(event.get("event_id") or 0)
@@ -592,18 +707,54 @@ class SessionStore:
             (session_id, session_id, self.event_limit),
         )
 
-    def _load_messages(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+    def _load_message_records(self, conn: sqlite3.Connection, session_id: str) -> tuple[list[dict[str, Any]], list[int]]:
         rows = conn.execute(
-            "select payload from messages where session_id = ? order by id asc",
+            "select id, payload from messages where session_id = ? order by id asc",
             (session_id,),
         ).fetchall()
         messages: list[dict[str, Any]] = []
+        message_ids: list[int] = []
         for row in rows:
             try:
-                messages.append(json.loads(str(row["payload"])))
+                message = json.loads(str(row["payload"]))
             except json.JSONDecodeError:
                 continue
-        return messages
+            if not isinstance(message, dict):
+                continue
+            messages.append(message)
+            message_ids.append(int(row["id"]))
+        return messages, message_ids
+
+    def _load_compactions(self, conn: sqlite3.Connection, session_id: str) -> list[CompactionEntry]:
+        rows = conn.execute(
+            """
+            select id, session_id, schema_version, start_message_id, end_message_id,
+                   summary, provider, model, prompt_version, before_tokens, after_tokens,
+                   context_window, created_at
+            from compactions
+            where session_id = ?
+            order by id asc
+            """,
+            (session_id,),
+        ).fetchall()
+        return [
+            CompactionEntry(
+                compaction_id=int(row["id"]),
+                session_id=str(row["session_id"]),
+                schema_version=int(row["schema_version"]),
+                start_message_id=int(row["start_message_id"]),
+                end_message_id=int(row["end_message_id"]),
+                summary=str(row["summary"]),
+                provider=str(row["provider"]),
+                model=str(row["model"]),
+                prompt_version=str(row["prompt_version"]),
+                before_tokens=int(row["before_tokens"]),
+                after_tokens=int(row["after_tokens"]),
+                context_window=int(row["context_window"]),
+                created_at=datetime.fromisoformat(str(row["created_at"])),
+            )
+            for row in rows
+        ]
 
     def _load_events_with_recovered_approvals(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
         events = self._load_events(conn, session_id)

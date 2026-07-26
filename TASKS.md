@@ -160,7 +160,7 @@
 - 新增 Project Trust schema、HTTP fixture/Go client contract、Runtime API 和 trust change audit；README、ARCHITECTURE、ROADMAP 同步安全语义。
 - 验证：Python 全量测试 256 项通过（本机 Docker daemon/镜像不可用时跳过 1 项）、Go 全量测试、go vet、Python compileall、git diff check，以及包含 trust add/list/remove 的 clean-home install/doctor/start/status/stop E2E 全部通过。
 
-### `[ ]` T-007 持久化、模型感知的 compaction
+### `[x]` T-007 持久化、模型感知的 compaction
 
 对应：WP0.3
 
@@ -172,6 +172,17 @@
 - compaction entry 持久化和 resume projection。
 - context overflow 单次恢复重试。
 - 增加旧 session、工具配对和连续压缩测试。
+
+完成记录（2026-07-26）：
+
+- 新增 provider/model-aware `ModelCapability`，支持按 `<provider>:<model>` 或 `<model>` 配置 context window 与 max output；每次 main/reviewer/final 模型调用前统一估算 system、tools、history、输出预留和安全余量，`aicode models` 同步显示实际 capability 与来源。
+- SQLite 新增 append-only schema v1 `compactions` 表，持久化 covered message id range、summary、provider/model、prompt version、压缩前后 token 估算、context window 和时间；原始 messages 不删除、不覆盖。
+- session resume 使用最近有效且版本受支持的 compaction 重建 projection；旧数据库自动建表且继续读取，未知未来 schema 会被忽略并回退到上一条有效 projection。
+- compaction cutoff 以原子消息组为边界，assistant tool calls 与对应 tool results 始终一起保留，未完成 tool call 不进入摘要；连续 compaction 累积上一摘要并推进 covered range。
+- summarizer 请求按自身 capability 裁剪输入并记录 usage；provider 摘要失败时使用本地确定性 fallback，保留完整 source log，并通过 `context.budget` 暴露可恢复错误类型。
+- OpenAI-compatible 与 Anthropic provider 统一识别 context overflow；Agent 仅执行一次 forced compaction retry，第二次 overflow 直接上抛，避免无限恢复循环。
+- README 与 ARCHITECTURE 已补充 capability 配置、preflight、append-only source/projection 分离和恢复语义。
+- 验证：Python 全量测试 267 项通过（本机 Docker daemon/镜像不可用时跳过 1 项）、Go 全量测试、go vet、Python compileall、gofmt 和 `git diff --check` 全部通过。
 
 ## M2：本地日用
 

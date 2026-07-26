@@ -66,12 +66,46 @@ class CompletionResult:
     estimated_cost: float = 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class ModelCapability:
+    provider: str
+    model: str
+    context_window: int
+    max_output_tokens: int
+    source: str = "default"
+
+
 class ProviderError(Exception):
+    pass
+
+
+class ContextOverflowError(ProviderError):
     pass
 
 
 class ProviderNotConfigured(ProviderError):
     pass
+
+
+def is_context_overflow_response(status_code: int, body: str) -> bool:
+    normalized = body.casefold()
+    if status_code == 413:
+        return True
+    exact_markers = (
+        "context_length_exceeded",
+        "maximum context length",
+        "context window",
+        "prompt is too long",
+        "input is too long",
+        "too many input tokens",
+        "request too large for model",
+        "reduce the length of the messages",
+    )
+    if any(marker in normalized for marker in exact_markers):
+        return True
+    return status_code in {400, 413, 422} and "token" in normalized and any(
+        marker in normalized for marker in ("limit", "maximum", "exceed", "too long")
+    )
 
 
 class StreamingModelProvider(Protocol):

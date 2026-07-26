@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.agent.history import compact_if_needed, load_history, persist_message, truncate_tool_output
+from app.agent.history import load_history, persist_message, prepare_history_for_model, truncate_tool_output
 from app.agent.prompts import BUDGET_NOTE_EN, BUDGET_NOTE_ZH, VERIFY_NOTE_EN, VERIFY_NOTE_ZH, build_system_prompt
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.agent.utils import localized
@@ -12,6 +12,7 @@ from app.audit.logger import stable_hash
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     CompletionResult,
+    ContextOverflowError,
     ToolCallRequest,
     tool_argument_parse_error,
 )
@@ -72,9 +73,14 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
 
     for _step in range(budget.max_steps):
         session.mark_agent_progress("model.request")
-        result = await runtime.model_router.stream_complete(
-            purpose=purpose, system=system, messages=history, tools=tools,
-            on_text_delta=on_delta, max_tokens=budget.max_tokens_per_call,
+        history, result = await complete_with_compaction(
+            session=session,
+            runtime=runtime,
+            purpose=purpose,
+            system=system,
+            tools=tools,
+            on_text_delta=on_delta,
+            max_tokens=budget.max_tokens_per_call,
         )
         await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
@@ -98,14 +104,19 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
             history.append(reply)
             persist_message(session, reply)
 
-        history = await compact_if_needed(history, runtime, session)
     else:
         note = user_note(localized(request.language, BUDGET_NOTE_ZH, BUDGET_NOTE_EN))
         history.append(note)
         persist_message(session, note)
         session.mark_agent_progress("model.request")
-        result = await runtime.model_router.stream_complete(
-            purpose=purpose, system=system, messages=history, tools=[], on_text_delta=on_delta,
+        history, result = await complete_with_compaction(
+            session=session,
+            runtime=runtime,
+            purpose=purpose,
+            system=system,
+            tools=[],
+            on_text_delta=on_delta,
+            max_tokens=budget.max_tokens_per_call,
         )
         await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
@@ -115,6 +126,55 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
     summary = str(message.get("content") or "") if result is not None else ""
     runtime.audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode})
     await session.events.put({"type": "final", "summary": summary})
+
+
+async def complete_with_compaction(
+    *,
+    session: Session,
+    runtime: Any,
+    purpose: str,
+    system: str,
+    tools: list[dict[str, Any]] | tuple[Any, ...],
+    on_text_delta: Any,
+    max_tokens: int,
+) -> tuple[list[dict[str, Any]], CompletionResult]:
+    history = await prepare_history_for_model(
+        runtime=runtime,
+        session=session,
+        purpose=purpose,
+        system=system,
+        tools=tools,
+        max_tokens=max_tokens,
+    )
+    try:
+        result = await runtime.model_router.stream_complete(
+            purpose=purpose,
+            system=system,
+            messages=history,
+            tools=tools,
+            on_text_delta=on_text_delta,
+            max_tokens=max_tokens,
+        )
+    except ContextOverflowError:
+        session.mark_agent_progress("context.compaction_retry")
+        history = await prepare_history_for_model(
+            runtime=runtime,
+            session=session,
+            purpose=purpose,
+            system=system,
+            tools=tools,
+            max_tokens=max_tokens,
+            force=True,
+        )
+        result = await runtime.model_router.stream_complete(
+            purpose=purpose,
+            system=system,
+            messages=history,
+            tools=tools,
+            on_text_delta=on_text_delta,
+            max_tokens=max_tokens,
+        )
+    return history, result
 
 
 async def execute_gated(

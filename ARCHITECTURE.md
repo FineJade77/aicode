@@ -164,6 +164,11 @@ build system prompt + project prompt + recent messages
 select model route and tool schemas by mode
   |
   v
+preflight provider/model context budget
+  |
+  +--> over budget: persist compaction and rebuild projection
+  |
+  v
 stream model response
   |
   +--> plain assistant text
@@ -179,9 +184,6 @@ stream model response
           |
           v
        persist tool result and continue
-  |
-  v
-compact history when context budget requires it
   |
   v
 emit run.completed or run.failed
@@ -332,6 +334,8 @@ Runtime 支持两类 provider：
 
 Provider 配置要求明确的 API key env。未配置时，Runtime 会返回清晰错误，而不是静默降级。
 
+每个 purpose 在调用前解析 `provider + model` capability，包括 context window 与 max output。精确配置优先使用 `AICODE_MODEL_CONTEXT_WINDOWS_JSON` 和 `AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON` 中的 `<provider>:<model>` key，其次匹配 `<model>`，最后使用保守默认值。预算包含 system prompt、tool schema、history、预留输出和安全余量；`GET /v1/models/routes` 与 `aicode models` 会暴露实际 capability 及配置来源。
+
 ## 13. Sessions And API
 
 主要 API：
@@ -365,13 +369,16 @@ Runtime 持久化以下内容：
 
 - session metadata。
 - user / assistant / tool messages。
+- 版本化 compaction entries（覆盖 message id 范围、summary、provider/model、prompt version、token 估算、context window 和创建时间）。
 - SSE events。
 - approval 状态。
 - usage records。
 - audit JSONL。
 - 仓库外 Project Trust store。
 
-历史消息会在接近上下文预算时被压缩，压缩结果作为摘要继续参与后续 prompt。
+`messages` 是 append-only source of truth，compaction 只定义发给模型的可重建 projection，不删除或覆盖原始历史。恢复 session 时选择最近一个仍指向有效 message range 的 schema v1 compaction，并拼接其后的原始消息。压缩边界以完整消息组为单位：assistant tool calls 与其 tool results 不会拆开，未完成 tool call 不能进入摘要。
+
+compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
 ## 15. Audit And Usage
 

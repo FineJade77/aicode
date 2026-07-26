@@ -3,7 +3,7 @@ import pytest
 
 from app.config.settings import AnthropicSettings
 from app.models.anthropic import AnthropicProvider, to_anthropic_messages
-from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ProviderError
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ContextOverflowError, ProviderError
 
 
 def sse(event: str, data: str) -> str:
@@ -75,6 +75,27 @@ async def test_no_retry_on_400(monkeypatch):
     provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
     with pytest.raises(ProviderError, match="HTTP 400"):
+        async for _ in provider.stream_complete(request):
+            pass
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_is_classified_without_transport_retry(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, json={"type": "error", "error": {"message": "prompt is too long"}})
+
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    with pytest.raises(ContextOverflowError):
         async for _ in provider.stream_complete(request):
             pass
     assert calls["n"] == 1

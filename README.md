@@ -389,10 +389,16 @@ export AICODE_ANTHROPIC_TIMEOUT_SECONDS="120"
 export AICODE_MODEL_MAIN="gpt-5"
 export AICODE_MODEL_REVIEWER="gpt-5"
 export AICODE_MODEL_SUMMARIZER="gpt-5-mini"
+export AICODE_MODEL_CONTEXT_WINDOWS_JSON='{"openai_compatible:local-8k":8192,"gpt-5":200000}'
+export AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON='{"openai_compatible:local-8k":2048}'
 export AICODE_SESSION_EVENT_LIMIT="2000"
 export AICODE_SESSION_CACHE_LIMIT="200"
 export AICODE_MODEL_PRICES_JSON='{"openai_compatible/gpt-5":{"input_per_1m":1.25,"output_per_1m":10}}'
 ```
+
+context capability 的 key 优先使用 `<provider>:<model>`，也支持只写 `<model>`；未配置的模型保守使用 32768 context window 和 8192 max output。`aicode models` 会显示每条路由实际采用的 context、max output 及其来源。还可用 `AICODE_CONTEXT_DEFAULT_WINDOW`、`AICODE_CONTEXT_DEFAULT_MAX_OUTPUT_TOKENS`、`AICODE_CONTEXT_RESERVE_TOKENS`、`AICODE_CONTEXT_COMPACT_THRESHOLD` 和 `AICODE_CONTEXT_CHARS_PER_TOKEN` 调整默认预算与估算参数。
+
+Runtime 会在每次模型请求前估算 system prompt、tool schema、session history 和预留输出所占 token。接近当前 provider/model 的窗口时，它先把旧历史压缩成版本化 compaction entry，再提交请求；原始 message log 保持追加且不会被摘要覆盖。恢复 session 时直接复用最近有效 compaction。若 provider 仍返回 context overflow，只允许一次强制压缩重试，第二次错误会原样结束本次 run，避免无限重试。
 
 ## 项目级配置
 

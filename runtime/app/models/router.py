@@ -9,6 +9,7 @@ from app.models.openai_compatible import OpenAICompatibleProvider
 from app.models.provider import (
     CompletionRequest,
     CompletionResult,
+    ModelCapability,
     ProviderNotConfigured,
     StreamingModelProvider,
     ToolCallRequest,
@@ -37,6 +38,23 @@ class ModelRouter:
             return self.settings.models.summarizer
         return self.settings.models.main
 
+    def capability_for_purpose(self, purpose: str) -> ModelCapability:
+        model = self.model_for_purpose(purpose)
+        provider = str(getattr(self.primary, "provider_name", self.primary.__class__.__name__))
+        provider_key = f"{provider}:{model}"
+        contexts = self.settings.context.model_context_windows
+        outputs = self.settings.context.model_max_output_tokens
+        context_window = contexts.get(provider_key, contexts.get(model, self.settings.context.default_context_window))
+        max_output_tokens = outputs.get(provider_key, outputs.get(model, self.settings.context.default_max_output_tokens))
+        source = "configured" if provider_key in contexts or model in contexts else "default"
+        return ModelCapability(
+            provider=provider,
+            model=model,
+            context_window=context_window,
+            max_output_tokens=min(max_output_tokens, max(1, context_window - 1)),
+            source=source,
+        )
+
     async def aclose(self) -> None:
         aclose = getattr(self.primary, "aclose", None)
         if callable(aclose):
@@ -63,7 +81,7 @@ class ModelRouter:
             tools=list(tools),
             model=self.model_for_purpose(purpose),
             temperature=temperature,
-            max_tokens=max_tokens,
+            max_tokens=min(max_tokens, self.capability_for_purpose(purpose).max_output_tokens),
         )
         text_parts: list[str] = []
         tool_calls: list[ToolCallRequest] = []
@@ -110,6 +128,17 @@ class ModelRouter:
                 "main": self.settings.models.main,
                 "reviewer": self.settings.models.reviewer,
                 "summarizer": self.settings.models.summarizer,
+            },
+            "capabilities": {
+                purpose: {
+                    "provider": capability.provider,
+                    "model": capability.model,
+                    "context_window": capability.context_window,
+                    "max_output_tokens": capability.max_output_tokens,
+                    "source": capability.source,
+                }
+                for purpose in ("main", "reviewer", "summarizer")
+                for capability in (self.capability_for_purpose(purpose),)
             },
             "openai_compatible": {
                 "base_url": self.settings.openai_compatible.base_url,

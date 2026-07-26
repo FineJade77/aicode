@@ -11,10 +11,12 @@ from app.config.settings import AnthropicSettings
 from app.models.provider import (
     RETRYABLE_STATUS,
     CompletionRequest,
+    ContextOverflowError,
     ProviderError,
     StreamEvent,
     ToolCallRequest,
     Usage,
+    is_context_overflow_response,
     tool_argument_parse_error,
 )
 
@@ -94,6 +96,8 @@ class AnthropicProvider:
                 async with self.client.stream("POST", url, json=payload, headers=headers) as response:
                     if response.status_code >= 400:
                         body = (await response.aread()).decode("utf-8", errors="replace")
+                        if is_context_overflow_response(response.status_code, body):
+                            raise ContextOverflowError(f"anthropic HTTP {response.status_code}: {body}")
                         if response.status_code in RETRYABLE_STATUS and attempt < 2:
                             raise _Retry(body)
                         raise ProviderError(f"anthropic HTTP {response.status_code}: {body}")

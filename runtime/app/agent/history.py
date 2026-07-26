@@ -1,37 +1,69 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
+from app.models.provider import ModelCapability, ProviderError
 from app.security.secrets import redact_known_environment_secrets
-from app.sessions.store import Session
+from app.sessions.store import COMPACTION_SCHEMA_VERSION, CompactionEntry, Session
 
 HISTORY_TOKEN_BUDGET = 60_000
 HARD_BUDGET_FACTOR = 1.5
 KEEP_RECENT_MESSAGES = 8
+KEEP_RECENT_GROUPS = 6
+FORCED_KEEP_RECENT_GROUPS = 1
+COMPACTION_PROMPT_VERSION = "aicode.compaction.v1"
+COMPACTION_SUMMARY_MAX_CHARS = 8_000
 
 TOOL_OUTPUT_LIMITS = {"bash": 8_000, "run_tests": 8_000, "read_file": 0, "default": 6_000}
 
+COMPACTION_SYSTEM_PROMPT = """\
+你是 coding agent 的历史压缩器。只根据输入生成可继续执行任务的事实摘要，不要臆测。
+必须保留：用户目标和最新约束、未完成任务、关键决策、最近文件修改、验证结果与失败、
+审批/拒绝结果、重要路径/命令/错误，以及继续工作所需的工具结果。
+不要复制冗长工具输出；保留结论和可重新获取内容的线索。输出简洁的 Markdown 要点。"""
+
+
+@dataclass(frozen=True, slots=True)
+class MessageGroup:
+    start: int
+    end: int
+    complete: bool
+
 
 def load_history(session: Session) -> list[dict[str, Any]]:
-    history: list[dict[str, Any]] = []
-    for raw in session.messages:
-        if not isinstance(raw, dict):
-            continue
-        if "role" in raw:
-            history.append(redact_known_environment_secrets(dict(raw)))
-        elif "message" in raw:
-            history.append(
-                {
-                    "role": "user",
-                    "content": redact_known_environment_secrets(str(raw["message"])),
-                }
-            )
-    return history
+    messages, ids = _normalized_messages(session)
+    compaction = latest_valid_compaction(session)
+    if compaction is None:
+        return messages
+    projected = [_summary_message(compaction.summary)]
+    projected.extend(
+        message
+        for message, message_id in zip(messages, ids, strict=False)
+        if message_id > compaction.end_message_id
+    )
+    return projected
 
 
-def persist_message(session: Session, message: dict[str, Any]) -> None:
-    session.append_message(message)
+def persist_message(session: Session, message: dict[str, Any]) -> int | None:
+    return session.append_message(message)
+
+
+def latest_valid_compaction(session: Session) -> CompactionEntry | None:
+    ids = {message_id for message_id in _normalized_message_ids(session) if message_id > 0}
+    if not ids:
+        return None
+    for entry in reversed(session.compactions):
+        if (
+            entry.schema_version == COMPACTION_SCHEMA_VERSION
+            and entry.session_id == session.session_id
+            and entry.start_message_id in ids
+            and entry.end_message_id in ids
+            and entry.start_message_id <= entry.end_message_id
+        ):
+            return entry
+    return None
 
 
 def truncate_tool_output(tool_name: str, text: str) -> str:
@@ -44,15 +76,353 @@ def truncate_tool_output(tool_name: str, text: str) -> str:
     return text[:head] + marker + text[-tail:]
 
 
-def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    return int(len(json.dumps(messages, ensure_ascii=False, default=str)) / 3.5)
+def estimate_tokens(messages: Any, chars_per_token: float = 3.5) -> int:
+    serialized = json.dumps(messages, ensure_ascii=False, default=str, separators=(",", ":"))
+    return max(1, int(len(serialized) / max(1.0, chars_per_token)))
+
+
+def estimate_prompt_tokens(
+    system: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | tuple[Any, ...],
+    chars_per_token: float = 3.5,
+) -> int:
+    return estimate_tokens({"system": system, "messages": messages, "tools": list(tools)}, chars_per_token)
+
+
+async def prepare_history_for_model(
+    *,
+    runtime: Any,
+    session: Session,
+    purpose: str,
+    system: str,
+    tools: list[dict[str, Any]] | tuple[Any, ...],
+    max_tokens: int,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    history = load_history(session)
+    capability = _capability(runtime, purpose, max_tokens)
+    context_settings = getattr(getattr(runtime.model_router, "settings", None), "context", None)
+    chars_per_token = float(getattr(context_settings, "chars_per_token", 3.5))
+    reserve_tokens = int(getattr(context_settings, "reserve_tokens", 1_024))
+    threshold = float(getattr(context_settings, "compact_threshold", 0.8))
+    requested_output = min(max_tokens, capability.max_output_tokens)
+    hard_input_limit = max(1, capability.context_window - requested_output - reserve_tokens)
+    proactive_limit = max(1, int(capability.context_window * threshold))
+    input_limit = min(hard_input_limit, proactive_limit)
+    before = estimate_prompt_tokens(system, history, tools, chars_per_token)
+    if not force and before <= input_limit:
+        return history
+
+    compacted = await _persist_compaction(
+        runtime=runtime,
+        session=session,
+        current_history=history,
+        capability=capability,
+        before_tokens=before,
+        context_window=capability.context_window,
+        input_limit=input_limit,
+        chars_per_token=chars_per_token,
+        system=system,
+        tools=tools,
+        force=force,
+    )
+    return compacted
+
+
+async def _persist_compaction(
+    *,
+    runtime: Any,
+    session: Session,
+    current_history: list[dict[str, Any]],
+    capability: ModelCapability,
+    before_tokens: int,
+    context_window: int,
+    input_limit: int,
+    chars_per_token: float,
+    system: str,
+    tools: list[dict[str, Any]] | tuple[Any, ...],
+    force: bool,
+) -> list[dict[str, Any]]:
+    messages, ids = _normalized_messages(session)
+    previous = latest_valid_compaction(session)
+    previous_end = previous.end_message_id if previous is not None else 0
+    new_records = [(message, message_id) for message, message_id in zip(messages, ids, strict=False) if message_id > previous_end]
+    groups = _message_groups([message for message, _message_id in new_records])
+    keep_counts = (
+        [FORCED_KEEP_RECENT_GROUPS]
+        if force
+        else list(range(min(KEEP_RECENT_GROUPS, len(groups)), 0, -1))
+    )
+    cutoff_index: int | None = None
+    for keep_count in keep_counts:
+        candidate_groups = groups[:-keep_count] if len(groups) > keep_count else []
+        eligible_groups: list[MessageGroup] = []
+        for group in candidate_groups:
+            if not group.complete:
+                break
+            eligible_groups.append(group)
+        if not eligible_groups:
+            continue
+        candidate_cutoff = eligible_groups[-1].end
+        candidate_end_id = new_records[candidate_cutoff][1]
+        conservative_summary = _summary_message("x" * COMPACTION_SUMMARY_MAX_CHARS)
+        candidate_projection = [conservative_summary]
+        candidate_projection.extend(
+            message
+            for message, message_id in zip(messages, ids, strict=False)
+            if message_id > candidate_end_id
+        )
+        cutoff_index = candidate_cutoff
+        if force or estimate_prompt_tokens(system, candidate_projection, tools, chars_per_token) <= input_limit:
+            break
+    if cutoff_index is None and force and previous is not None:
+        end_message_id = previous.end_message_id
+        covered_messages: list[dict[str, Any]] = [_summary_message(previous.summary)]
+    elif cutoff_index is not None:
+        end_message_id = new_records[cutoff_index][1]
+        covered_messages = []
+        if previous is not None:
+            covered_messages.append(_summary_message(previous.summary))
+        covered_messages.extend(message for message, _message_id in new_records[: cutoff_index + 1])
+    else:
+        await _emit_budget_event(
+            session,
+            capability,
+            before_tokens=before_tokens,
+            after_tokens=before_tokens,
+            compacted=False,
+            forced=force,
+            reason="no_safe_boundary",
+        )
+        return current_history
+
+    summary, summary_provider, summary_model, summary_error = await _summarize(
+        covered_messages,
+        runtime=runtime,
+        session=session,
+        chars_per_token=chars_per_token,
+    )
+    first_positive_id = next((message_id for message_id in ids if message_id > 0), end_message_id)
+    start_message_id = previous.start_message_id if previous is not None else first_positive_id
+    projected = [_summary_message(summary)]
+    projected.extend(
+        message
+        for message, message_id in zip(messages, ids, strict=False)
+        if message_id > end_message_id
+    )
+    after_tokens = estimate_prompt_tokens(system, projected, tools, chars_per_token)
+    entry = CompactionEntry(
+        compaction_id=None,
+        session_id=session.session_id,
+        schema_version=COMPACTION_SCHEMA_VERSION,
+        start_message_id=start_message_id,
+        end_message_id=end_message_id,
+        summary=summary,
+        provider=summary_provider,
+        model=summary_model,
+        prompt_version=COMPACTION_PROMPT_VERSION,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+        context_window=context_window,
+    )
+    stored = session.append_compaction(entry)
+    await _emit_budget_event(
+        session,
+        capability,
+        before_tokens=before_tokens,
+        after_tokens=after_tokens,
+        compacted=True,
+        forced=force,
+        reason="provider_overflow" if force else "preflight",
+        compaction_id=stored.compaction_id,
+        summary_mode="fallback" if summary_error else "model",
+        summary_error=summary_error,
+    )
+    return projected
+
+
+async def _summarize(
+    messages: list[dict[str, Any]],
+    *,
+    runtime: Any,
+    session: Session,
+    chars_per_token: float,
+) -> tuple[str, str, str, str | None]:
+    router = getattr(runtime, "model_router", None)
+    if router is None:
+        return _deterministic_summary(messages), "builtin", "deterministic", "model_router_unavailable"
+
+    capability = router.capability_for_purpose("summarizer")
+    context_settings = router.settings.context
+    output_tokens = min(1_200, capability.max_output_tokens)
+    input_tokens = max(1, capability.context_window - output_tokens - context_settings.reserve_tokens)
+    max_chars = max(1_000, int(input_tokens * chars_per_token))
+    serialized = json.dumps(messages, ensure_ascii=False, default=str, separators=(",", ":"))
+    if len(serialized) > max_chars:
+        marker = "\n[压缩输入中段已按 summarizer 上下文上限省略]\n"
+        head_chars = int((max_chars - len(marker)) * 0.6)
+        tail_chars = max_chars - len(marker) - head_chars
+        serialized = serialized[:head_chars] + marker + serialized[-tail_chars:]
+    try:
+        result = await router.stream_complete(
+            purpose="summarizer",
+            system=COMPACTION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": serialized}],
+            tools=[],
+            max_tokens=output_tokens,
+            temperature=0.0,
+        )
+    except ProviderError as exc:
+        return _deterministic_summary(messages), "builtin", "deterministic", exc.__class__.__name__
+    summary = result.text.strip()
+    if not summary:
+        return _deterministic_summary(messages), "builtin", "deterministic", "empty_summary"
+    usage = {
+        "model": result.model,
+        "provider": result.provider,
+        "purpose": "summarizer",
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "estimated_cost": result.estimated_cost,
+    }
+    audit = getattr(runtime, "audit", None)
+    if audit is not None:
+        audit.record("usage.recorded", session_id=session.session_id, workspace=session.workspace, data=usage)
+    await session.events.put({"type": "usage.recorded", **usage})
+    return summary[:COMPACTION_SUMMARY_MAX_CHARS], result.provider, result.model, None
+
+
+def _deterministic_summary(messages: list[dict[str, Any]]) -> str:
+    items: list[str] = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        content = " ".join(str(message.get("content") or "").split())
+        if role == "assistant" and message.get("tool_calls"):
+            calls = ", ".join(str(call.get("name") or "unknown") for call in message["tool_calls"] if isinstance(call, dict))
+            items.append(f"- 工具调用：{calls}")
+        if not content:
+            continue
+        label = {"user": "用户/约束", "assistant": "助手进展", "tool": "工具结果"}.get(role, role)
+        items.append(f"- {label}：{content[:600]}")
+    if not items:
+        return "- 历史内容已压缩；没有可提取的文本事实。"
+    return "\n".join(items)[-COMPACTION_SUMMARY_MAX_CHARS:]
+
+
+def _message_groups(messages: list[dict[str, Any]]) -> list[MessageGroup]:
+    groups: list[MessageGroup] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            expected = {
+                str(call.get("id"))
+                for call in message.get("tool_calls") or []
+                if isinstance(call, dict) and call.get("id")
+            }
+            seen: set[str] = set()
+            end = index
+            cursor = index + 1
+            while cursor < len(messages) and messages[cursor].get("role") == "tool":
+                seen.add(str(messages[cursor].get("tool_call_id") or ""))
+                end = cursor
+                cursor += 1
+            groups.append(MessageGroup(start=index, end=end, complete=bool(expected) and expected.issubset(seen)))
+            index = end + 1
+            continue
+        groups.append(MessageGroup(start=index, end=index, complete=message.get("role") != "tool"))
+        index += 1
+    return groups
+
+
+async def _emit_budget_event(
+    session: Session,
+    capability: ModelCapability,
+    *,
+    before_tokens: int,
+    after_tokens: int,
+    compacted: bool,
+    forced: bool,
+    reason: str,
+    compaction_id: int | None = None,
+    summary_mode: str | None = None,
+    summary_error: str | None = None,
+) -> None:
+    event: dict[str, Any] = {
+        "type": "context.budget",
+        "purpose": "history",
+        "compacted": compacted,
+        "forced": forced,
+        "reason": reason,
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "provider": capability.provider,
+        "model": capability.model,
+        "context_window": capability.context_window,
+    }
+    if compaction_id is not None:
+        event["compaction_id"] = compaction_id
+    if summary_mode is not None:
+        event["summary_mode"] = summary_mode
+    if summary_error is not None:
+        event["summary_error"] = summary_error
+    await session.events.put(event)
+
+
+def _capability(runtime: Any, purpose: str, max_tokens: int) -> ModelCapability:
+    router = getattr(runtime, "model_router", None)
+    if router is not None and hasattr(router, "capability_for_purpose"):
+        return router.capability_for_purpose(purpose)
+    return ModelCapability(
+        provider="unknown",
+        model=purpose,
+        context_window=HISTORY_TOKEN_BUDGET + max_tokens + 1_024,
+        max_output_tokens=max_tokens,
+        source="legacy",
+    )
+
+
+def _normalized_messages(session: Session) -> tuple[list[dict[str, Any]], list[int]]:
+    history: list[dict[str, Any]] = []
+    ids: list[int] = []
+    normalized_ids = _normalized_message_ids(session)
+    for index, raw in enumerate(session.messages):
+        if not isinstance(raw, dict):
+            continue
+        if "role" in raw:
+            history.append(redact_known_environment_secrets(dict(raw)))
+        elif "message" in raw:
+            history.append(
+                {
+                    "role": "user",
+                    "content": redact_known_environment_secrets(str(raw["message"])),
+                }
+            )
+        else:
+            continue
+        ids.append(normalized_ids[index] if index < len(normalized_ids) else 0)
+    return history, ids
+
+
+def _normalized_message_ids(session: Session) -> list[int]:
+    if len(session.message_ids) == len(session.messages):
+        return list(session.message_ids)
+    return [0] * len(session.messages)
+
+
+def _summary_message(summary: str) -> dict[str, Any]:
+    return {
+        "role": "user",
+        "content": f"[持久化历史摘要 · schema v{COMPACTION_SCHEMA_VERSION}]\n{summary}",
+    }
 
 
 async def compact_if_needed(history: list[dict[str, Any]], runtime: Any, session: Session) -> list[dict[str, Any]]:
+    """Legacy compatibility wrapper for callers outside the preflight model path."""
     before = estimate_tokens(history)
     if before <= HISTORY_TOKEN_BUDGET:
         return history
-
     compacted = [dict(message) for message in history]
     cutoff = max(0, len(compacted) - KEEP_RECENT_MESSAGES)
     for index in range(cutoff):
@@ -63,31 +433,19 @@ async def compact_if_needed(history: list[dict[str, Any]], runtime: Any, session
             continue
         original_chars = len(str(message.get("content") or ""))
         message["content"] = f"[工具输出已压缩: {original_chars} 字符，如需内容请重新调用工具]"
-
-    if estimate_tokens(compacted) > HISTORY_TOKEN_BUDGET * HARD_BUDGET_FACTOR and runtime.model_router is not None:
-        compacted = await summarize_history_head(compacted, runtime)
-
     after = estimate_tokens(compacted)
     await session.events.put(
         {
             "type": "context.budget",
             "purpose": "history",
             "compacted": True,
+            "forced": False,
+            "reason": "legacy",
             "before_tokens": before,
             "after_tokens": after,
+            "provider": "unknown",
+            "model": "unknown",
+            "context_window": HISTORY_TOKEN_BUDGET,
         }
     )
     return compacted
-
-
-async def summarize_history_head(history: list[dict[str, Any]], runtime: Any) -> list[dict[str, Any]]:
-    half = len(history) // 2
-    head, tail = history[:half], history[half:]
-    result = await runtime.model_router.stream_complete(
-        purpose="summarizer",
-        system="把以下 agent 对话压缩为要点：用户目标、已完成的探索/修改、关键发现、未完成事项。只输出要点列表。",
-        messages=[{"role": "user", "content": json.dumps(head, ensure_ascii=False, default=str)[:40_000]}],
-        max_tokens=800,
-    )
-    summary = {"role": "user", "content": f"[历史摘要] {result.text}"}
-    return [summary, *tail]

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.config.settings import ModelSettings, OpenAICompatibleSettings, PricingSettings, Settings
+from app.config.settings import ContextSettings, ModelSettings, OpenAICompatibleSettings, PricingSettings, Settings
 from app.models.router import ModelRouter
 from app.models.provider import ProviderNotConfigured
 from app.usage.pricing import ModelPrice
@@ -61,6 +61,38 @@ def test_model_for_purpose_maps_roles():
     assert router.model_for_purpose("reviewer") == "review-model"
     assert router.model_for_purpose("summarizer") == "summary-model"
     assert router.model_for_purpose("unknown") == "main-model"
+
+
+def test_capability_is_model_and_provider_aware():
+    settings = Settings(
+        models=ModelSettings(main="local-8k", reviewer="remote-large", summarizer="summary-model"),
+        context=ContextSettings(
+            default_context_window=32_768,
+            model_context_windows={"fake:local-8k": 8_192, "remote-large": 200_000},
+            model_max_output_tokens={"fake:local-8k": 2_048},
+        ),
+    )
+    router = ModelRouter(primary=FakeProvider([]), settings=settings)
+
+    local = router.capability_for_purpose("main")
+    remote = router.capability_for_purpose("reviewer")
+
+    assert (local.context_window, local.max_output_tokens, local.source) == (8_192, 2_048, "configured")
+    assert (remote.context_window, remote.max_output_tokens, remote.source) == (200_000, 8_192, "configured")
+    assert router.route_status()["capabilities"]["main"]["context_window"] == 8_192
+
+
+def test_context_capabilities_load_from_environment(monkeypatch):
+    monkeypatch.setenv("AICODE_MODEL_CONTEXT_WINDOWS_JSON", '{"openai_compatible:local":8192,"remote":200000}')
+    monkeypatch.setenv("AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON", '{"openai_compatible:local":2048}')
+    monkeypatch.setenv("AICODE_CONTEXT_COMPACT_THRESHOLD", "0.75")
+
+    settings = Settings.from_env()
+
+    assert settings.context.model_context_windows["openai_compatible:local"] == 8_192
+    assert settings.context.model_context_windows["remote"] == 200_000
+    assert settings.context.model_max_output_tokens["openai_compatible:local"] == 2_048
+    assert settings.context.compact_threshold == 0.75
 
 
 @pytest.mark.asyncio

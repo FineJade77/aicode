@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 from pydantic import BaseModel, Field
@@ -34,6 +35,16 @@ class PricingSettings(BaseModel):
     model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
 
 
+class ContextSettings(BaseModel):
+    default_context_window: int = 32_768
+    default_max_output_tokens: int = 8_192
+    reserve_tokens: int = 1_024
+    compact_threshold: float = 0.8
+    chars_per_token: float = 3.5
+    model_context_windows: dict[str, int] = Field(default_factory=dict)
+    model_max_output_tokens: dict[str, int] = Field(default_factory=dict)
+
+
 class Settings(BaseModel):
     app_name: str = "aicode-runtime"
     default_language: str = "zh-CN"
@@ -43,6 +54,7 @@ class Settings(BaseModel):
     provider: ProviderSettings = ProviderSettings()
     anthropic: AnthropicSettings = AnthropicSettings()
     pricing: PricingSettings = PricingSettings()
+    context: ContextSettings = ContextSettings()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -70,7 +82,60 @@ class Settings(BaseModel):
                 currency=os.getenv("AICODE_PRICING_CURRENCY", "USD"),
                 model_prices=parse_model_prices(os.getenv("AICODE_MODEL_PRICES_JSON")),
             ),
+            context=ContextSettings(
+                default_context_window=_positive_int_env("AICODE_CONTEXT_DEFAULT_WINDOW", 32_768),
+                default_max_output_tokens=_positive_int_env("AICODE_CONTEXT_DEFAULT_MAX_OUTPUT_TOKENS", 8_192),
+                reserve_tokens=_non_negative_int_env("AICODE_CONTEXT_RESERVE_TOKENS", 1_024),
+                compact_threshold=_bounded_float_env("AICODE_CONTEXT_COMPACT_THRESHOLD", 0.8, 0.1, 1.0),
+                chars_per_token=_bounded_float_env("AICODE_CONTEXT_CHARS_PER_TOKEN", 3.5, 1.0, 20.0),
+                model_context_windows=_parse_positive_int_map(os.getenv("AICODE_MODEL_CONTEXT_WINDOWS_JSON")),
+                model_max_output_tokens=_parse_positive_int_map(os.getenv("AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON")),
+            ),
         )
+
+
+def _parse_positive_int_map(raw: str | None) -> dict[str, int]:
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    parsed: dict[str, int] = {}
+    for key, value in payload.items():
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            continue
+        if normalized > 0:
+            parsed[str(key)] = normalized
+    return parsed
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _non_negative_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
 
 
 settings = Settings.from_env()

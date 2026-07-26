@@ -95,6 +95,11 @@ def test_session_store_migrates_old_schema(tmp_path: Path) -> None:
 
     assert session is not None
     assert session.updated_at.isoformat() == "2026-07-16T00:00:00+00:00"
+    assert session.compactions == []
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "select count(*) from sqlite_master where type = 'table' and name = 'compactions'"
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio
