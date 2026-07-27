@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass, is_dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.agent.history import ContextManager, latest_valid_compaction
 from app.agent.loop import AgentLoop
 from app.agent.types import AgentRuntime
+from app.application.contracts import (
+    CompactionReceipt,
+    RunControl,
+    RunReceipt,
+    SessionSnapshot,
+    SteerReceipt,
+    TurnRequest,
+)
 from app.application.errors import Conflict, InvalidRequest, NotFound, ProviderUnavailable
 from app.core.hashing import stable_hash
 from app.core.ports import (
@@ -36,7 +44,7 @@ class SessionService:
         self.trace = trace
         self.workspace = workspace
 
-    async def create(self, workspace: str, language: str) -> AgentSession:
+    async def create(self, workspace: str, language: str) -> SessionSnapshot:
         effective = self.workspace.effective_language(workspace, language)
         session = self.sessions.create(workspace=workspace, language=effective)
         self.trace.record(
@@ -52,30 +60,27 @@ class SessionService:
                 "workspace": session.workspace,
             }
         )
-        return session
+        return SessionSnapshot.from_session(session)
 
-    def get(self, session_id: str) -> AgentSession:
+    def require(self, session_id: str) -> AgentSession:
         session = self.sessions.get(session_id)
         if session is None:
             raise NotFound("session not found")
         return session
 
-    def list(self, *, last: bool = False) -> Any:
-        if not last:
-            return self.sessions.list()
-        session = self.sessions.last()
-        return None if session is None else session.to_dict()
+    def get(self, session_id: str) -> SessionSnapshot:
+        return SessionSnapshot.from_session(self.require(session_id))
 
-    def bind_request(self, session: AgentSession, request: Any) -> Any:
+    def list(self, *, last: bool = False) -> list[SessionSnapshot] | SessionSnapshot | None:
+        if not last:
+            return [SessionSnapshot.from_mapping(item) for item in self.sessions.list()]
+        session = self.sessions.last()
+        return None if session is None else SessionSnapshot.from_session(session)
+
+    def bind_turn(self, session: AgentSession, request: TurnRequest) -> TurnRequest:
         if not self.workspace.same_workspace(session.workspace, request.workspace):
             raise InvalidRequest("message workspace does not match session workspace")
-        updates = {"workspace": session.workspace, "language": session.language}
-        model_copy = getattr(request, "model_copy", None)
-        if callable(model_copy):
-            return model_copy(update=updates)
-        if is_dataclass(request):
-            return replace(request, **updates)
-        raise InvalidRequest("unsupported message request type")
+        return request.bind(workspace=session.workspace, language=session.language)
 
 
 class RunCoordinator:
@@ -89,7 +94,7 @@ class RunCoordinator:
         self.trace = trace
         self.agent_loop = agent_loop
 
-    async def submit(self, session: AgentSession, request: Any) -> dict[str, str]:
+    async def submit(self, session: AgentSession, request: TurnRequest) -> RunReceipt:
         configured = getattr(self.model.primary, "is_configured", None)
         if callable(configured) and not configured():
             raise ProviderUnavailable("模型 provider 未配置，请设置 API key（如 OPENAI_API_KEY 或 ANTHROPIC_API_KEY）后重试")
@@ -118,9 +123,9 @@ class RunCoordinator:
         )
         await self._emit_queued(session, queued, was_running, queue_position)
         self.ensure_runner(session)
-        return {"status": "queued" if was_running else "accepted", "run_id": queued.run_id}
+        return RunReceipt(status="queued" if was_running else "accepted", run_id=queued.run_id)
 
-    async def steer(self, session: AgentSession, message: str) -> dict[str, Any]:
+    async def steer(self, session: AgentSession, message: str) -> SteerReceipt:
         guidance = message.strip()
         if not guidance:
             raise InvalidRequest("steer message must not be empty")
@@ -150,18 +155,18 @@ class RunCoordinator:
                 "message": "steer 指令已排队，将在下一个 AgentLoop 安全边界应用。",
             }
         )
-        return {"status": "queued", "run_id": run_id, "pending": pending}
+        return SteerReceipt(run_id=run_id, pending=pending)
 
     def ensure_runner(self, session: AgentSession) -> None:
         if session.agent_runner_active():
             return
         session.agent_runner_task = asyncio.create_task(self._process_runs(session))
 
-    async def cancel(self, session: AgentSession, *, resume_queued: bool = True) -> dict[str, Any]:
+    async def cancel(self, session: AgentSession, *, resume_queued: bool = True) -> RunControl:
         task = session.agent_runner_task
         run_id = session.current_run_id
         if task is None or task.done() or run_id is None:
-            return {"status": "idle", "run_id": None, "queued": session.agent_queue.qsize()}
+            return RunControl(status="idle", run_id=None, queued=session.agent_queue.qsize())
 
         session.mark_agent_progress("cancelling")
         task.cancel()
@@ -193,7 +198,7 @@ class RunCoordinator:
         queued = session.agent_queue.qsize()
         if queued and resume_queued:
             self.ensure_runner(session)
-        return {"status": "cancelled", "run_id": run_id, "queued": queued}
+        return RunControl(status="cancelled", run_id=run_id, queued=queued)
 
     async def _process_runs(self, session: AgentSession) -> None:
         while True:
@@ -281,7 +286,7 @@ class ContextService:
         self.agent = agent
         self.trace = trace
 
-    async def compact(self, session: AgentSession) -> dict[str, Any]:
+    async def compact(self, session: AgentSession) -> CompactionReceipt:
         if session.agent_runner_active() or session.current_run_id is not None:
             raise Conflict("cannot compact a session while a run is active")
         before = latest_valid_compaction(session)
@@ -311,7 +316,10 @@ class ContextService:
                 "compaction_id": after.compaction_id if after is not None else None,
             },
         )
-        return {"status": status, "compaction": after.to_dict() if after is not None else None}
+        return CompactionReceipt(
+            status=status,
+            compaction=after.to_dict() if after is not None else None,
+        )
 
 
 class TraceService:

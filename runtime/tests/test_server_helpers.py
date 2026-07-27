@@ -9,6 +9,7 @@ from app.adapters.system import SystemClock
 from app.adapters.tools import DefaultToolRuntime
 from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.types import AgentRuntime
+from app.application.contracts import TurnRequest
 from app.application.services import RunCoordinator
 from app.application.errors import Conflict
 from app.audit.logger import AuditLogger
@@ -55,6 +56,7 @@ def test_message_request_is_bound_to_session_context(tmp_path: Path) -> None:
 
     effective = bind_message_request_to_session(session, request)
 
+    assert isinstance(effective, TurnRequest)
     assert effective.workspace == session.workspace
     assert effective.language == "zh-CN"
     assert request.language == "en"
@@ -143,7 +145,7 @@ async def test_run_coordinator_queues_steer_for_active_run(tmp_path: Path) -> No
     release = asyncio.Event()
 
     class BlockingLoop:
-        async def run(self, target_session: Session, _request: MessageRequest) -> None:
+        async def run(self, target_session: Session, _request: TurnRequest) -> None:
             started.set()
             await release.wait()
             await target_session.events.put({"type": "final", "summary": "done"})
@@ -153,13 +155,13 @@ async def test_run_coordinator_queues_steer_for_active_run(tmp_path: Path) -> No
         AuditLogger(path=tmp_path / "audit.jsonl"),
         BlockingLoop(),
     )
-    request = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
+    request = TurnRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
     accepted = await coordinator.submit(session, request)
     await asyncio.wait_for(started.wait(), timeout=1)
 
     result = await coordinator.steer(session, "只修改测试")
 
-    assert result == {"status": "queued", "run_id": accepted["run_id"], "pending": 1}
+    assert result.to_dict() == {"status": "queued", "run_id": accepted.run_id, "pending": 1}
     assert session.to_dict()["agent"]["pending_steers"] == 1
     assert [event for event in session.events.events_after(0) if event["type"] == "run.steer.queued"]
 

@@ -41,7 +41,9 @@ Go CLI / Interactive REPL / future IDE / stdio JSON-RPC
 +------------------------------------------------------+
 ```
 
-HTTP/SSE 是当前稳定 transport。`GET /v1/meta/contract` 返回 contract version、最低兼容版本、Runtime version 和 transport capability；Go client 通过同一结构读取。stdio JSON-RPC 只预留 capability，尚未作为已实现功能发布。
+Application contract v1 是 transport 与内部实现之间的稳定边界，定义 `SessionSnapshot`、`TurnRequest`、`RunReceipt/RunControl`、`SteerReceipt` 和 `CompactionReceipt`；canonical schema 为 `schemas/application-contract.schema.json`。FastAPI/Pydantic DTO 必须显式转换为这些类型，Agent Core 与 Application services 不导入 transport 类型。
+
+HTTP/SSE 是当前稳定 transport。`GET /v1/meta/contract` 返回 application contract version/type map、HTTP/SSE contract version、最低兼容版本、Runtime version 和 transport capability；Go client 通过同一结构读取。stdio JSON-RPC 只预留 capability，尚未作为已实现功能发布。
 
 Host 命令与 Docker Sandbox 统一经过 Runtime ExecutionService：
 
@@ -128,7 +130,7 @@ Runtime 分为三层：
 - `agent/` + `core/`：transport-independent AgentLoop、ContextManager、Policy，以及 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、Clock/IDs ports。
 - `adapters/`：composition root、SQLite/内存 session、JSONL usage、provider router、host/Docker execution、workspace/project config、tool registry、approval broker 与系统 clock/UUID。
 
-`server/main.py` 只创建一个 `ApplicationRuntime`。handler 负责 Pydantic 输入输出、ApplicationError → HTTP 状态映射，以及 SSE 编码；run、approval、trust、usage 和 execution 业务规则由 Application Services 承担。
+`server/main.py` 只创建一个 `ApplicationRuntime`。handler 负责 Pydantic 输入输出、transport DTO ↔ Application contract 显式转换、ApplicationError → HTTP 状态映射，以及 SSE 编码；run、approval、trust、usage 和 execution 业务规则由 Application Services 承担。
 
 依赖规则：
 

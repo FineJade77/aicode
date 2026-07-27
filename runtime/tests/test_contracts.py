@@ -4,6 +4,15 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from app.application.contracts import (
+    APPLICATION_CONTRACT_VERSION,
+    CompactionReceipt,
+    RunControl,
+    RunReceipt,
+    SessionSnapshot,
+    SteerReceipt,
+    TurnRequest,
+)
 from app.config.settings import Settings
 from app.contracts.api import contract_descriptor
 from app.events.sse import encode_sse
@@ -96,6 +105,39 @@ def test_provider_profile_schema_validates_runtime_status() -> None:
     assert set(schema["properties"]["auth_mode"]["enum"]) == {"required", "optional", "none"}
 
 
+def test_application_contract_v1_fixture_round_trips_named_types() -> None:
+    schema = load_schema("application-contract.schema.json")
+    fixture = load_fixture("application-contract.v1.json")
+    contract_names = {
+        "turn_request": "turnRequest",
+        "run_receipt": "runReceipt",
+        "run_control": "runControl",
+        "steer_receipt": "steerReceipt",
+        "compaction_receipt": "compactionReceipt",
+        "session_snapshot": "sessionSnapshot",
+    }
+
+    assert schema["x-aicode-contract-version"] == APPLICATION_CONTRACT_VERSION
+    assert fixture["contract_version"] == APPLICATION_CONTRACT_VERSION
+    for fixture_name, definition_name in contract_names.items():
+        validation_schema = {
+            "$schema": schema["$schema"],
+            "$defs": schema["$defs"],
+            "$ref": f"#/$defs/{definition_name}",
+        }
+        Draft202012Validator(validation_schema).validate(fixture[fixture_name])
+
+    assert TurnRequest(**fixture["turn_request"]).to_dict() == fixture["turn_request"]
+    assert RunReceipt(**fixture["run_receipt"]).to_dict() == fixture["run_receipt"]
+    assert RunControl(**fixture["run_control"]).to_dict() == fixture["run_control"]
+    assert SteerReceipt(
+        run_id=fixture["steer_receipt"]["run_id"],
+        pending=fixture["steer_receipt"]["pending"],
+    ).to_dict() == fixture["steer_receipt"]
+    assert CompactionReceipt(**fixture["compaction_receipt"]).to_dict() == fixture["compaction_receipt"]
+    assert SessionSnapshot.from_mapping(fixture["session_snapshot"]).to_dict() == fixture["session_snapshot"]
+
+
 def test_http_response_fixture_matches_runtime_models() -> None:
     fixture = load_fixture("http-responses.v2.json")
     responses = fixture["responses"]
@@ -103,6 +145,7 @@ def test_http_response_fixture_matches_runtime_models() -> None:
     assert fixture["contract_version"] == CONTRACT_VERSION
     assert responses["api_contract"]["contract_version"] == contract_descriptor("0.1.0")["contract_version"]
     assert responses["api_contract"]["min_supported_version"] == CONTRACT_VERSION
+    assert responses["api_contract"]["application"]["version"] == APPLICATION_CONTRACT_VERSION
     assert CreateSessionResponse.model_validate(responses["create_session"]).session_id == "sess_fixture"
     assert SendMessageResponse.model_validate(responses["send_message"]).run_id == "run_fixture"
     assert SteerResponse.model_validate(responses["steer_session"]).pending == 1

@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | CLI + daemon | `[x]` | Go CLI 自动启动/停止/查询 Python Runtime。 |
 | HTTP + SSE | `[x]` | 本机 API、SSE event stream、daemon token auth。 |
-| 可嵌入 Runtime 分层 | `[x]` | Application Runtime、Agent Core ports 与 adapters composition root 已落地；HTTP/SSE contract v2 可由 Go client 查询。 |
+| 可嵌入 Runtime 分层 | `[x]` | Application contract v1、Application Runtime、Agent Core ports 与 adapters composition root 已落地；HTTP/SSE contract v2 可由 Go client 查询。 |
 | Agent Loop v2 | `[x]` | 原生 function calling，模型自主调用工具。 |
 | 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic。 |
 | 工具系统 | `[x]` | 读文件、搜索、列文件、相关文件、bash、edit、review_diff。 |
@@ -364,11 +364,4 @@ git diff --check
 
 ## 9. 下一轮建议
 
-最建议按这个顺序继续：
-
-1. [WP0.3](LOCAL_AGENT_ROADMAP.md#wp03-模型感知可持久化的上下文管理)：持久化 compaction，并在模型调用前按窗口预算。
-2. [WP1.3](LOCAL_AGENT_ROADMAP.md#wp13-agent-任务级评测与-trace)：建立最小评测骨架，先固定安全拒绝和长上下文任务。
-3. [WP1.1](LOCAL_AGENT_ROADMAP.md#wp11-常驻交互模式)：在可靠执行与 compaction 基础上实现常驻 REPL。
-4. [WP1.2](LOCAL_AGENT_ROADMAP.md#wp12-本地模型-provider-profile)：完善 no-auth localhost profile、capability probe 和失败诊断。
-
-以上顺序优先把“能运行”升级为“可安装、可信任、可评测”；索引、subagent 和插件继续由评测结果触发。
+M0–M2 与 WP1.4 已完成。下一步建议先实际使用常驻 REPL 收集 trace/eval 证据；需要 IDE、脚本嵌入时再启动 WP2.1 SDK/stdio JSONL RPC，并强制复用 Application contract v1。索引、subagent 和插件继续只由评测结果触发。

@@ -1,6 +1,6 @@
 # aicode 执行任务台账
 
-更新日期：2026-07-26
+更新日期：2026-07-27
 
 来源：[LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md)
 
@@ -234,11 +234,33 @@
 - eval 影响：既有 deterministic 4-task baseline 保持 PASS；新增 provider transport smoke 覆盖此前 scripted provider 不覆盖的 HTTP/auth/probe/edit approval 链路。
 - 验证：Python 全量 283 项通过（受限沙箱跳过 localhost bind 与 Docker 各 1 项），沙箱外 localhost smoke 1 项通过，Go 全量测试、go vet、Python compileall、deterministic eval baseline 和 `git diff --check` 全部通过。
 
+### `[x]` T-011a Application Runtime 与 Session/Turn/Run 契约
+
+对应：WP1.4（Application foundation）
+
+依赖：T-002、T-008
+
+范围：
+
+- 提取 transport-independent Session snapshot、Turn request、Run receipt/control 契约。
+- 让 Application services 返回具名类型，禁止关键边界继续扩散裸 `dict` / `Any`。
+- 版本化 schema、fixture、Runtime descriptor 和 Go client characterization。
+
+完成记录（2026-07-27）：
+
+- 新增 Application contract v1：`SessionSnapshot`、`AgentRunState`、`TurnRequest`、`RunReceipt`、`RunControl`、`SteerReceipt` 与 `CompactionReceipt`，均位于不依赖 FastAPI/Pydantic 的 application 层。
+- `SessionService` 公开 snapshot read model，并通过显式 `require` 隔离内部 domain session；`RunCoordinator`、`ContextService` 改为返回具名 contract。
+- FastAPI `MessageRequest` 只作为 transport DTO，并显式转换为 `TurnRequest`；HTTP handler 在边界把 application contract 序列化为现有 v1 HTTP response，外部行为不变。
+- 新增 `application-contract.schema.json`、v1 fixture 和双向 round-trip 测试；`GET /v1/meta/contract` 公开 application contract v1，Go client 可读取 version/schema/type map。
+- 新增 Application service characterization，覆盖 Session create/get/list/bind、Run submit/cancel 和 in-memory manual compaction 的返回类型。
+- eval 影响：只收紧 Application/transport 类型边界，不修改 prompt、tool、policy 或 Agent 行为；deterministic 4-task smoke baseline 保持 PASS。
+- 验证：Python 全量 297 项通过（Docker 与受限 localhost bind 各跳过 1 项），Go 全量测试、go vet、Python compileall、ruff 和 `git diff --check` 全部通过。
+
 ### `[x]` T-010 常驻 REPL
 
 对应：WP1.1
 
-依赖：T-002、T-008
+依赖：T-011a、T-008
 
 范围：
 
@@ -259,33 +281,31 @@
 
 ## M3：可嵌入平台
 
-### `[x]` T-011 Agent Core 依赖注入
+### `[x]` T-011b Agent Core DI 与内部解耦
 
 对应：WP1.4
 
-依赖：T-008
+依赖：T-011a、T-010
 
 范围：
 
 - 提取 ModelRuntime、SessionRepository、EventSink、ApprovalBroker 等接口。
 - 移除核心路径对 FastAPI 和 module globals 的依赖。
-- 用 characterization tests 渐进迁移。
+- 在 T-011a contract 后方用 characterization tests 渐进迁移，不改变 T-010 REPL 契约。
 
-完成记录（2026-07-26）：
+完成记录（2026-07-27）：
 
-- 新增 transport-independent `core/` ports/domain、`application/` services/runtime 和集中式 `adapters/composition.py`；FastAPI transport 只创建并持有一个 `ApplicationRuntime`。
-- Application Runtime 包含 SessionService、RunCoordinator、ApprovalService、TraceService、ProjectTrustService，并通过 facade 提供 model、execution 与 review 能力。
+- 新增 transport-independent `core/` ports/domain 和集中式 `adapters/composition.py`；FastAPI transport 只创建并持有一个 `ApplicationRuntime`。
 - Agent Core 使用 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、TraceSink、Clock/IDs ports；AgentLoop、ContextManager、Policy 不依赖 FastAPI、server、SQLite、具体工具或 project config。
 - SQLite SessionStore 支持 clock/ID 注入；新增 InMemorySessionRepository、JSONL usage、workspace/tool/approval/system adapters，fake model + in-memory session 可直接运行 AgentLoop。
-- 新增 `/v1/meta/contract` 和 Go client contract reader，HTTP/SSE contract 维持 v2，future stdio JSON-RPC 明确标记为 planned。
-- 新增 AST/import side-effect 架构守卫和 Application/Core characterization tests；既有 HTTP、SSE、session、approval、execution、trust 与 compaction 行为保持兼容。
-- 验证：Python 287 项通过（Docker 与受限 localhost bind 各跳过 1 项），Go 全量测试、go vet、Python compileall、deterministic 4-task eval baseline 和 `git diff --check` 全部通过。
+- 新增 AST/import side-effect 架构守卫和 Agent Core characterization tests；T-010 REPL、HTTP/SSE、session、approval、execution、trust 与 compaction 行为由 T-011a contract 固定。
+- 原 T-011 曾整体提前落地；本次按实际稳定边界拆分为 T-011a/T-011b，并将逻辑依赖正式调整为 `T-011a → T-010 → T-011b`。
 
 ### `[ ]` T-012 SDK 与 stdio JSONL RPC
 
 对应：WP2.1
 
-依赖：T-011
+依赖：T-011b
 
 范围：
 

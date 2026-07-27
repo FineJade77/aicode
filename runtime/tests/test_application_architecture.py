@@ -83,6 +83,22 @@ assert not forbidden, forbidden
     subprocess.run([sys.executable, "-c", code], cwd=RUNTIME_APP.parent, check=True)
 
 
+def test_application_contract_import_has_no_transport_or_adapter_side_effects() -> None:
+    code = """
+import sys
+from app.application import TurnRequest
+assert TurnRequest.__name__ == "TurnRequest"
+forbidden = [
+    name for name in sys.modules
+    if name == "fastapi"
+    or name.startswith("app.server")
+    or name.startswith("app.adapters")
+]
+assert not forbidden, forbidden
+"""
+    subprocess.run([sys.executable, "-c", code], cwd=RUNTIME_APP.parent, check=True)
+
+
 def test_application_and_agent_layers_do_not_import_transports_or_adapters() -> None:
     forbidden = ("fastapi", "app.server", "app.adapters", "app.sessions", "app.tools", "app.project")
     for package in ("agent", "core"):
@@ -122,6 +138,8 @@ def test_versioned_contract_describes_current_and_future_transports() -> None:
     contract = contract_descriptor("0.1.0")
 
     assert contract["contract_version"] == "2.0"
+    assert contract["application"]["version"] == "1.0"
+    assert contract["application"]["types"]["turn"] == "TurnRequest"
     assert contract["transports"]["http"]["status"] == "stable"
     assert contract["transports"]["sse"]["event_schema"] == "v2"
     assert contract["transports"]["stdio_jsonrpc"]["status"] == "planned"

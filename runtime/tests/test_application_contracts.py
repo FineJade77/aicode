@@ -1,0 +1,94 @@
+from pathlib import Path
+
+import pytest
+
+from app.adapters.memory import InMemorySessionRepository
+from app.adapters.workspace import LocalWorkspaceRuntime
+from app.agent.types import AgentRuntime
+from app.application.contracts import (
+    CompactionReceipt,
+    RunControl,
+    RunReceipt,
+    SessionSnapshot,
+    TurnRequest,
+)
+from app.application.services import ContextService, RunCoordinator, SessionService
+from app.audit.logger import AuditLogger
+from app.config.settings import Settings
+from app.models.router import ModelRouter
+from tests.fakes import FakeProvider
+
+
+@pytest.mark.asyncio
+async def test_session_service_exposes_snapshot_and_binds_turn_contract(tmp_path: Path) -> None:
+    trace = AuditLogger(path=tmp_path / "audit.jsonl")
+    sessions = InMemorySessionRepository()
+    service = SessionService(sessions, trace, LocalWorkspaceRuntime())
+
+    created = await service.create(str(tmp_path), "zh-CN")
+    turn = TurnRequest(
+        message="inspect",
+        mode="chat",
+        workspace=str(tmp_path),
+        language="en-US",
+        model="fixture-model",
+    )
+    bound = service.bind_turn(service.require(created.session_id), turn)
+
+    assert isinstance(created, SessionSnapshot)
+    assert isinstance(service.get(created.session_id), SessionSnapshot)
+    assert isinstance(service.list()[0], SessionSnapshot)
+    assert bound.workspace == created.workspace
+    assert bound.language == created.language
+    assert bound.model == "fixture-model"
+
+
+@pytest.mark.asyncio
+async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> None:
+    trace = AuditLogger(path=tmp_path / "audit.jsonl")
+    sessions = InMemorySessionRepository()
+    session = sessions.create(str(tmp_path), "zh-CN")
+
+    class ImmediateLoop:
+        async def run(self, target_session, _turn: TurnRequest) -> None:
+            await target_session.events.put({"type": "final", "summary": "done"})
+
+    coordinator = RunCoordinator(
+        ModelRouter(primary=FakeProvider([]), settings=Settings()),
+        trace,
+        ImmediateLoop(),
+    )
+    receipt = await coordinator.submit(
+        session,
+        TurnRequest(
+            message="inspect",
+            mode="chat",
+            workspace=str(tmp_path),
+            language="zh-CN",
+        ),
+    )
+    assert session.agent_runner_task is not None
+    await session.agent_runner_task
+    control = await coordinator.cancel(session)
+
+    assert isinstance(receipt, RunReceipt)
+    assert receipt.status == "accepted"
+    assert isinstance(control, RunControl)
+    assert control.status == "idle"
+
+
+@pytest.mark.asyncio
+async def test_context_service_returns_compaction_contract_for_in_memory_adapter(tmp_path: Path) -> None:
+    trace = AuditLogger(path=tmp_path / "audit.jsonl")
+    sessions = InMemorySessionRepository()
+    session = sessions.create(str(tmp_path), "zh-CN")
+    for index in range(5):
+        session.append_message({"role": "user", "content": f"constraint-{index}"})
+    service = ContextService(AgentRuntime(model_router=None, audit=trace), trace)
+
+    result = await service.compact(session)
+
+    assert isinstance(result, CompactionReceipt)
+    assert result.status == "compacted"
+    assert result.compaction is not None
+    assert result.compaction["session_id"] == session.session_id

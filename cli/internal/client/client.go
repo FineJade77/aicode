@@ -116,10 +116,17 @@ type ContractTransport struct {
 	Status      string `json:"status"`
 }
 
+type ApplicationContract struct {
+	Version string            `json:"version"`
+	Schema  string            `json:"schema"`
+	Types   map[string]string `json:"types"`
+}
+
 type APIContract struct {
 	ContractVersion     string                       `json:"contract_version"`
 	MinSupportedVersion string                       `json:"min_supported_version"`
 	RuntimeVersion      string                       `json:"runtime_version"`
+	Application         ApplicationContract          `json:"application"`
 	Transports          map[string]ContractTransport `json:"transports"`
 }
 

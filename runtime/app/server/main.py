@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.adapters.composition import build_application_runtime
 from app.adapters.usage import JsonlUsageRuntime
 from app.agent.loop import AgentLoop
+from app.application.contracts import TurnRequest
 from app.application.errors import ApplicationError
 from app.application.services import (
     ApprovalService,
@@ -82,6 +83,15 @@ class MessageRequest(BaseModel):
     workspace: str
     language: str = "zh-CN"
     model: str | None = None
+
+    def to_contract(self) -> TurnRequest:
+        return TurnRequest(
+            message=self.message,
+            mode=self.mode,
+            workspace=self.workspace,
+            language=self.language,
+            model=self.model,
+        )
 
 
 class ApprovalRequest(BaseModel):
@@ -245,13 +255,20 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
 
 @app.get("/v1/sessions")
 async def list_sessions(last: bool = False) -> Any:
-    return session_service().list(last=last)
+    result = session_service().list(last=last)
+    if result is None:
+        return None
+    if isinstance(result, list):
+        return [session.to_dict() for session in result]
+    return result.to_dict()
 
 
 @app.get("/v1/sessions/{session_id}")
 async def get_session(session_id: str) -> dict[str, Any]:
-    session = require_session(session_id)
-    return session.to_dict()
+    try:
+        return session_service().get(session_id).to_dict()
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/messages", response_model=SendMessageResponse)
@@ -259,7 +276,7 @@ async def send_message(session_id: str, request: MessageRequest) -> dict[str, st
     session = require_session(session_id)
     effective_request = bind_message_request_to_session(session, request)
     try:
-        return await run_coordinator().submit(session, effective_request)
+        return (await run_coordinator().submit(session, effective_request)).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
@@ -309,14 +326,14 @@ async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
 @app.post("/v1/sessions/{session_id}/cancel", response_model=CancelRunResponse)
 async def cancel_run(session_id: str) -> dict[str, Any]:
     session = require_session(session_id)
-    return await run_coordinator().cancel(session)
+    return (await run_coordinator().cancel(session)).to_dict()
 
 
 @app.post("/v1/sessions/{session_id}/steer", response_model=SteerResponse)
 async def steer_run(session_id: str, request: SteerRequest) -> dict[str, Any]:
     session = require_session(session_id)
     try:
-        return await run_coordinator().steer(session, request.message)
+        return (await run_coordinator().steer(session, request.message)).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
@@ -325,7 +342,7 @@ async def steer_run(session_id: str, request: SteerRequest) -> dict[str, Any]:
 async def compact_session(session_id: str) -> dict[str, Any]:
     session = require_session(session_id)
     try:
-        return await context_service().compact(session)
+        return (await context_service().compact(session)).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
@@ -357,7 +374,7 @@ async def review_rules(workspace: str | None = None) -> dict[str, Any]:
 
 def require_session(session_id: str) -> AgentSession:
     try:
-        return session_service().get(session_id)
+        return session_service().require(session_id)
     except ApplicationError as exc:
         raise_http_error(exc)
 
@@ -366,9 +383,9 @@ def effective_session_language(workspace: str, requested_language: str) -> str:
     return application_runtime.workspace.effective_language(workspace, requested_language)
 
 
-def bind_message_request_to_session(session: AgentSession, request: MessageRequest) -> MessageRequest:
+def bind_message_request_to_session(session: AgentSession, request: MessageRequest) -> TurnRequest:
     try:
-        return session_service().bind_request(session, request)
+        return session_service().bind_turn(session, request.to_contract())
     except ApplicationError as exc:
         raise_http_error(exc)
 

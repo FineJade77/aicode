@@ -271,6 +271,7 @@ async def test_manual_context_service_persists_compaction(tmp_path):
 
     result = await service.compact(sess)
 
-    assert result["status"] == "compacted"
-    assert result["compaction"]["session_id"] == sess.session_id
+    assert result.status == "compacted"
+    assert result.compaction is not None
+    assert result.compaction["session_id"] == sess.session_id
     assert latest_valid_compaction(sess) is not None

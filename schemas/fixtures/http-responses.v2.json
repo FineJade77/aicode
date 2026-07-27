@@ -5,6 +5,16 @@
       "contract_version": "2.0",
       "min_supported_version": "2.0",
       "runtime_version": "0.1.0",
+      "application": {
+        "version": "1.0",
+        "schema": "v1",
+        "types": {
+          "session": "SessionSnapshot",
+          "turn": "TurnRequest",
+          "run": "RunReceipt",
+          "run_control": "RunControl"
+        }
+      },
       "transports": {
         "http": {
           "version": "v1",

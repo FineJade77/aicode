@@ -1,0 +1,52 @@
+{
+  "contract_version": "1.0",
+  "turn_request": {
+    "message": "inspect the workspace",
+    "mode": "chat",
+    "workspace": "/workspace",
+    "language": "zh-CN",
+    "model": "fixture-model"
+  },
+  "run_receipt": {
+    "status": "accepted",
+    "run_id": "run_fixture"
+  },
+  "run_control": {
+    "status": "cancelled",
+    "run_id": "run_fixture",
+    "queued": 1
+  },
+  "steer_receipt": {
+    "status": "queued",
+    "run_id": "run_fixture",
+    "pending": 1
+  },
+  "compaction_receipt": {
+    "status": "compacted",
+    "compaction": {
+      "compaction_id": 1,
+      "session_id": "sess_fixture",
+      "summary": "- fixture"
+    }
+  },
+  "session_snapshot": {
+    "session_id": "sess_fixture",
+    "workspace": "/workspace",
+    "language": "zh-CN",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "updated_at": "2026-01-01T00:00:01+00:00",
+    "messages": [],
+    "approvals": [],
+    "agent": {
+      "running": true,
+      "queued": 1,
+      "pending_steers": 0,
+      "current_run_id": "run_fixture",
+      "stage": "model.stream",
+      "started_at": "2026-01-01T00:00:01+00:00",
+      "last_progress_at": "2026-01-01T00:00:01+00:00",
+      "elapsed_seconds": 1,
+      "stalled_seconds": 0
+    }
+  }
+}

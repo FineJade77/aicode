@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.application.contracts import application_contract_descriptor
+
 
 API_CONTRACT_VERSION = "2.0"
 API_MIN_SUPPORTED_VERSION = "2.0"
@@ -14,6 +16,7 @@ def contract_descriptor(runtime_version: str) -> dict[str, Any]:
         "contract_version": API_CONTRACT_VERSION,
         "min_supported_version": API_MIN_SUPPORTED_VERSION,
         "runtime_version": runtime_version,
+        "application": application_contract_descriptor(),
         "transports": {
             "http": {"version": "v1", "status": "stable"},
             "sse": {"event_schema": "v2", "status": "stable"},

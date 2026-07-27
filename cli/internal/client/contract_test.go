@@ -25,6 +25,40 @@ type sseContractFixture struct {
 	ForwardCompatEvent map[string]any   `json:"forward_compat_event"`
 }
 
+type applicationContractFixture struct {
+	ContractVersion   string              `json:"contract_version"`
+	TurnRequest       SendMessageRequest  `json:"turn_request"`
+	RunReceipt        SendMessageResponse `json:"run_receipt"`
+	RunControl        CancelRunResponse   `json:"run_control"`
+	SteerReceipt      SteerResponse       `json:"steer_receipt"`
+	CompactionReceipt CompactResponse     `json:"compaction_receipt"`
+	SessionSnapshot   SessionResponse     `json:"session_snapshot"`
+}
+
+func TestApplicationContractFixtureMatchesClientTypes(t *testing.T) {
+	var fixture applicationContractFixture
+	loadContractFixture(t, "application-contract.v1.json", &fixture)
+
+	if fixture.ContractVersion != "1.0" {
+		t.Fatalf("application contract version = %q", fixture.ContractVersion)
+	}
+	if fixture.TurnRequest.Model != "fixture-model" || fixture.TurnRequest.Workspace != "/workspace" {
+		t.Fatalf("turn request = %#v", fixture.TurnRequest)
+	}
+	if fixture.RunReceipt.RunID != "run_fixture" || fixture.RunReceipt.Status != "accepted" {
+		t.Fatalf("run receipt = %#v", fixture.RunReceipt)
+	}
+	if fixture.RunControl.RunID == nil || *fixture.RunControl.RunID != "run_fixture" {
+		t.Fatalf("run control = %#v", fixture.RunControl)
+	}
+	if fixture.SteerReceipt.Pending != 1 || fixture.CompactionReceipt.Status != "compacted" {
+		t.Fatalf("control receipts = %#v %#v", fixture.SteerReceipt, fixture.CompactionReceipt)
+	}
+	if fixture.SessionSnapshot.Agent.CurrentRunID != "run_fixture" {
+		t.Fatalf("session snapshot = %#v", fixture.SessionSnapshot)
+	}
+}
+
 func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	var fixture httpContractFixture
 	loadContractFixture(t, "http-responses.v2.json", &fixture)
@@ -87,6 +121,9 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	}
 	if contract.Transports["sse"].EventSchema != "v2" {
 		t.Fatalf("SSE contract = %#v", contract.Transports["sse"])
+	}
+	if contract.Application.Version != "1.0" || contract.Application.Types["turn"] != "TurnRequest" {
+		t.Fatalf("application contract = %#v", contract.Application)
 	}
 
 	created, err := api.CreateSession(ctx, CreateSessionRequest{Workspace: "/workspace", Language: "zh-CN"})

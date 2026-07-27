@@ -23,11 +23,13 @@ docs/       设计与开发计划
 - [schemas/config.schema.json](schemas/config.schema.json)：项目级 `.aicode/config.json` schema
 - [schemas/execution.schema.json](schemas/execution.schema.json)：Host/Docker 共用 execution request/result contract
 - [schemas/project-trust.schema.json](schemas/project-trust.schema.json)：仓库外 Project Trust store contract
+- [schemas/application-contract.schema.json](schemas/application-contract.schema.json)：Application Runtime 的 Session/Turn/Run contract v1
 
 ## 已具备能力
 
 - CLI 自动启动、停止和查询 Runtime daemon。
 - HTTP + SSE 事件流，支持 `assistant.delta` 流式输出。
+- Application contract v1 固定 Session snapshot、Turn request、Run/control receipt；HTTP 和未来 transport 只负责映射。
 - 原生 function calling Agent Loop，支持 OpenAI-compatible provider 和 Anthropic provider。
 - 工具集：`read_file`、`search`、`list_files`、`related_files`、`bash`、`edit_file`、`review_diff`。
 - `edit_file` 逐次展示 unified diff，支持 `y` 单次应用、`a` 本 session 后续自动应用、其它输入拒绝。

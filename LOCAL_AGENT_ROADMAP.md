@@ -315,6 +315,8 @@ ContextProjection (ephemeral)
 
 目标：把“每条命令一次新 session”升级为可持续工作的本地对话。
 
+前置条件：先完成 WP1.4a 的 Application Runtime 与 Session/Turn/Run contract；REPL 只消费该稳定边界，不直接依赖 Agent Core 内部对象。
+
 第一版命令：
 
 ```text
@@ -457,6 +459,12 @@ evals/
 
 目标：Agent Loop 可在 HTTP server 之外独立测试和嵌入，为 P2 SDK/RPC 做准备。
 
+实施拆分：
+
+1. **WP1.4a / T-011a**：先提取 Application Runtime 及版本化 Session/Turn/Run contract。
+2. **WP1.1 / T-010**：以常驻 REPL 作为第一个长期消费者，验证 follow-up、steer、cancel、approval 和 compaction 边界。
+3. **WP1.4b / T-011b**：在 contract 后方完成 Agent Core DI 与内部解耦，禁止内部重构反向改变 REPL/transport。
+
 建议接口：
 
 ```python
@@ -482,9 +490,10 @@ class ExecutionBackend(Protocol): ...
 - 导入 Agent Core 不会启动 FastAPI、读用户配置或创建全局数据库连接。
 - HTTP API、CLI 事件和现有 session 可兼容迁移。
 
-首批落地（2026-07-26）：
+首批落地（2026-07-27）：
 
 - 新增 `core/` ports/domain、`application/` services/runtime 和 `adapters/` composition root；FastAPI 只持有单一 `ApplicationRuntime`。
+- Application contract v1 使用具名 `SessionSnapshot`、`TurnRequest`、`RunReceipt/RunControl` 与 control receipts，配套 JSON Schema、fixture、Runtime descriptor 和 Go reader；FastAPI/Pydantic 只负责 transport 映射。
 - AgentLoop 通过 ModelRuntime、ToolRegistry、WorkspaceRuntime、ApprovalBroker、TraceSink、Clock 和 ProjectTrust ports 工作；ContextManager 负责模型感知、持久化 compaction。
 - SessionStore 明确为 SQLite adapter，并支持 Clock/ID 注入；新增 InMemorySessionRepository、JSONL usage、workspace/tool/approval/system adapters。
 - 新增 `/v1/meta/contract` 与 Go client contract reader，现有 HTTP/SSE contract 保持 v2，stdio JSON-RPC 标记为 planned。
@@ -529,14 +538,10 @@ P2 只在 M2 指标稳定后启动。
 ## 9. 依赖关系与推荐顺序
 
 ```text
-WP0.4 contract baseline ───────────────┐
-                                      ├─> WP1.1 REPL ──────┐
-WP0.1 distribution ─> install E2E ────┘                    │
-                                                           ├─> WP1.4 Core ─> P2
-WP0.2 execution boundary ──> security eval ─┐              │
-                                           ├─> WP1.3 Eval ─┘
-WP0.3 context persistence ─> long-run eval ─┘
-
+WP0.4 contract baseline ─> WP1.4a Application contracts ─> WP1.1 REPL ─> WP1.4b Core DI ─> P2
+WP0.2 execution boundary ─> security eval ─> WP1.3 Eval ────────────────────┘
+WP0.3 context persistence ─> long-run eval ─> WP1.3 Eval
+WP0.1 distribution ─> install E2E
 WP0.3 model capabilities ─> WP1.2 local provider profiles
 ```
 
@@ -545,8 +550,8 @@ WP0.3 model capabilities ─> WP1.2 local provider profiles
 1. 先做 WP0.4 的 contract baseline，冻结可观察行为。
 2. 并行推进 WP0.1 和 WP0.2；二者完成后才能宣称“可安全安装”。
 3. 完成 WP0.3，并用长 session fixture 验证。
-4. 建立 WP1.3 最小评测骨架，再做 WP1.1 和 WP1.2，避免新体验无基线。
-5. 用 characterization tests 渐进完成 WP1.4。
+4. 建立 WP1.3 最小评测骨架，并先完成 WP1.4a Application contract。
+5. 基于该 contract 完成 WP1.1，再用 characterization tests 渐进完成 WP1.4b；WP1.2 可在此期间独立推进。
 6. 达到质量门槛后再进入 P2。
 
 ## 10. 质量门槛
