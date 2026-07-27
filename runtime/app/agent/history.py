@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
+from app.core.session import AgentSession, COMPACTION_SCHEMA_VERSION, CompactionEntry
 from app.models.provider import ModelCapability, ProviderError
 from app.security.secrets import redact_known_environment_secrets
-from app.sessions.store import COMPACTION_SCHEMA_VERSION, CompactionEntry, Session
 
 HISTORY_TOKEN_BUDGET = 60_000
 HARD_BUDGET_FACTOR = 1.5
@@ -32,7 +33,34 @@ class MessageGroup:
     complete: bool
 
 
-def load_history(session: Session) -> list[dict[str, Any]]:
+class ContextManager:
+    """Model-aware, persistent context preparation owned by Agent Core."""
+
+    def __init__(self, runtime: Any) -> None:
+        self.runtime = runtime
+
+    async def prepare(
+        self,
+        *,
+        session: AgentSession,
+        purpose: str,
+        system: str,
+        tools: list[dict[str, Any]] | tuple[Any, ...],
+        max_tokens: int,
+        force: bool = False,
+    ) -> list[dict[str, Any]]:
+        return await prepare_history_for_model(
+            runtime=self.runtime,
+            session=session,
+            purpose=purpose,
+            system=system,
+            tools=tools,
+            max_tokens=max_tokens,
+            force=force,
+        )
+
+
+def load_history(session: AgentSession) -> list[dict[str, Any]]:
     messages, ids = _normalized_messages(session)
     compaction = latest_valid_compaction(session)
     if compaction is None:
@@ -46,11 +74,11 @@ def load_history(session: Session) -> list[dict[str, Any]]:
     return projected
 
 
-def persist_message(session: Session, message: dict[str, Any]) -> int | None:
+def persist_message(session: AgentSession, message: dict[str, Any]) -> int | None:
     return session.append_message(message)
 
 
-def latest_valid_compaction(session: Session) -> CompactionEntry | None:
+def latest_valid_compaction(session: AgentSession) -> CompactionEntry | None:
     ids = {message_id for message_id in _normalized_message_ids(session) if message_id > 0}
     if not ids:
         return None
@@ -93,7 +121,7 @@ def estimate_prompt_tokens(
 async def prepare_history_for_model(
     *,
     runtime: Any,
-    session: Session,
+    session: AgentSession,
     purpose: str,
     system: str,
     tools: list[dict[str, Any]] | tuple[Any, ...],
@@ -102,7 +130,7 @@ async def prepare_history_for_model(
 ) -> list[dict[str, Any]]:
     history = load_history(session)
     capability = _capability(runtime, purpose, max_tokens)
-    context_settings = getattr(getattr(runtime.model_router, "settings", None), "context", None)
+    context_settings = getattr(getattr(runtime.model_runtime, "settings", None), "context", None)
     chars_per_token = float(getattr(capability, "chars_per_token", getattr(context_settings, "chars_per_token", 3.5)))
     reserve_tokens = int(getattr(context_settings, "reserve_tokens", 1_024))
     threshold = float(getattr(context_settings, "compact_threshold", 0.8))
@@ -133,7 +161,7 @@ async def prepare_history_for_model(
 async def _persist_compaction(
     *,
     runtime: Any,
-    session: Session,
+    session: AgentSession,
     current_history: list[dict[str, Any]],
     capability: ModelCapability,
     before_tokens: int,
@@ -225,6 +253,7 @@ async def _persist_compaction(
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         context_window=context_window,
+        created_at=runtime.clock.now() if getattr(runtime, "clock", None) is not None else datetime.now(timezone.utc),
     )
     stored = session.append_compaction(entry)
     await _emit_budget_event(
@@ -246,10 +275,10 @@ async def _summarize(
     messages: list[dict[str, Any]],
     *,
     runtime: Any,
-    session: Session,
+    session: AgentSession,
     chars_per_token: float,
 ) -> tuple[str, str, str, str | None]:
-    router = getattr(runtime, "model_router", None)
+    router = getattr(runtime, "model_runtime", None)
     if router is None:
         return _deterministic_summary(messages), "builtin", "deterministic", "model_router_unavailable"
 
@@ -286,7 +315,7 @@ async def _summarize(
         "output_tokens": result.output_tokens,
         "estimated_cost": result.estimated_cost,
     }
-    audit = getattr(runtime, "audit", None)
+    audit = getattr(runtime, "trace", None)
     if audit is not None:
         audit.record("usage.recorded", session_id=session.session_id, workspace=session.workspace, data=usage)
     await session.events.put({"type": "usage.recorded", **usage})
@@ -337,7 +366,7 @@ def _message_groups(messages: list[dict[str, Any]]) -> list[MessageGroup]:
 
 
 async def _emit_budget_event(
-    session: Session,
+    session: AgentSession,
     capability: ModelCapability,
     *,
     before_tokens: int,
@@ -371,7 +400,7 @@ async def _emit_budget_event(
 
 
 def _capability(runtime: Any, purpose: str, max_tokens: int) -> ModelCapability:
-    router = getattr(runtime, "model_router", None)
+    router = getattr(runtime, "model_runtime", None)
     if router is not None and hasattr(router, "capability_for_purpose"):
         return router.capability_for_purpose(purpose)
     return ModelCapability(
@@ -383,7 +412,7 @@ def _capability(runtime: Any, purpose: str, max_tokens: int) -> ModelCapability:
     )
 
 
-def _normalized_messages(session: Session) -> tuple[list[dict[str, Any]], list[int]]:
+def _normalized_messages(session: AgentSession) -> tuple[list[dict[str, Any]], list[int]]:
     history: list[dict[str, Any]] = []
     ids: list[int] = []
     normalized_ids = _normalized_message_ids(session)
@@ -405,7 +434,7 @@ def _normalized_messages(session: Session) -> tuple[list[dict[str, Any]], list[i
     return history, ids
 
 
-def _normalized_message_ids(session: Session) -> list[int]:
+def _normalized_message_ids(session: AgentSession) -> list[int]:
     if len(session.message_ids) == len(session.messages):
         return list(session.message_ids)
     return [0] * len(session.messages)
@@ -418,7 +447,7 @@ def _summary_message(summary: str) -> dict[str, Any]:
     }
 
 
-async def compact_if_needed(history: list[dict[str, Any]], runtime: Any, session: Session) -> list[dict[str, Any]]:
+async def compact_if_needed(history: list[dict[str, Any]], runtime: Any, session: AgentSession) -> list[dict[str, Any]]:
     """Legacy compatibility wrapper for callers outside the preflight model path."""
     before = estimate_tokens(history)
     if before <= HISTORY_TOKEN_BUDGET:

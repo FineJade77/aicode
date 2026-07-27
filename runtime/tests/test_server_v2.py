@@ -11,8 +11,8 @@ async def test_approve_accept_all_sets_session_flag(tmp_path, monkeypatch):
     from app.sessions.store import SessionStore
 
     store = SessionStore(path=tmp_path / "s.sqlite")
-    monkeypatch.setattr(server, "store", store)
-    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
+    monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
     session = store.create(workspace=str(tmp_path), language="zh-CN")
     approval = session.create_approval("edit", {"path": "a.py"})
 
@@ -23,14 +23,14 @@ async def test_approve_accept_all_sets_session_flag(tmp_path, monkeypatch):
 
 
 def test_agent_runtime_has_policy():
-    assert server.agent_runtime.policy is not None
+    assert server.application_runtime.agent.policy is not None
 
 
-def test_run_agent_uses_v2_loop():
+def test_http_run_coordinator_uses_agent_loop():
     import inspect
 
-    source = inspect.getsource(server.run_agent)
-    assert "run_turn_safely" in source
+    source = inspect.getsource(server.run_coordinator)
+    assert "AgentLoop" in source
 
 
 @pytest.mark.asyncio
@@ -39,12 +39,12 @@ async def test_send_message_rejects_unconfigured_provider(tmp_path, monkeypatch)
     from app.sessions.store import SessionStore
 
     store = SessionStore(path=tmp_path / "s.sqlite")
-    monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
     session = store.create(workspace=str(tmp_path), language="zh-CN")
 
     # Monkeypatch the provider's is_configured to return False
     monkeypatch.setattr(
-        server.agent_runtime.model_router.primary,
+        server.application_runtime.agent.model_router.primary,
         "is_configured",
         lambda: False
     )

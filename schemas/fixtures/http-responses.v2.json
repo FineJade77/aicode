@@ -1,6 +1,26 @@
 {
   "contract_version": "2.0",
   "responses": {
+    "api_contract": {
+      "contract_version": "2.0",
+      "min_supported_version": "2.0",
+      "runtime_version": "0.1.0",
+      "transports": {
+        "http": {
+          "version": "v1",
+          "status": "stable"
+        },
+        "sse": {
+          "event_schema": "v2",
+          "status": "stable"
+        },
+        "stdio_jsonrpc": {
+          "version": "2.0",
+          "status": "planned"
+        }
+      },
+      "future_field": true
+    },
     "create_session": {
       "session_id": "sess_fixture",
       "future_field": "ignored-by-v2-client"

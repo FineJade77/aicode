@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
-
-from app.project.config import load_project_config
-from app.project.detect import detect_test_command
-
-PROJECT_CONTEXT_LIMIT = 4000
 
 VERIFY_NOTE_ZH = "编辑已应用。请运行相关测试或命令验证改动；如果验证失败请继续修复，连续 3 次修复失败请停止并汇报现状。"
 VERIFY_NOTE_EN = "Edits applied. Run relevant tests to verify; keep fixing on failure, stop and report after 3 consecutive failed attempts."
@@ -30,21 +24,14 @@ MODE_INSTRUCTIONS_EN = {
 }
 
 
-def build_system_prompt(request: Any) -> str:
+def build_system_prompt(request: Any, project: Any) -> str:
     english = str(request.language).startswith("en")
     language_line = "Use English for all user-facing output." if english else "所有面向用户的输出使用中文。"
-    workspace = Path(request.workspace)
-    config = load_project_config(workspace)
-    test_command = ""
-    config_test = config.commands.get("test")
-    if config_test and config_test != "auto":
-        test_command = config_test
-    else:
-        detected = detect_test_command(workspace)
-        test_command = detected or ""
+    config = project.config
+    test_command = project.test_command
     project_commands = project_command_lines(config.commands, test_command)
-    rules_text = read_project_context_file(workspace, "rules.md")
-    memory_text = read_project_context_file(workspace, "memory.md")
+    rules_text = project.rules_text
+    memory_text = project.memory_text
     if english:
         workspaces = ", ".join(f"{ref.name} (read-only)" for ref in config.workspaces) or "none"
         sections = [
@@ -100,13 +87,6 @@ def build_system_prompt(request: Any) -> str:
     if memory_text:
         sections.append(f"{memory_heading}\n{memory_text}")
     return "\n".join(sections)
-
-
-def read_project_context_file(workspace: Path, filename: str) -> str:
-    path = workspace / ".aicode" / filename
-    if not path.is_file():
-        return ""
-    return path.read_text("utf-8", errors="replace")[:PROJECT_CONTEXT_LIMIT]
 
 
 def project_command_lines(commands: dict[str, str], detected_test_command: str) -> list[str]:

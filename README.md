@@ -224,6 +224,8 @@ lsof -nP -iTCP:8765 -sTCP:LISTEN
 aicode daemon start
 ```
 
+Runtime 内部按 Application Runtime → Agent Core → Adapters 分层。HTTP/SSE 只是 transport；AgentLoop 可通过 fake model 和内存 session 独立运行。`GET /v1/meta/contract` 返回当前 contract、最低兼容版本和 transport capability，Go client 使用同一 v2 结构；stdio JSON-RPC 当前仅预留，尚未发布。详细边界见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 ## Session 和审计
 
 默认数据位置：

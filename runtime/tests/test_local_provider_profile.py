@@ -12,6 +12,10 @@ from typing import Any
 import httpx
 import pytest
 
+from app.adapters.approvals import SessionApprovalBroker
+from app.adapters.system import SystemClock
+from app.adapters.tools import DefaultToolRuntime
+from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import run_turn_safely
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
@@ -178,7 +182,15 @@ async def test_no_auth_localhost_profile_probe_and_full_edit_flow(tmp_path: Path
     )
     router = ModelRouter.from_settings(settings)
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
-    runtime = AgentRuntime(model_router=router, audit=audit, policy=PolicyEngine())
+    runtime = AgentRuntime(
+        model_router=router,
+        audit=audit,
+        policy=PolicyEngine(),
+        tools=DefaultToolRuntime(),
+        workspace=LocalWorkspaceRuntime(),
+        clock=SystemClock(),
+        approvals=SessionApprovalBroker(),
+    )
     store = SessionStore(path=tmp_path / "sessions.sqlite")
     session = store.create(workspace=str(tmp_path), language="zh-CN")
 

@@ -3,6 +3,10 @@ import asyncio
 
 import pytest
 
+from app.adapters.approvals import SessionApprovalBroker
+from app.adapters.system import SystemClock
+from app.adapters.tools import DefaultToolRuntime
+from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import run_turn_safely
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
@@ -38,6 +42,10 @@ async def test_full_fix_flow(tmp_path):
         model_router=router,
         audit=audit,
         policy=PolicyEngine(),
+        tools=DefaultToolRuntime(),
+        workspace=LocalWorkspaceRuntime(),
+        clock=SystemClock(),
+        approvals=SessionApprovalBroker(),
     )
     store = SessionStore(path=tmp_path / "s.sqlite")
     session = store.create(workspace=str(tmp_path), language="zh-CN")

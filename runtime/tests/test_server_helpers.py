@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from app.adapters.approvals import SessionApprovalBroker
+from app.adapters.system import SystemClock
+from app.adapters.tools import DefaultToolRuntime
+from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.types import AgentRuntime
+from app.application.services import RunCoordinator
 from app.audit.logger import AuditLogger
 from app.config.settings import Settings
 from app.execution.models import ExecutionResult, ExecutionStatus
@@ -22,11 +27,9 @@ from app.server.main import (
     create_session,
     daemon_status,
     execute_sandbox,
-    emit_run_queued,
     effective_session_language,
     model_probe,
     model_routes,
-    process_session_runs,
     review_rules,
     SandboxExecutionRequest,
     get_trust,
@@ -74,8 +77,8 @@ async def test_create_session_uses_project_default_language(monkeypatch: pytest.
     config_dir.mkdir()
     (config_dir / "config.json").write_text('{"defaultLanguage":"en-US"}', encoding="utf-8")
     store = SessionStore(tmp_path / "sessions.sqlite")
-    monkeypatch.setattr(server, "store", store)
-    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
+    monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
 
     response = await create_session(CreateSessionRequest(workspace=str(tmp_path), language="zh-CN"))
     session = store.get(response.session_id)
@@ -99,7 +102,7 @@ def test_message_request_rejects_workspace_mismatch(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_session_runs_serializes_queued_messages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_run_coordinator_serializes_queued_messages(tmp_path: Path) -> None:
     session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
     first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
     second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN")
@@ -108,17 +111,23 @@ async def test_process_session_runs_serializes_queued_messages(monkeypatch: pyte
     active = 0
     seen: list[str] = []
 
-    async def fake_run_agent(target_session: Session, request: MessageRequest) -> None:
-        nonlocal active
-        active += 1
-        assert active == 1
-        seen.append(request.message)
-        await target_session.events.put({"type": "final", "summary": request.message})
-        active -= 1
+    class RecordingLoop:
+        async def run(self, target_session: Session, request: MessageRequest) -> None:
+            nonlocal active
+            active += 1
+            assert active == 1
+            seen.append(request.message)
+            await target_session.events.put({"type": "final", "summary": request.message})
+            active -= 1
 
-    monkeypatch.setattr("app.server.main.run_agent", fake_run_agent)
-
-    await process_session_runs(session)
+    coordinator = RunCoordinator(
+        ModelRouter(primary=FakeProvider([]), settings=Settings()),
+        AuditLogger(path=tmp_path / "audit.jsonl"),
+        RecordingLoop(),
+    )
+    coordinator.ensure_runner(session)
+    assert session.agent_runner_task is not None
+    await session.agent_runner_task
 
     finals = [event for event in session.events.events_after(0) if event["type"] == "final"]
     assert seen == ["first", "second"]
@@ -129,8 +138,8 @@ async def test_process_session_runs_serializes_queued_messages(monkeypatch: pyte
 @pytest.mark.asyncio
 async def test_cancel_run_stops_current_and_continues_queue(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
-    monkeypatch.setattr(server, "store", store)
-    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
+    monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
     session = store.create(workspace=str(tmp_path), language="zh-CN")
     first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
     second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN")
@@ -140,17 +149,23 @@ async def test_cancel_run_stops_current_and_continues_queue(monkeypatch: pytest.
     seen: list[str] = []
     approval_ids: list[str] = []
 
-    async def fake_run_agent(target_session: Session, request: MessageRequest) -> None:
-        seen.append(request.message)
-        if request.message == "first":
-            approval = target_session.create_approval("tool", {"tool": "bash"})
-            approval_ids.append(approval.approval_id)
-            first_started.set()
-            await target_session.wait_for_approval(approval.approval_id)
-        await target_session.events.put({"type": "final", "summary": request.message})
+    class CancellableLoop:
+        async def run(self, target_session: Session, request: MessageRequest) -> None:
+            seen.append(request.message)
+            if request.message == "first":
+                approval = target_session.create_approval("tool", {"tool": "bash"})
+                approval_ids.append(approval.approval_id)
+                first_started.set()
+                await target_session.wait_for_approval(approval.approval_id)
+            await target_session.events.put({"type": "final", "summary": request.message})
 
-    monkeypatch.setattr("app.server.main.run_agent", fake_run_agent)
-    server.ensure_session_runner(session)
+    coordinator = RunCoordinator(
+        ModelRouter(primary=FakeProvider([]), settings=Settings()),
+        server.application_runtime.trace,
+        CancellableLoop(),
+    )
+    monkeypatch.setattr(server, "run_coordinator", lambda: coordinator)
+    coordinator.ensure_runner(session)
     await asyncio.wait_for(first_started.wait(), timeout=1)
 
     response = await cancel_run(session.session_id)
@@ -177,7 +192,7 @@ async def test_cancel_run_stops_current_and_continues_queue(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_cancel_run_is_idempotent_when_session_is_idle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
-    monkeypatch.setattr(server, "store", store)
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
     session = store.create(workspace=str(tmp_path), language="zh-CN")
 
     response = await cancel_run(session.session_id)
@@ -188,17 +203,19 @@ async def test_cancel_run_is_idempotent_when_session_is_idle(monkeypatch: pytest
 @pytest.mark.asyncio
 async def test_queued_run_history_does_not_include_future_message(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
-    monkeypatch.setattr(server, "store", store)
-    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
-    monkeypatch.setattr(server, "ensure_session_runner", lambda session: None)
-
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
+    monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
     fake = FakeProvider([text_turn("first done"), text_turn("second done")])
     runtime = AgentRuntime(
         model_router=ModelRouter(primary=fake, settings=Settings()),
         audit=AuditLogger(path=tmp_path / "agent-audit.jsonl"),
         policy=PolicyEngine(),
+        tools=DefaultToolRuntime(),
+        workspace=LocalWorkspaceRuntime(),
+        clock=SystemClock(),
+        approvals=SessionApprovalBroker(),
     )
-    monkeypatch.setattr(server, "agent_runtime", runtime)
+    monkeypatch.setattr(server.application_runtime, "agent", runtime)
 
     session = store.create(workspace=str(tmp_path), language="zh-CN")
     await server.send_message(
@@ -210,7 +227,8 @@ async def test_queued_run_history_does_not_include_future_message(monkeypatch: p
         MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN"),
     )
 
-    await process_session_runs(session)
+    assert session.agent_runner_task is not None
+    await session.agent_runner_task
 
     first_user_messages = [str(message.get("content")) for message in fake.calls[0].messages if message.get("role") == "user"]
     second_user_messages = [str(message.get("content")) for message in fake.calls[1].messages if message.get("role") == "user"]
@@ -226,7 +244,7 @@ async def test_emit_run_queued_marks_queued_run(tmp_path: Path) -> None:
     request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="zh-CN")
     queued = session.enqueue_agent_run(request)
 
-    await emit_run_queued(session, queued, was_running=True, queue_position=2)
+    await RunCoordinator._emit_queued(session, queued, was_running=True, queue_position=2)
 
     event = await asyncio.wait_for(session.events.get(), timeout=1)
     assert event["type"] == "run.queued"
@@ -271,7 +289,7 @@ async def test_model_probe_endpoint_delegates_options(monkeypatch: pytest.Monkey
         async def probe(self, *, model, tools):
             return {"status": "ok", "model": model, "tools": tools}
 
-    monkeypatch.setattr(server, "model_router", ProbeRouter())
+    monkeypatch.setattr(server.application_runtime, "model", ProbeRouter())
 
     data = await model_probe(tools=False, model="local-coder")
 
@@ -281,8 +299,8 @@ async def test_model_probe_endpoint_delegates_options(monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_daemon_status_includes_event_writer_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
-    monkeypatch.setattr(server, "store", store)
-    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(server.application_runtime, "sessions", store)
+    monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
 
     data = await daemon_status()
 
@@ -298,7 +316,7 @@ async def test_daemon_status_includes_event_writer_status(monkeypatch: pytest.Mo
 async def test_sandbox_execution_endpoint_uses_runtime_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / "go.mod").write_text("module example.test/demo\n", encoding="utf-8")
     fake = FakeExecutionService()
-    monkeypatch.setattr(server, "execution_service", fake)
+    monkeypatch.setattr(server.application_runtime, "execution", fake)
 
     result = await execute_sandbox(
         SandboxExecutionRequest(
@@ -321,7 +339,7 @@ async def test_sandbox_execution_endpoint_uses_runtime_backend(monkeypatch: pyte
 @pytest.mark.asyncio
 async def test_cancel_execution_endpoint_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeExecutionService()
-    monkeypatch.setattr(server, "execution_service", fake)
+    monkeypatch.setattr(server.application_runtime, "execution", fake)
 
     response = await cancel_execution("exec_api")
 
@@ -336,8 +354,8 @@ async def test_project_trust_endpoints_store_state_outside_workspace(
     workspace = tmp_path / "repo"
     workspace.mkdir()
     store = TrustStore(tmp_path / "state" / "trust.json")
-    monkeypatch.setattr(server, "trust_store", store)
-    monkeypatch.setattr(server, "audit", AuditLogger(path=tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(server.application_runtime, "trust", store)
+    monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
 
     initial = await get_trust(str(workspace))
     trusted = await trust_project(TrustRequest(workspace=str(workspace)))

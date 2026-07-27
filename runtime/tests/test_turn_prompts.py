@@ -1,6 +1,7 @@
 import json
 
 from app.agent.prompts import build_system_prompt
+from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.models.provider import CompletionResult, ToolCallRequest
 
@@ -37,7 +38,8 @@ def test_system_prompt_includes_project_info(tmp_path):
     )
     (tmp_path / ".aicode" / "rules.md").write_text("永远写中文注释", encoding="utf-8")
     (tmp_path / ".aicode" / "memory.md").write_text("认证模块在 runtime/app/server/auth.py", encoding="utf-8")
-    prompt = build_system_prompt(FakeRequest(tmp_path))
+    request = FakeRequest(tmp_path)
+    prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
     assert "pytest -q" in prompt
     assert "lint: ruff check ." in prompt
     assert ".env" in prompt
@@ -50,7 +52,8 @@ def test_system_prompt_includes_project_info(tmp_path):
 
 
 def test_system_prompt_review_mode(tmp_path):
-    prompt = build_system_prompt(FakeRequest(tmp_path, mode="review"))
+    request = FakeRequest(tmp_path, mode="review")
+    prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
     assert "只读" in prompt
 
 
@@ -61,7 +64,8 @@ def test_system_prompt_english_mode_is_localized(tmp_path):
     (tmp_path / ".aicode" / "memory.md").write_text("Auth starts in server/auth.py", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
 
-    prompt = build_system_prompt(FakeRequest(tmp_path, mode="review", language="en-US"))
+    request = FakeRequest(tmp_path, mode="review", language="en-US")
+    prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
 
     assert "Use English for all user-facing output." in prompt
     assert "Working rules:" in prompt
@@ -80,7 +84,8 @@ def test_system_prompt_limits_project_memory(tmp_path):
     (tmp_path / ".aicode").mkdir()
     (tmp_path / ".aicode" / "memory.md").write_text("a" * 4100 + "TAIL", encoding="utf-8")
 
-    prompt = build_system_prompt(FakeRequest(tmp_path))
+    request = FakeRequest(tmp_path)
+    prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
 
     assert "a" * 4000 in prompt
     assert "TAIL" not in prompt

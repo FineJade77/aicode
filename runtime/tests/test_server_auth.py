@@ -10,7 +10,11 @@ from app.sessions.store import SessionStore
 
 @pytest.fixture
 def client_factory(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "store", SessionStore(path=tmp_path / "s.sqlite"))
+    monkeypatch.setattr(
+        server.application_runtime,
+        "sessions",
+        SessionStore(path=tmp_path / "s.sqlite"),
+    )
 
     def make(token: str) -> httpx.AsyncClient:
         monkeypatch.setattr(auth, "RUNTIME_TOKEN", token)

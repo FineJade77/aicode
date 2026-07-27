@@ -3,6 +3,10 @@ import json
 
 import pytest
 
+from app.adapters.approvals import SessionApprovalBroker
+from app.adapters.system import SystemClock
+from app.adapters.tools import DefaultToolRuntime
+from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import complete_with_compaction, run_turn
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
@@ -32,7 +36,18 @@ def make_runtime(turns, tmp_path):
     fake = FakeProvider(turns)
     router = ModelRouter(primary=fake, settings=Settings())
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
-    return AgentRuntime(model_router=router, audit=audit, policy=PolicyEngine()), fake
+    return (
+        AgentRuntime(
+            model_router=router,
+            audit=audit,
+            policy=PolicyEngine(),
+            tools=DefaultToolRuntime(),
+            workspace=LocalWorkspaceRuntime(),
+            clock=SystemClock(),
+            approvals=SessionApprovalBroker(),
+        ),
+        fake,
+    )
 
 
 def make_session(tmp_path):

@@ -5,6 +5,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from app.config.settings import Settings
+from app.contracts.api import contract_descriptor
 from app.events.sse import encode_sse
 from app.events.types import EVENT_TYPES
 from app.execution.models import ExecutionStatus
@@ -98,6 +99,8 @@ def test_http_response_fixture_matches_runtime_models() -> None:
     responses = fixture["responses"]
 
     assert fixture["contract_version"] == CONTRACT_VERSION
+    assert responses["api_contract"]["contract_version"] == contract_descriptor("0.1.0")["contract_version"]
+    assert responses["api_contract"]["min_supported_version"] == CONTRACT_VERSION
     assert CreateSessionResponse.model_validate(responses["create_session"]).session_id == "sess_fixture"
     assert SendMessageResponse.model_validate(responses["send_message"]).run_id == "run_fixture"
 

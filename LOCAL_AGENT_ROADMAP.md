@@ -478,6 +478,14 @@ class ExecutionBackend(Protocol): ...
 - 导入 Agent Core 不会启动 FastAPI、读用户配置或创建全局数据库连接。
 - HTTP API、CLI 事件和现有 session 可兼容迁移。
 
+首批落地（2026-07-26）：
+
+- 新增 `core/` ports/domain、`application/` services/runtime 和 `adapters/` composition root；FastAPI 只持有单一 `ApplicationRuntime`。
+- AgentLoop 通过 ModelRuntime、ToolRegistry、WorkspaceRuntime、ApprovalBroker、TraceSink、Clock 和 ProjectTrust ports 工作；ContextManager 负责模型感知、持久化 compaction。
+- SessionStore 明确为 SQLite adapter，并支持 Clock/ID 注入；新增 InMemorySessionRepository、JSONL usage、workspace/tool/approval/system adapters。
+- 新增 `/v1/meta/contract` 与 Go client contract reader，现有 HTTP/SSE contract 保持 v2，stdio JSON-RPC 标记为 planned。
+- 架构守卫验证 Agent Core 无 FastAPI/server/adapter/session/tool/project import；fake model + in-memory session 可直接运行 AgentLoop。
+
 ## 8. P2：可嵌入与扩展
 
 P2 只在 M2 指标稳定后启动。

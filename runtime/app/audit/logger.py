@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 from contextlib import suppress
@@ -10,9 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from app.audit.redaction import redact
+from app.core.hashing import stable_hash as _stable_hash
 
 
 AUDIT_WRITE_QUEUE_MAXSIZE = 5_000
+
+# Backward-compatible import path; new code imports from app.core.hashing.
+stable_hash = _stable_hash
 
 
 class AuditLogger:
@@ -115,9 +118,3 @@ class AuditLogger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
-
-
-def stable_hash(value: str | bytes) -> str:
-    if isinstance(value, str):
-        value = value.encode("utf-8")
-    return hashlib.sha256(value).hexdigest()

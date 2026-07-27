@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Any
 
-from app.agent.history import load_history, persist_message, prepare_history_for_model, truncate_tool_output
+from app.agent.history import ContextManager, load_history, persist_message, truncate_tool_output
 from app.agent.prompts import BUDGET_NOTE_EN, BUDGET_NOTE_ZH, VERIFY_NOTE_EN, VERIFY_NOTE_ZH, build_system_prompt
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
+from app.agent.types import AgentRuntime
 from app.agent.utils import localized
-from app.audit.logger import stable_hash
+from app.core.hashing import stable_hash
+from app.core.session import AgentSession
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     CompletionResult,
@@ -17,42 +18,58 @@ from app.models.provider import (
     tool_argument_parse_error,
 )
 from app.policy.engine import PolicyEngine
-from app.sessions.store import Session
-from app.tools.base import ToolResult, is_protected_path
-from app.tools.edit import EditError, EditStaleError, apply_edit, build_edit_proposal
-from app.tools.registry import build_tool_context, run_tool, tool_schemas_for_mode, validate_tool_arguments
 
 
-async def run_turn_safely(session: Session, request: Any, runtime: Any) -> None:
+class AgentLoop:
+    """Transport-independent orchestration for a single agent turn."""
+
+    def __init__(self, runtime: AgentRuntime) -> None:
+        self.runtime = runtime
+        if self.runtime.context_manager is None:
+            self.runtime.context_manager = ContextManager(runtime)
+
+    async def run(self, session: AgentSession, request: Any) -> None:
+        await run_turn_safely(session, request, self.runtime)
+
+
+async def run_turn_safely(session: AgentSession, request: Any, runtime: AgentRuntime) -> None:
     try:
         await run_turn(session, request, runtime)
     except Exception as exc:
-        runtime.audit.record(
-            "session.error",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data={"mode": request.mode, "error_type": exc.__class__.__name__, "error": str(exc)},
-        )
+        if runtime.trace is not None:
+            runtime.trace.record(
+                "session.error",
+                session_id=session.session_id,
+                workspace=session.workspace,
+                data={"mode": request.mode, "error_type": exc.__class__.__name__, "error": str(exc)},
+            )
         message = localized(request.language, f"Agent 执行失败: {exc}", f"Agent execution failed: {exc}")
         await session.events.put({"type": "error", "error": message, "error_type": exc.__class__.__name__})
         await session.events.put({"type": "final", "summary": message})
 
 
-async def run_turn(session: Session, request: Any, runtime: Any) -> None:
+async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -> None:
     policy: PolicyEngine = runtime.policy or PolicyEngine()
-    system = build_system_prompt(request)
+    if (
+        runtime.workspace is None
+        or runtime.tools is None
+        or runtime.model_runtime is None
+        or runtime.approvals is None
+    ):
+        raise RuntimeError("AgentRuntime 缺少 workspace、tools、model 或 approval runtime adapter")
+    system = build_system_prompt(request, runtime.workspace.prompt_context(Path(request.workspace)))
     history = load_history(session)
     # Persist only the run that is starting, so queued future prompts do not leak into this history.
     current_user_message = user_message(str(request.message))
     history.append(current_user_message)
     persist_message(session, current_user_message)
-    tools = tool_schemas_for_mode(request.mode)
+    tools = runtime.tools.schemas_for_mode(request.mode)
     trust_status = (
-        runtime.trust_store.status(Path(request.workspace))
-        if runtime.trust_store is not None
+        runtime.trust.status(Path(request.workspace))
+        if runtime.trust is not None
         else {"level": "trusted"}
     )
-    context = build_tool_context(
+    context = runtime.tools.build_context(
         request.workspace,
         request.mode,
         request.language,
@@ -124,22 +141,28 @@ async def run_turn(session: Session, request: Any, runtime: Any) -> None:
         persist_message(session, message)
 
     summary = str(message.get("content") or "") if result is not None else ""
-    runtime.audit.record("session.final", session_id=session.session_id, workspace=session.workspace, data={"mode": request.mode})
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "session.final",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"mode": request.mode},
+        )
     await session.events.put({"type": "final", "summary": summary})
 
 
 async def complete_with_compaction(
     *,
-    session: Session,
-    runtime: Any,
+    session: AgentSession,
+    runtime: AgentRuntime,
     purpose: str,
     system: str,
     tools: list[dict[str, Any]] | tuple[Any, ...],
     on_text_delta: Any,
     max_tokens: int,
 ) -> tuple[list[dict[str, Any]], CompletionResult]:
-    history = await prepare_history_for_model(
-        runtime=runtime,
+    context_manager = runtime.context_manager or ContextManager(runtime)
+    history = await context_manager.prepare(
         session=session,
         purpose=purpose,
         system=system,
@@ -147,7 +170,8 @@ async def complete_with_compaction(
         max_tokens=max_tokens,
     )
     try:
-        result = await runtime.model_router.stream_complete(
+        assert runtime.model_runtime is not None
+        result = await runtime.model_runtime.stream_complete(
             purpose=purpose,
             system=system,
             messages=history,
@@ -157,8 +181,7 @@ async def complete_with_compaction(
         )
     except ContextOverflowError:
         session.mark_agent_progress("context.compaction_retry")
-        history = await prepare_history_for_model(
-            runtime=runtime,
+        history = await context_manager.prepare(
             session=session,
             purpose=purpose,
             system=system,
@@ -166,7 +189,8 @@ async def complete_with_compaction(
             max_tokens=max_tokens,
             force=True,
         )
-        result = await runtime.model_router.stream_complete(
+        assert runtime.model_runtime is not None
+        result = await runtime.model_runtime.stream_complete(
             purpose=purpose,
             system=system,
             messages=history,
@@ -178,7 +202,12 @@ async def complete_with_compaction(
 
 
 async def execute_gated(
-    session: Session, request: Any, call: ToolCallRequest, runtime: Any, policy: PolicyEngine, context: Any
+    session: AgentSession,
+    request: Any,
+    call: ToolCallRequest,
+    runtime: AgentRuntime,
+    policy: PolicyEngine,
+    context: Any,
 ) -> tuple[str, int]:
     parse_error = None
     if not isinstance(call.arguments, dict):
@@ -193,12 +222,13 @@ async def execute_gated(
             f"工具 {call.name} 的参数不是合法 JSON，已跳过执行。请重新生成合法 JSON 参数后再调用该工具。{detail}",
             f"Tool {call.name} received invalid JSON arguments and was not executed. Regenerate valid JSON arguments before calling it again. {detail}",
         ).strip()
-        runtime.audit.record(
-            "tool.argument_parse_error",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data={"tool": call.name, "tool_call_id": call.id, "parse_error": parse_error},
-        )
+        if runtime.trace is not None:
+            runtime.trace.record(
+                "tool.argument_parse_error",
+                session_id=session.session_id,
+                workspace=session.workspace,
+                data={"tool": call.name, "tool_call_id": call.id, "parse_error": parse_error},
+            )
         await session.events.put(
             tool_event(
                 "tool.error",
@@ -211,24 +241,27 @@ async def execute_gated(
         )
         return f"[工具参数解析失败] {message}", 0
 
-    validation_error = validate_tool_arguments(call.name, call.arguments)
+    if runtime.tools is None:
+        raise RuntimeError("AgentRuntime 缺少 tool runtime adapter")
+    validation_error = runtime.tools.validate_arguments(call.name, call.arguments)
     if validation_error is not None:
         message = localized(
             request.language,
             f"工具 {call.name} 参数校验失败，已跳过执行。请按工具 schema 重新生成参数。{validation_error}",
             f"Tool {call.name} arguments failed validation and were not executed. Regenerate arguments that match the tool schema. {validation_error}",
         ).strip()
-        runtime.audit.record(
-            "tool.argument_validation_error",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data={
-                "tool": call.name,
-                "tool_call_id": call.id,
-                "validation_error": validation_error,
-                "args": tool_audit_arguments(call.name, call.arguments),
-            },
-        )
+        if runtime.trace is not None:
+            runtime.trace.record(
+                "tool.argument_validation_error",
+                session_id=session.session_id,
+                workspace=session.workspace,
+                data={
+                    "tool": call.name,
+                    "tool_call_id": call.id,
+                    "validation_error": validation_error,
+                    "args": tool_audit_arguments(call.name, call.arguments),
+                },
+            )
         await session.events.put(
             tool_event(
                 "tool.error",
@@ -251,18 +284,19 @@ async def execute_gated(
         trust_level=context.trust_level,
     )
     audit_args = tool_audit_arguments(call.name, call.arguments)
-    runtime.audit.record(
-        "tool.started",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={
-            "tool": call.name,
-            "tool_call_id": call.id,
-            "args": audit_args,
-            "verdict": gate.verdict,
-            "risk_level": gate.risk_level,
-        },
-    )
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "tool.started",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={
+                "tool": call.name,
+                "tool_call_id": call.id,
+                "args": audit_args,
+                "verdict": gate.verdict,
+                "risk_level": gate.risk_level,
+            },
+        )
     await session.events.put(
         {
             "type": "tool.started",
@@ -294,6 +328,7 @@ async def execute_gated(
             request,
             "tool",
             {"tool": call.name, "tool_call_id": call.id, "args": call.arguments, "reason": gate.reason},
+            runtime,
         )
         if accepted is not True:
             reason = localized(request.language, "用户拒绝执行该命令", "user rejected the command")
@@ -310,15 +345,16 @@ async def execute_gated(
 
     session.mark_agent_progress(f"tool.{call.name}")
     context.tool_call_id = call.id
-    result = await run_tool(call.name, call.arguments, context)
+    result = await runtime.tools.run(call.name, call.arguments, context)
     if result.success:
         output = truncate_tool_output(call.name, result.text)
-        runtime.audit.record(
-            "tool.finished",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data=tool_finish_audit_data(call.name, result, tool_call_id=call.id),
-        )
+        if runtime.trace is not None:
+            runtime.trace.record(
+                "tool.finished",
+                session_id=session.session_id,
+                workspace=session.workspace,
+                data=tool_finish_audit_data(call.name, result, tool_call_id=call.id),
+            )
         await session.events.put(
             tool_event(
                 "tool.output",
@@ -330,12 +366,13 @@ async def execute_gated(
             )
         )
         return output, 0
-    runtime.audit.record(
-        "tool.finished",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data=tool_finish_audit_data(call.name, result, tool_call_id=call.id),
-    )
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "tool.finished",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data=tool_finish_audit_data(call.name, result, tool_call_id=call.id),
+        )
     await session.events.put(
         tool_event(
             "tool.error",
@@ -349,18 +386,32 @@ async def execute_gated(
     return f"[错误] {truncate_tool_output(call.name, result.error)}", 0
 
 
-async def execute_edit(session: Session, request: Any, call: ToolCallRequest, runtime: Any, context: Any) -> tuple[str, int]:
-    started = time.perf_counter()
+async def execute_edit(
+    session: AgentSession,
+    request: Any,
+    call: ToolCallRequest,
+    runtime: AgentRuntime,
+    context: Any,
+) -> tuple[str, int]:
+    if runtime.tools is None or runtime.clock is None:
+        raise RuntimeError("AgentRuntime 缺少 tool runtime 或 clock adapter")
+    started = runtime.clock.monotonic()
     workspace = Path(request.workspace)
     try:
-        proposal = build_edit_proposal(workspace, call.arguments, context.protected_paths)
-    except EditError as exc:
+        proposal = runtime.tools.build_edit_proposal(workspace, call.arguments, context.protected_paths)
+    except Exception as exc:
         await session.events.put(
-            tool_event("tool.error", "edit_file", tool_call_id=call.id, error=str(exc), duration_ms=elapsed_ms(started))
+            tool_event(
+                "tool.error",
+                "edit_file",
+                tool_call_id=call.id,
+                error=str(exc),
+                duration_ms=elapsed_ms(started, runtime),
+            )
         )
         return f"[编辑失败] {exc}", 0
 
-    auto = session.auto_accept_edits and not is_protected_path(proposal.path, context.protected_paths)
+    auto = session.auto_accept_edits and not runtime.tools.is_protected_path(proposal.path, context.protected_paths)
     if auto:
         await session.events.put({"type": "edit.auto_approved", "path": proposal.path, "tool_call_id": call.id})
         accepted = True
@@ -370,6 +421,7 @@ async def execute_edit(session: Session, request: Any, call: ToolCallRequest, ru
             request,
             "edit",
             {"path": proposal.path, "kind": proposal.kind, "diff": proposal.diff, "tool_call_id": call.id},
+            runtime,
         )
 
     if accepted is not True:
@@ -378,27 +430,35 @@ async def execute_edit(session: Session, request: Any, call: ToolCallRequest, ru
         return f"[{reason}] {proposal.path}", 0
 
     try:
-        apply_edit(workspace, proposal)
-    except EditStaleError as exc:
+        runtime.tools.apply_edit(workspace, proposal)
+    except Exception as exc:
         await session.events.put(
-            tool_event("tool.error", "edit_file", tool_call_id=call.id, error=str(exc), duration_ms=elapsed_ms(started))
+            tool_event(
+                "tool.error",
+                "edit_file",
+                tool_call_id=call.id,
+                error=str(exc),
+                duration_ms=elapsed_ms(started, runtime),
+            )
         )
-        return f"[编辑失败·stale] {exc}", 0
-    duration_ms = elapsed_ms(started)
+        marker = "·stale" if "Stale" in exc.__class__.__name__ else ""
+        return f"[编辑失败{marker}] {exc}", 0
+    duration_ms = elapsed_ms(started, runtime)
     patch_hash = stable_hash(proposal.diff)
-    runtime.audit.record(
-        "edit.applied",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={
-            "path": proposal.path,
-            "kind": proposal.kind,
-            "tool_call_id": call.id,
-            "diff_bytes": len(proposal.diff),
-            "patch_hash": patch_hash,
-            "duration_ms": duration_ms,
-        },
-    )
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "edit.applied",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={
+                "path": proposal.path,
+                "kind": proposal.kind,
+                "tool_call_id": call.id,
+                "diff_bytes": len(proposal.diff),
+                "patch_hash": patch_hash,
+                "duration_ms": duration_ms,
+            },
+        )
     await session.events.put(
         {
             "type": "edit.applied",
@@ -444,7 +504,7 @@ def tool_observability_fields(data: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
-def tool_finish_audit_data(tool: str, result: ToolResult, *, tool_call_id: str = "") -> dict[str, Any]:
+def tool_finish_audit_data(tool: str, result: Any, *, tool_call_id: str = "") -> dict[str, Any]:
     data = {"tool": tool, "success": result.success, "duration_ms": result.duration_ms, "risk_level": result.risk_level}
     if tool_call_id:
         data["tool_call_id"] = tool_call_id
@@ -462,19 +522,34 @@ def tool_audit_arguments(tool: str, arguments: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def elapsed_ms(started: float) -> int:
-    return max(0, int((time.perf_counter() - started) * 1000))
+def elapsed_ms(started: float, runtime: AgentRuntime) -> int:
+    assert runtime.clock is not None
+    return max(0, int((runtime.clock.monotonic() - started) * 1000))
 
 
-async def request_approval(session: Session, request: Any, kind: str, payload: dict[str, Any]) -> bool | None:
-    approval = session.create_approval(kind, payload)
-    session.mark_agent_progress(f"approval.{kind}")
-    message = localized(request.language, "等待用户确认", "waiting for user approval")
-    await session.events.put({"type": "approval.requested", "approval_id": approval.approval_id, "kind": kind, "message": message, **payload})
-    return await session.wait_for_approval(approval.approval_id)
+async def request_approval(
+    session: AgentSession,
+    request: Any,
+    kind: str,
+    payload: dict[str, Any],
+    runtime: AgentRuntime,
+) -> bool | None:
+    if runtime.approvals is None:
+        raise RuntimeError("AgentRuntime 缺少 approval broker")
+    return await runtime.approvals.request(
+        session,
+        kind=kind,
+        payload=payload,
+        language=request.language,
+    )
 
 
-async def record_usage(session: Session, result: CompletionResult, purpose: str, runtime: Any) -> None:
+async def record_usage(
+    session: AgentSession,
+    result: CompletionResult,
+    purpose: str,
+    runtime: AgentRuntime,
+) -> None:
     payload = {
         "model": result.model,
         "provider": result.provider,
@@ -483,5 +558,11 @@ async def record_usage(session: Session, result: CompletionResult, purpose: str,
         "output_tokens": result.output_tokens,
         "estimated_cost": result.estimated_cost,
     }
-    runtime.audit.record("usage.recorded", session_id=session.session_id, workspace=session.workspace, data=payload)
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "usage.recorded",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data=payload,
+        )
     await session.events.put({"type": "usage.recorded", **payload})

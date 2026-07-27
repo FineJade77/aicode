@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.core.paths import is_protected_path
 from app.project.config import WorkspaceRef, default_protected_paths
 
 
@@ -100,17 +100,6 @@ def reject_protected_path(workspace: Path, path: Path, protected_paths: list[str
     rel = display_path(workspace, path)
     if is_protected_path(rel, protected_paths):
         raise ToolError(f"受保护路径不可访问: {rel}")
-
-
-def is_protected_path(rel_path: str, protected_paths: list[str]) -> bool:
-    normalized = rel_path.replace("\\", "/").lstrip("./")
-    for pattern in protected_paths:
-        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
-        if fnmatch(normalized, normalized_pattern):
-            return True
-        if "/" not in normalized_pattern and Path(normalized).name == normalized_pattern:
-            return True
-    return False
 
 
 def display_path(workspace: Path, path: Path) -> str:

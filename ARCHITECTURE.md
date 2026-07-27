@@ -13,7 +13,7 @@
 
 非目标：
 
-- 不提供 IDE 插件、Web UI 或桌面图形界面。
+- 当前版本不交付 IDE 插件、Web UI 或桌面图形界面；这些入口只能复用版本化 contract 和 Application Runtime，不得复制 Agent 逻辑。
 - 不提供云端托管执行环境。
 - 不自动跨仓库写入或部署生产系统。
 - 不把项目规则视为高于系统安全策略的指令。
@@ -21,29 +21,27 @@
 ## 2. System Overview
 
 ```text
-User
-  |
-  v
-Go CLI
-  |-- chat / review / diff / test / explain / commit-message
-  |-- config / trust / sessions / usage / models / doctor / review-rules
-  |-- --sandbox docker test|build|lint
-  |
-  | HTTP + SSE, localhost token auth
-  v
-Python Runtime
-  |-- FastAPI server
-  |-- Session store, messages, events, approval state
-  |-- Agent Loop
-  |-- Model router
-  |-- Tool registry
-  |-- Policy engine
-  |-- Edit approval and patch apply
-  |-- Audit logger and usage tracker
-  |
-  v
-Workspace / SQLite / Model Providers
+Go CLI / Interactive REPL / future IDE / stdio JSON-RPC
+                         |
+                 versioned API contract
+                         |
++---------------- Application Runtime ----------------+
+| SessionService | RunCoordinator | ApprovalService   |
+| TraceService | ProjectTrustService                  |
++------------------------+-----------------------------+
+                         |
++-------------------- Agent Core ----------------------+
+| AgentLoop | ContextManager | ModelRuntime            |
+| ToolRegistry | Policy                               |
++------------------------+-----------------------------+
+                         |
++---------------------- Adapters ----------------------+
+| SQLite/JSONL | Model Providers | Host/Sandbox Exec   |
+| Workspace | Clock/IDs                                |
++------------------------------------------------------+
 ```
+
+HTTP/SSE 是当前稳定 transport。`GET /v1/meta/contract` 返回 contract version、最低兼容版本、Runtime version 和 transport capability；Go client 通过同一结构读取。stdio JSON-RPC 只预留 capability，尚未作为已实现功能发布。
 
 Host 命令与 Docker Sandbox 统一经过 Runtime ExecutionService：
 
@@ -122,17 +120,25 @@ manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和
 
 ### 3.3 Python Runtime
 
-Runtime 是 Agent 的核心执行层，职责包括：
+Runtime 分为三层：
 
-- 提供 HTTP API 和 SSE 事件流。
-- 管理 session、message、event、approval 状态。
-- 构造 prompt、调用模型、解析工具调用。
-- 执行工具前做 policy 校验。
-- 对写操作和风险命令发起审批。
-- 应用 patch 并检测文件漂移。
-- 记录审计日志和用量统计。
+- `application/`：会话、run 串行化/取消、审批决议、trace/usage、Project Trust、model 与 execution facade。
+- `agent/` + `core/`：transport-independent AgentLoop、ContextManager、Policy，以及 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、Clock/IDs ports。
+- `adapters/`：composition root、SQLite/内存 session、JSONL usage、provider router、host/Docker execution、workspace/project config、tool registry、approval broker 与系统 clock/UUID。
+
+`server/main.py` 只创建一个 `ApplicationRuntime`。handler 负责 Pydantic 输入输出、ApplicationError → HTTP 状态映射，以及 SSE 编码；run、approval、trust、usage 和 execution 业务规则由 Application Services 承担。
+
+依赖规则：
+
+- Agent Core 不导入 FastAPI、server、SQLite store、具体工具、project config 或 adapter。
+- Application 层不导入 FastAPI、server 或具体 adapter。
+- 只有 `adapters/composition.py` 组装具体实现。
+- adapter 可以依赖 core/application port，反向依赖禁止。
+- 导入 `app.agent.loop` 不读取用户配置、不创建数据库、不启动 FastAPI。
 
 Runtime 使用 FastAPI + Uvicorn，持久化默认落在 `.aicode/state/` 下。
+
+`InMemorySessionRepository` 允许 SDK、测试或嵌入调用不启动 HTTP/SQLite；生产默认使用 `SessionStore` 的 SQLite message/event/compaction 持久化与 AuditLogger JSONL trace。
 
 ## 4. Process Model
 

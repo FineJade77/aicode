@@ -248,7 +248,7 @@
 
 ## M3：可嵌入平台
 
-### `[ ]` T-011 Agent Core 依赖注入
+### `[x]` T-011 Agent Core 依赖注入
 
 对应：WP1.4
 
@@ -259,6 +259,16 @@
 - 提取 ModelRuntime、SessionRepository、EventSink、ApprovalBroker 等接口。
 - 移除核心路径对 FastAPI 和 module globals 的依赖。
 - 用 characterization tests 渐进迁移。
+
+完成记录（2026-07-26）：
+
+- 新增 transport-independent `core/` ports/domain、`application/` services/runtime 和集中式 `adapters/composition.py`；FastAPI transport 只创建并持有一个 `ApplicationRuntime`。
+- Application Runtime 包含 SessionService、RunCoordinator、ApprovalService、TraceService、ProjectTrustService，并通过 facade 提供 model、execution 与 review 能力。
+- Agent Core 使用 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、TraceSink、Clock/IDs ports；AgentLoop、ContextManager、Policy 不依赖 FastAPI、server、SQLite、具体工具或 project config。
+- SQLite SessionStore 支持 clock/ID 注入；新增 InMemorySessionRepository、JSONL usage、workspace/tool/approval/system adapters，fake model + in-memory session 可直接运行 AgentLoop。
+- 新增 `/v1/meta/contract` 和 Go client contract reader，HTTP/SSE contract 维持 v2，future stdio JSON-RPC 明确标记为 planned。
+- 新增 AST/import side-effect 架构守卫和 Application/Core characterization tests；既有 HTTP、SSE、session、approval、execution、trust 与 compaction 行为保持兼容。
+- 验证：Python 287 项通过（Docker 与受限 localhost bind 各跳过 1 项），Go 全量测试、go vet、Python compileall、deterministic 4-task eval baseline 和 `git diff --check` 全部通过。
 
 ### `[ ]` T-012 SDK 与 stdio JSONL RPC
 

@@ -10,8 +10,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from app.adapters.system import SystemClock, UuidGenerator
+from app.core.ports import Clock, IdGenerator
+from app.core.session import COMPACTION_SCHEMA_VERSION as CORE_COMPACTION_SCHEMA_VERSION
+from app.core.session import CompactionEntry
 from app.events.types import validate_event
 from app.security.secrets import redact_known_environment_secrets
 
@@ -20,7 +23,7 @@ DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
 EVENT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_SESSION_CACHE_LIMIT = 200
-COMPACTION_SCHEMA_VERSION = 1
+COMPACTION_SCHEMA_VERSION = CORE_COMPACTION_SCHEMA_VERSION
 
 
 @dataclass(slots=True)
@@ -45,40 +48,6 @@ class PendingApproval:
 class QueuedAgentRun:
     run_id: str
     request: Any
-
-
-@dataclass(frozen=True, slots=True)
-class CompactionEntry:
-    compaction_id: int | None
-    session_id: str
-    schema_version: int
-    start_message_id: int
-    end_message_id: int
-    summary: str
-    provider: str
-    model: str
-    prompt_version: str
-    before_tokens: int
-    after_tokens: int
-    context_window: int
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "compaction_id": self.compaction_id,
-            "session_id": self.session_id,
-            "schema_version": self.schema_version,
-            "start_message_id": self.start_message_id,
-            "end_message_id": self.end_message_id,
-            "summary": self.summary,
-            "provider": self.provider,
-            "model": self.model,
-            "prompt_version": self.prompt_version,
-            "before_tokens": self.before_tokens,
-            "after_tokens": self.after_tokens,
-            "context_window": self.context_window,
-            "created_at": self.created_at.isoformat(),
-        }
 
 
 class SessionEvents:
@@ -212,9 +181,11 @@ class Session:
     auto_accept_edits: bool = False
     message_appender: Callable[[dict[str, Any]], int | None] | None = field(default=None, repr=False)
     compaction_appender: Callable[[CompactionEntry], CompactionEntry] | None = field(default=None, repr=False)
+    clock: Clock = field(default_factory=SystemClock, repr=False)
+    ids: IdGenerator = field(default_factory=UuidGenerator, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        now = datetime.now(timezone.utc)
+        now = self.clock.now()
         elapsed_seconds = None
         stalled_seconds = None
         if self.current_run_started_at is not None:
@@ -242,7 +213,7 @@ class Session:
         }
 
     def enqueue_agent_run(self, request: Any) -> QueuedAgentRun:
-        queued = QueuedAgentRun(run_id=f"run_{uuid4().hex[:12]}", request=request)
+        queued = QueuedAgentRun(run_id=self.ids.new("run"), request=request)
         self.agent_queue.put_nowait(queued)
         return queued
 
@@ -266,7 +237,7 @@ class Session:
             return None
 
     def start_agent_run(self, run_id: str) -> None:
-        now = datetime.now(timezone.utc)
+        now = self.clock.now()
         self.current_run_id = run_id
         self.current_run_stage = "starting"
         self.current_run_started_at = now
@@ -276,7 +247,7 @@ class Session:
         if self.current_run_id is None:
             return
         self.current_run_stage = stage
-        self.current_run_last_progress_at = datetime.now(timezone.utc)
+        self.current_run_last_progress_at = self.clock.now()
 
     def finish_agent_run(self) -> None:
         self.agent_queue.task_done()
@@ -290,9 +261,10 @@ class Session:
 
     def create_approval(self, kind: str, payload: dict[str, Any]) -> PendingApproval:
         approval = PendingApproval(
-            approval_id=f"appr_{uuid4().hex[:12]}",
+            approval_id=self.ids.new("appr"),
             kind=kind,
             payload=payload,
+            created_at=self.clock.now(),
         )
         self.approvals[approval.approval_id] = approval
         return approval
@@ -328,8 +300,18 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, path: Path | None = None, event_limit: int | None = None, cache_limit: int | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        event_limit: int | None = None,
+        cache_limit: int | None = None,
+        *,
+        clock: Clock | None = None,
+        ids: IdGenerator | None = None,
+    ) -> None:
         self.path = path or default_session_db_path()
+        self.clock = clock or SystemClock()
+        self.ids = ids or UuidGenerator()
         self.event_limit = normalize_event_limit(event_limit)
         self._cache_limit = normalize_cache_limit(cache_limit)
         self._sessions: dict[str, Session] = {}
@@ -374,9 +356,13 @@ class SessionStore:
     def create(self, workspace: str, language: str) -> Session:
         self._ensure_schema()
         session = Session(
-            session_id=f"sess_{uuid4().hex[:12]}",
+            session_id=self.ids.new("sess"),
             workspace=workspace,
             language=language,
+            created_at=self.clock.now(),
+            updated_at=self.clock.now(),
+            clock=self.clock,
+            ids=self.ids,
         )
         self._attach_events(session)
         session.updated_at = session.created_at
@@ -447,7 +433,7 @@ class SessionStore:
 
     def append_message(self, session: Session, message: dict[str, Any]) -> int:
         self._ensure_schema()
-        session.updated_at = datetime.now(timezone.utc)
+        session.updated_at = self.clock.now()
         self._last_session_id = session.session_id
         with self._connect() as conn:
             cursor = conn.execute(
@@ -456,7 +442,7 @@ class SessionStore:
                     session.session_id,
                     str(message.get("role") or "user"),
                     json.dumps(message, ensure_ascii=False),
-                    datetime.now(timezone.utc).isoformat(),
+                    self.clock.now().isoformat(),
                 ),
             )
             conn.execute(
@@ -605,6 +591,8 @@ class SessionStore:
             language=str(row["language"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            clock=self.clock,
+            ids=self.ids,
         )
 
     def _attach_events(self, session: Session, events: list[dict[str, Any]] | None = None) -> None:
@@ -668,7 +656,7 @@ class SessionStore:
                 session_id,
                 sequence,
                 json.dumps(event, ensure_ascii=False),
-                datetime.now(timezone.utc).isoformat(),
+                self.clock.now().isoformat(),
             ),
         )
 

@@ -1,55 +1,39 @@
 from __future__ import annotations
 
-import asyncio
 import os
-from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
-from pathlib import Path
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agent.loop import run_turn_safely
-from app.agent.types import AgentRuntime
-from app.audit.logger import AuditLogger, stable_hash
-from app.config.settings import settings
-from app.events.sse import encode_sse
-from app.execution import ExecutionRequest, ExecutionService, ResourceLimits
-from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
-from app.project.config import load_project_config
-from app.project.detect import detect_project_command
-from app.project.trust import TrustStore
-from app.server.auth import auth_middleware
-from app.sessions.store import QueuedAgentRun, Session, store
-from app.tools.review import review_rules_data
-from app.usage.store import summarize_usage
-
-model_router = ModelRouter.from_settings(settings)
-audit = AuditLogger.from_env()
-execution_service = ExecutionService(audit=audit)
-trust_store = TrustStore.from_env()
-agent_runtime = AgentRuntime(
-    model_router=model_router,
-    audit=audit,
-    policy=PolicyEngine(),
-    execution=execution_service,
-    trust_store=trust_store,
+from app.adapters.composition import build_application_runtime
+from app.adapters.usage import JsonlUsageRuntime
+from app.agent.loop import AgentLoop
+from app.application.errors import ApplicationError
+from app.application.services import (
+    ApprovalService,
+    ExecutionApplicationService,
+    ModelService,
+    ProjectTrustService,
+    RunCoordinator,
+    SessionService,
+    TraceService,
 )
+from app.config.settings import settings
+from app.contracts.api import contract_descriptor
+from app.core.session import AgentSession
+from app.events.sse import encode_sse
+from app.server.auth import auth_middleware
+
+application_runtime = build_application_runtime(settings)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     yield
-    await execution_service.cancel_all()
-    # 关闭时释放模型 provider 的 HTTP 连接池，避免长驻 daemon 连接泄漏
-    await model_router.aclose()
-    # 排空审计日志队列，避免 usage/final 等刚记录的事件在进程退出时丢失
-    await audit.aclose()
-    # 排空事件写入队列，避免刚发生但还没落盘的事件在进程退出时丢失
-    await store.aclose()
+    await application_runtime.aclose()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -131,136 +115,116 @@ class TrustListResponse(BaseModel):
     projects: list[TrustStatusResponse]
 
 
+def session_service() -> SessionService:
+    return SessionService(
+        application_runtime.sessions,
+        application_runtime.trace,
+        application_runtime.workspace,
+    )
+
+
+def run_coordinator() -> RunCoordinator:
+    model = application_runtime.agent.model_runtime or application_runtime.model
+    return RunCoordinator(
+        model,
+        application_runtime.trace,
+        AgentLoop(application_runtime.agent),
+    )
+
+
+def approval_service() -> ApprovalService:
+    return ApprovalService(application_runtime.trace)
+
+
+def trace_service() -> TraceService:
+    return TraceService(
+        application_runtime.trace,
+        JsonlUsageRuntime(application_runtime.trace.path),
+        application_runtime.clock,
+    )
+
+
+def project_trust_service() -> ProjectTrustService:
+    return ProjectTrustService(application_runtime.trust, application_runtime.trace)
+
+
+def execution_application_service() -> ExecutionApplicationService:
+    return ExecutionApplicationService(
+        application_runtime.execution,
+        application_runtime.workspace,
+        application_runtime.sandbox_limits,
+    )
+
+
+def model_service() -> ModelService:
+    return ModelService(application_runtime.model)
+
+
+def raise_http_error(exc: ApplicationError) -> None:
+    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
 @app.get("/v1/daemon/status")
 async def daemon_status() -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "name": settings.app_name,
-        "version": settings.version,
-        "pid": os.getpid(),
-        "audit_writer": audit.status(),
-        "event_writer": store.event_writer_status(),
-        "executions": execution_service.status(),
-    }
+    return application_runtime.status(pid=os.getpid())
+
+
+@app.get("/v1/meta/contract")
+async def api_contract() -> dict[str, Any]:
+    return contract_descriptor(settings.version)
 
 
 @app.post("/v1/executions", response_model=ExecutionResponse)
 async def execute_sandbox(request: SandboxExecutionRequest) -> dict[str, Any]:
-    workspace = Path(request.workspace).expanduser().resolve()
-    if not workspace.is_dir():
-        raise HTTPException(status_code=400, detail="workspace 不存在或不是目录")
-    command = detect_project_command(workspace, request.action)
-    if not command:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未能自动探测 {request.action} 命令，请在 .aicode/config.json 的 commands.{request.action} 中配置",
-        )
     try:
-        limits = ResourceLimits(
-            timeout_seconds=request.timeout_seconds,
-            cpus=os.getenv("AICODE_SANDBOX_CPUS", "2"),
-            memory=os.getenv("AICODE_SANDBOX_MEMORY", "2g"),
-            pids_limit=int(os.getenv("AICODE_SANDBOX_PIDS_LIMIT", "256")),
-        )
-        execution_request = ExecutionRequest(
-            execution_id=request.execution_id,
-            backend=request.backend,
-            action=request.action,
-            workspace=workspace,
-            shell_command=command,
-            allowed_roots=(workspace,),
-            masked_paths=(".env*",),
-            network="none",
-            limits=limits,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        result = await execution_service.execute(execution_request)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return execution_service_result(result, request.action)
+        return await execution_application_service().execute(request)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/executions/{execution_id}/cancel", response_model=CancelExecutionResponse)
 async def cancel_execution(execution_id: str) -> dict[str, str]:
-    cancelled = await execution_service.cancel(execution_id)
-    return {"status": "cancelled" if cancelled else "idle", "execution_id": execution_id}
+    return await execution_application_service().cancel(execution_id)
 
 
 @app.post("/v1/daemon/prepare-stop")
 async def prepare_daemon_stop() -> dict[str, Any]:
-    await execution_service.cancel_all()
-    return {"status": "ready", "executions": execution_service.status()}
+    return await application_runtime.prepare_stop()
 
 
 @app.get("/v1/trust", response_model=TrustStatusResponse | TrustListResponse)
 async def get_trust(workspace: str | None = None) -> Any:
     try:
-        if workspace:
-            return trust_store.status(Path(workspace))
-        return {"projects": trust_store.list()}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return project_trust_service().get(workspace)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/trust", response_model=TrustStatusResponse)
 async def trust_project(request: TrustRequest) -> dict[str, Any]:
     try:
-        status = trust_store.trust(Path(request.workspace))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    audit.record(
-        "project.trust.changed",
-        workspace=status["workspace"],
-        data={"level": "trusted", "git_remote_hash": stable_hash(status["git_remote"]) if status["git_remote"] else ""},
-    )
-    return status
+        return project_trust_service().set_trusted(request.workspace)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/trust/remove", response_model=TrustStatusResponse)
 async def remove_project_trust(request: TrustRequest) -> dict[str, Any]:
     try:
-        workspace = Path(request.workspace).expanduser().resolve()
-        removed = trust_store.remove(workspace)
-        status = trust_store.status(workspace)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    audit.record(
-        "project.trust.changed",
-        workspace=str(workspace),
-        data={"level": "untrusted", "removed": removed},
-    )
-    return {**status, "removed": removed}
+        return project_trust_service().remove(request.workspace)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
-    session = store.create(workspace=request.workspace, language=effective_session_language(request.workspace, request.language))
-    audit.record(
-        "session.created",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"language": session.language},
-    )
-    await session.events.put(
-        {
-            "type": "session.created",
-            "session_id": session.session_id,
-            "workspace": session.workspace,
-        }
-    )
+    session = await session_service().create(request.workspace, request.language)
     return CreateSessionResponse(session_id=session.session_id)
 
 
 @app.get("/v1/sessions")
 async def list_sessions(last: bool = False) -> Any:
-    if last:
-        session = store.last()
-        if session is None:
-            return None
-        return session.to_dict()
-    return store.list()
+    return session_service().list(last=last)
 
 
 @app.get("/v1/sessions/{session_id}")
@@ -273,31 +237,10 @@ async def get_session(session_id: str) -> dict[str, Any]:
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
     session = require_session(session_id)
     effective_request = bind_message_request_to_session(session, request)
-    is_configured = getattr(agent_runtime.model_router.primary, "is_configured", None)
-    if callable(is_configured) and not is_configured():
-        raise HTTPException(status_code=400, detail="模型 provider 未配置，请设置 API key（如 OPENAI_API_KEY 或 ANTHROPIC_API_KEY）后重试")
-    was_running = session.agent_runner_active() or session.agent_queue.qsize() > 0
-    session.events.set_default_after(session.events.last_event_id())
-    queued = session.enqueue_agent_run(effective_request)
-    session.events.set_default_run_id(queued.run_id)
-    queue_position = session.agent_queue.qsize()
-    audit.record(
-        "message.received",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={
-            "mode": effective_request.mode,
-            "language": effective_request.language,
-            "message_hash": stable_hash(effective_request.message),
-            "message_preview": effective_request.message[:200],
-            "run_id": queued.run_id,
-            "queued": was_running,
-            "queue_position": queue_position,
-        },
-    )
-    await emit_run_queued(session, queued, was_running, queue_position)
-    ensure_session_runner(session)
-    return {"status": "queued" if was_running else "accepted", "run_id": queued.run_id}
+    try:
+        return await run_coordinator().submit(session, effective_request)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.get("/v1/sessions/{session_id}/events")
@@ -322,158 +265,77 @@ async def stream_events(session_id: str, request: Request, after: int | None = N
 @app.post("/v1/sessions/{session_id}/approve")
 async def approve(session_id: str, request: ApprovalRequest) -> dict[str, str]:
     session = require_session(session_id)
-    if request.accept_all:
-        session.auto_accept_edits = True
-        audit.record(
-            "approval.accept_all_enabled",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data={"approval_id": request.approval_id},
+    try:
+        return approval_service().resolve(
+            session,
+            request.approval_id,
+            accepted=True,
+            accept_all=request.accept_all,
         )
-    if not session.resolve_approval(request.approval_id, accepted=True):
-        raise HTTPException(status_code=404, detail="approval not found or already resolved")
-    audit.record(
-        "approval.resolved",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"approval_id": request.approval_id, "accepted": True},
-    )
-    return {"status": "accepted", "approval_id": request.approval_id}
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/reject")
 async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
     session = require_session(session_id)
-    if not session.resolve_approval(request.approval_id, accepted=False):
-        raise HTTPException(status_code=404, detail="approval not found or already resolved")
-    audit.record(
-        "approval.resolved",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"approval_id": request.approval_id, "accepted": False},
-    )
-    return {"status": "rejected", "approval_id": request.approval_id}
+    try:
+        return approval_service().resolve(session, request.approval_id, accepted=False)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/cancel", response_model=CancelRunResponse)
 async def cancel_run(session_id: str) -> dict[str, Any]:
     session = require_session(session_id)
-    task = session.agent_runner_task
-    run_id = session.current_run_id
-    if task is None or task.done() or run_id is None:
-        return {
-            "status": "idle",
-            "run_id": None,
-            "queued": session.agent_queue.qsize(),
-        }
-
-    session.mark_agent_progress("cancelling")
-    task.cancel()
-    with suppress(asyncio.CancelledError, Exception):
-        await task
-    session.agent_runner_task = None
-
-    for approval in session.expire_pending_approvals():
-        await session.events.put(
-            {
-                "type": "approval.expired",
-                "run_id": run_id,
-                "approval_id": approval.approval_id,
-                "kind": approval.kind,
-                "message": "当前任务已取消，待确认操作已过期。",
-            }
-        )
-
-    message = "当前任务已取消。"
-    audit.record(
-        "run.cancelled",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"run_id": run_id, "queued": session.agent_queue.qsize()},
-    )
-    await session.events.put(
-        {
-            "type": "run.cancelled",
-            "run_id": run_id,
-            "status": "cancelled",
-            "message": message,
-        }
-    )
-    await session.events.put(
-        {
-            "type": "final",
-            "run_id": run_id,
-            "status": "cancelled",
-            "summary": message,
-        }
-    )
-
-    queued = session.agent_queue.qsize()
-    if queued:
-        ensure_session_runner(session)
-    return {"status": "cancelled", "run_id": run_id, "queued": queued}
+    return await run_coordinator().cancel(session)
 
 
 @app.get("/v1/usage")
 async def usage(today: bool = False, session_id: str | None = None) -> dict[str, Any]:
-    day = datetime_utc_today() if today else None
-    await audit.flush()
-    return summarize_usage(audit.path, session_id=session_id, day=day)
+    return await trace_service().summarize(today=today, session_id=session_id)
 
 
 @app.get("/v1/usage/sessions/{session_id}")
 async def usage_for_session(session_id: str) -> dict[str, Any]:
-    await audit.flush()
-    return summarize_usage(audit.path, session_id=session_id)
+    return await trace_service().summarize(session_id=session_id)
 
 
 @app.get("/v1/models/routes")
 async def model_routes() -> dict[str, Any]:
-    return model_router.route_status()
+    return model_service().routes()
 
 
 @app.get("/v1/models/probe")
 async def model_probe(tools: bool = True, model: str | None = None) -> dict[str, Any]:
-    return await model_router.probe(model=model, tools=tools)
+    return await model_service().probe(model=model, tools=tools)
 
 
 @app.get("/v1/review/rules")
 async def review_rules(workspace: str | None = None) -> dict[str, Any]:
-    project_config = load_project_config(Path(workspace)) if workspace else None
-    if project_config is None:
-        return review_rules_data()
-    return review_rules_data(
-        disabled_rules=project_config.review.disabled_rules,
-        large_diff_threshold=project_config.review.large_diff_threshold,
-        max_findings=project_config.review.max_findings,
-    )
+    return application_runtime.workspace.review_rules(workspace)
 
 
-def require_session(session_id: str) -> Session:
-    session = store.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    return session
+def require_session(session_id: str) -> AgentSession:
+    try:
+        return session_service().get(session_id)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 def effective_session_language(workspace: str, requested_language: str) -> str:
-    project_language = load_project_config(Path(workspace)).default_language
-    return project_language or requested_language or "zh-CN"
+    return application_runtime.workspace.effective_language(workspace, requested_language)
 
 
-def bind_message_request_to_session(session: Session, request: MessageRequest) -> MessageRequest:
-    if not same_workspace(session.workspace, request.workspace):
-        raise HTTPException(status_code=400, detail="message workspace does not match session workspace")
-    return request.model_copy(update={"workspace": session.workspace, "language": session.language})
+def bind_message_request_to_session(session: AgentSession, request: MessageRequest) -> MessageRequest:
+    try:
+        return session_service().bind_request(session, request)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 def same_workspace(left: str, right: str) -> bool:
-    if left == right:
-        return True
-    try:
-        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
-    except OSError:
-        return False
+    return application_runtime.workspace.same_workspace(left, right)
 
 
 def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
@@ -485,75 +347,3 @@ def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
         return int(last_event_id)
     except ValueError:
         return None
-
-
-async def run_agent(session: Session, request: MessageRequest) -> None:
-    await run_turn_safely(session, request, agent_runtime)
-
-
-def ensure_session_runner(session: Session) -> None:
-    if session.agent_runner_active():
-        return
-    session.agent_runner_task = asyncio.create_task(process_session_runs(session))
-
-
-async def process_session_runs(session: Session) -> None:
-    while True:
-        queued = session.next_agent_run()
-        if queued is None:
-            return
-        await process_session_run(session, queued)
-
-
-async def process_session_run(session: Session, queued: QueuedAgentRun) -> None:
-    session.start_agent_run(queued.run_id)
-    session.events.set_current_run_id(queued.run_id)
-    try:
-        await emit_run_started(session, queued)
-        await run_agent(session, queued.request)
-    finally:
-        session.events.set_current_run_id(None)
-        session.finish_agent_run()
-
-
-async def emit_run_queued(session: Session, queued: QueuedAgentRun, was_running: bool, queue_position: int) -> None:
-    message = "任务已排队，等待当前会话中的上一条任务完成。"
-    status = "queued"
-    if not was_running:
-        message = "任务已接收，准备开始执行。"
-        status = "accepted"
-    await session.events.put(
-        {
-            "type": "run.queued",
-            "run_id": queued.run_id,
-            "status": status,
-            "queue_position": queue_position,
-            "message": message,
-        }
-    )
-
-
-async def emit_run_started(session: Session, queued: QueuedAgentRun) -> None:
-    session.mark_agent_progress("agent.loop")
-    audit.record(
-        "run.started",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"run_id": queued.run_id},
-    )
-    await session.events.put(
-        {
-            "type": "run.started",
-            "message": "开始执行当前任务。",
-        }
-    )
-
-
-def datetime_utc_today():
-    return datetime.now(timezone.utc).date()
-
-
-def execution_service_result(result, action: str) -> dict[str, Any]:
-    payload = result.to_dict()
-    payload["action"] = action
-    return payload

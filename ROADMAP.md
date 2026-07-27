@@ -31,6 +31,7 @@
 | --- | --- | --- |
 | CLI + daemon | `[x]` | Go CLI 自动启动/停止/查询 Python Runtime。 |
 | HTTP + SSE | `[x]` | 本机 API、SSE event stream、daemon token auth。 |
+| 可嵌入 Runtime 分层 | `[x]` | Application Runtime、Agent Core ports 与 adapters composition root 已落地；HTTP/SSE contract v2 可由 Go client 查询。 |
 | Agent Loop v2 | `[x]` | 原生 function calling，模型自主调用工具。 |
 | 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic。 |
 | 工具系统 | `[x]` | 读文件、搜索、列文件、相关文件、bash、edit、review_diff。 |

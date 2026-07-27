@@ -14,6 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.adapters.approvals import SessionApprovalBroker
+from app.adapters.system import SystemClock
+from app.adapters.tools import DefaultToolRuntime
+from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import run_turn_safely
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
@@ -143,6 +147,10 @@ async def run_task(
         policy=PolicyEngine(),
         execution=execution,
         trust_store=trust_store,
+        tools=DefaultToolRuntime(),
+        workspace=LocalWorkspaceRuntime(),
+        clock=SystemClock(),
+        approvals=SessionApprovalBroker(),
     )
     store = SessionStore(path=state / "sessions.sqlite")
     session = store.create(workspace=str(workspace), language=task.language)

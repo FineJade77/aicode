@@ -37,6 +37,8 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		key := ""
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/meta/contract":
+			key = "api_contract"
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/trust" && r.URL.Query().Get("workspace") != "":
 			key = "trust_status"
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/trust":
@@ -69,6 +71,17 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+
+	contract, err := api.Contract(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.ContractVersion != "2.0" || contract.MinSupportedVersion != "2.0" {
+		t.Fatalf("contract = %#v", contract)
+	}
+	if contract.Transports["sse"].EventSchema != "v2" {
+		t.Fatalf("SSE contract = %#v", contract.Transports["sse"])
+	}
 
 	created, err := api.CreateSession(ctx, CreateSessionRequest{Workspace: "/workspace", Language: "zh-CN"})
 	if err != nil {

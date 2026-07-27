@@ -75,6 +75,19 @@ type CancelExecutionResponse struct {
 	ExecutionID string `json:"execution_id"`
 }
 
+type ContractTransport struct {
+	Version     string `json:"version,omitempty"`
+	EventSchema string `json:"event_schema,omitempty"`
+	Status      string `json:"status"`
+}
+
+type APIContract struct {
+	ContractVersion     string                       `json:"contract_version"`
+	MinSupportedVersion string                       `json:"min_supported_version"`
+	RuntimeVersion      string                       `json:"runtime_version"`
+	Transports          map[string]ContractTransport `json:"transports"`
+}
+
 type TrustStatus struct {
 	Workspace      string `json:"workspace"`
 	Level          string `json:"level"`
@@ -144,6 +157,16 @@ func (c Client) CreateSession(ctx context.Context, payload CreateSessionRequest)
 		return out, err
 	}
 	return out, nil
+}
+
+func (c Client) Contract(ctx context.Context) (APIContract, error) {
+	var out APIContract
+	value, err := c.GetJSON(ctx, "/v1/meta/contract")
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
 }
 
 func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendMessageRequest) (SendMessageResponse, error) {
