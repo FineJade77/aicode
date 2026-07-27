@@ -10,6 +10,7 @@ from app.adapters.tools import DefaultToolRuntime
 from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.types import AgentRuntime
 from app.application.services import RunCoordinator
+from app.application.errors import Conflict
 from app.audit.logger import AuditLogger
 from app.config.settings import Settings
 from app.execution.models import ExecutionResult, ExecutionStatus
@@ -133,6 +134,52 @@ async def test_run_coordinator_serializes_queued_messages(tmp_path: Path) -> Non
     assert seen == ["first", "second"]
     assert [event["summary"] for event in finals] == ["first", "second"]
     assert [event["run_id"] for event in finals] == [first_run.run_id, second_run.run_id]
+
+
+@pytest.mark.asyncio
+async def test_run_coordinator_queues_steer_for_active_run(tmp_path: Path) -> None:
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingLoop:
+        async def run(self, target_session: Session, _request: MessageRequest) -> None:
+            started.set()
+            await release.wait()
+            await target_session.events.put({"type": "final", "summary": "done"})
+
+    coordinator = RunCoordinator(
+        ModelRouter(primary=FakeProvider([]), settings=Settings()),
+        AuditLogger(path=tmp_path / "audit.jsonl"),
+        BlockingLoop(),
+    )
+    request = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
+    accepted = await coordinator.submit(session, request)
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    result = await coordinator.steer(session, "只修改测试")
+
+    assert result == {"status": "queued", "run_id": accepted["run_id"], "pending": 1}
+    assert session.to_dict()["agent"]["pending_steers"] == 1
+    assert [event for event in session.events.events_after(0) if event["type"] == "run.steer.queued"]
+
+    release.set()
+    assert session.agent_runner_task is not None
+    await session.agent_runner_task
+    assert session.to_dict()["agent"]["pending_steers"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_coordinator_rejects_steer_when_idle(tmp_path: Path) -> None:
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    coordinator = RunCoordinator(
+        ModelRouter(primary=FakeProvider([]), settings=Settings()),
+        AuditLogger(path=tmp_path / "audit.jsonl"),
+        object(),
+    )
+
+    with pytest.raises(Conflict):
+        await coordinator.steer(session, "too late")
 
 
 @pytest.mark.asyncio

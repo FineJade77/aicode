@@ -14,6 +14,7 @@ from app.agent.loop import AgentLoop
 from app.application.errors import ApplicationError
 from app.application.services import (
     ApprovalService,
+    ContextService,
     ExecutionApplicationService,
     ModelService,
     ProjectTrustService,
@@ -60,11 +61,27 @@ class CancelRunResponse(BaseModel):
     queued: int
 
 
+class SteerRequest(BaseModel):
+    message: str
+
+
+class SteerResponse(BaseModel):
+    status: Literal["queued"]
+    run_id: str
+    pending: int
+
+
+class CompactResponse(BaseModel):
+    status: Literal["compacted", "unchanged"]
+    compaction: dict[str, Any] | None
+
+
 class MessageRequest(BaseModel):
     message: str
     mode: str = "default"
     workspace: str
     language: str = "zh-CN"
+    model: str | None = None
 
 
 class ApprovalRequest(BaseModel):
@@ -134,6 +151,10 @@ def run_coordinator() -> RunCoordinator:
 
 def approval_service() -> ApprovalService:
     return ApprovalService(application_runtime.trace)
+
+
+def context_service() -> ContextService:
+    return ContextService(application_runtime.agent, application_runtime.trace)
 
 
 def trace_service() -> TraceService:
@@ -289,6 +310,24 @@ async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
 async def cancel_run(session_id: str) -> dict[str, Any]:
     session = require_session(session_id)
     return await run_coordinator().cancel(session)
+
+
+@app.post("/v1/sessions/{session_id}/steer", response_model=SteerResponse)
+async def steer_run(session_id: str, request: SteerRequest) -> dict[str, Any]:
+    session = require_session(session_id)
+    try:
+        return await run_coordinator().steer(session, request.message)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/sessions/{session_id}/compact", response_model=CompactResponse)
+async def compact_session(session_id: str) -> dict[str, Any]:
+    session = require_session(session_id)
+    try:
+        return await context_service().compact(session)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.get("/v1/usage")

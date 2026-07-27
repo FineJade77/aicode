@@ -1,6 +1,6 @@
 # aicode Roadmap
 
-更新日期：2026-07-26
+更新日期：2026-07-27
 
 本文是当前项目的状态路线图，用来回答三个问题：
 
@@ -51,6 +51,7 @@
 | Project Trust | `[x]` | 默认 untrusted；仓库外 trust store 绑定 canonical workspace 与 credential-free Git remote。 |
 | Shell/secret 边界 | `[x]` | shell 路径风险、mandatory protected paths、symlink 防逃逸、Host env allowlist 和 SSE/audit secret 脱敏。 |
 | 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
+| 常驻 REPL | `[x]` | `aicode chat` 支持 persistent session、status/model/compact/new/resume、steer/follow-up/cancel，以及 TTY/non-TTY 稳定行为。 |
 | CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
 
 ## 3. 已完成能力
@@ -72,6 +73,7 @@
 - [x] `assistant.delta` 流式输出。
 - [x] `run.started`、`tool.started`、`tool.output`、`approval.*`、`edit.*`、`usage.recorded`、`final` 等事件。
 - [x] 当前 run 取消、阶段/最后进度观测，以及取消后继续消费 session 队列。
+- [x] `aicode chat` 常驻 REPL、同 session follow-up、safe-boundary steer 和手动持久化 compaction。
 
 ### 3.2 Agent Loop v2
 

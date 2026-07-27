@@ -79,6 +79,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         trust_level=str(trust_status["level"]),
     )
     purpose = "reviewer" if request.mode == "review" else "main"
+    model = str(getattr(request, "model", "") or "").strip() or None
     budget = TurnBudget()
     applied_edits = 0
     verify_note_sent = False
@@ -89,11 +90,14 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         await session.events.put({"type": "assistant.delta", "text": text})
 
     for _step in range(budget.max_steps):
+        if await apply_pending_steers(session, request, runtime, history):
+            history = load_history(session)
         session.mark_agent_progress("model.request")
         history, result = await complete_with_compaction(
             session=session,
             runtime=runtime,
             purpose=purpose,
+            model=model,
             system=system,
             tools=tools,
             on_text_delta=on_delta,
@@ -104,6 +108,10 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         history.append(message)
         persist_message(session, message)
 
+        if await apply_pending_steers(session, request, runtime, history, result.tool_calls):
+            history = load_history(session)
+            continue
+
         if not result.tool_calls:
             if applied_edits > 0 and not verify_note_sent:
                 verify_note_sent = True
@@ -111,6 +119,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
                 history.append(note)
                 persist_message(session, note)
                 continue
+            session.mark_agent_progress("finalizing")
             break
 
         for call in result.tool_calls:
@@ -130,6 +139,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
             session=session,
             runtime=runtime,
             purpose=purpose,
+            model=model,
             system=system,
             tools=[],
             on_text_delta=on_delta,
@@ -139,6 +149,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         message = assistant_message(result)
         history.append(message)
         persist_message(session, message)
+        session.mark_agent_progress("finalizing")
 
     summary = str(message.get("content") or "") if result is not None else ""
     if runtime.trace is not None:
@@ -156,6 +167,7 @@ async def complete_with_compaction(
     session: AgentSession,
     runtime: AgentRuntime,
     purpose: str,
+    model: str | None = None,
     system: str,
     tools: list[dict[str, Any]] | tuple[Any, ...],
     on_text_delta: Any,
@@ -165,40 +177,110 @@ async def complete_with_compaction(
     history = await context_manager.prepare(
         session=session,
         purpose=purpose,
+        model=model,
         system=system,
         tools=tools,
         max_tokens=max_tokens,
     )
     try:
         assert runtime.model_runtime is not None
+        completion_args = {
+            "purpose": purpose,
+            "system": system,
+            "messages": history,
+            "tools": tools,
+            "on_text_delta": on_text_delta,
+            "max_tokens": max_tokens,
+        }
+        if model is not None:
+            completion_args["model"] = model
         result = await runtime.model_runtime.stream_complete(
-            purpose=purpose,
-            system=system,
-            messages=history,
-            tools=tools,
-            on_text_delta=on_text_delta,
-            max_tokens=max_tokens,
+            **completion_args,
         )
     except ContextOverflowError:
         session.mark_agent_progress("context.compaction_retry")
         history = await context_manager.prepare(
             session=session,
             purpose=purpose,
+            model=model,
             system=system,
             tools=tools,
             max_tokens=max_tokens,
             force=True,
         )
         assert runtime.model_runtime is not None
-        result = await runtime.model_runtime.stream_complete(
-            purpose=purpose,
-            system=system,
-            messages=history,
-            tools=tools,
-            on_text_delta=on_text_delta,
-            max_tokens=max_tokens,
-        )
+        completion_args["messages"] = history
+        result = await runtime.model_runtime.stream_complete(**completion_args)
     return history, result
+
+
+async def apply_pending_steers(
+    session: AgentSession,
+    request: Any,
+    runtime: AgentRuntime,
+    history: list[dict[str, Any]],
+    pending_tool_calls: list[ToolCallRequest] | tuple[ToolCallRequest, ...] = (),
+) -> bool:
+    """Apply queued user guidance only at an AgentLoop safe boundary."""
+    steers = session.drain_steers()
+    if not steers:
+        return False
+
+    skipped_message = localized(
+        request.language,
+        "用户追加了 steer 指令，当前工具调用未执行；请按新约束重新规划。",
+        "The user added steering guidance, so this tool call was not executed; re-plan with the new constraint.",
+    )
+    for call in pending_tool_calls:
+        reply = tool_message(call.id, f"[未执行] {skipped_message}")
+        history.append(reply)
+        persist_message(session, reply)
+        await session.events.put(
+            tool_event(
+                "tool.rejected",
+                call.name,
+                tool_call_id=call.id,
+                error=skipped_message,
+                data={"reason": "steer"},
+            )
+        )
+
+    steer_text = "\n".join(f"- {message}" for message in steers)
+    note = user_note(
+        localized(
+            request.language,
+            f"用户在当前 run 中追加了 steer 指令。请优先遵循这些最新约束并调整后续执行：\n{steer_text}",
+            f"The user added steering guidance during this run. Prioritize these latest constraints and adjust the remaining work:\n{steer_text}",
+        )
+    )
+    history.append(note)
+    persist_message(session, note)
+    session.mark_agent_progress("run.steer.applied")
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "run.steer.applied",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={
+                "run_id": session.current_run_id,
+                "count": len(steers),
+                "message_hashes": [stable_hash(message) for message in steers],
+                "skipped_tool_calls": len(pending_tool_calls),
+            },
+        )
+    await session.events.put(
+        {
+            "type": "run.steer.applied",
+            "count": len(steers),
+            "skipped_tool_calls": len(pending_tool_calls),
+            "message": localized(
+                request.language,
+                "已在 AgentLoop 安全边界应用 steer 指令。",
+                "Steering guidance was applied at an AgentLoop safe boundary.",
+            ),
+        }
+    )
+    return True
 
 
 async def execute_gated(

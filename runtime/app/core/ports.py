@@ -15,10 +15,13 @@ class ModelRuntime(Protocol):
 
     def capability_for_purpose(self, purpose: str) -> ModelCapability: ...
 
+    def capability_for_model(self, model: str) -> ModelCapability: ...
+
     async def stream_complete(
         self,
         *,
         purpose: str,
+        model: str | None = None,
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | tuple[Any, ...] = (),

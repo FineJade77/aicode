@@ -25,11 +25,12 @@ from tests.fakes import FakeProvider, text_turn, tool_turn
 
 
 class Request:
-    def __init__(self, workspace, message="修复 bug", mode="default", language="zh-CN"):
+    def __init__(self, workspace, message="修复 bug", mode="default", language="zh-CN", model=None):
         self.workspace = str(workspace)
         self.message = message
         self.mode = mode
         self.language = language
+        self.model = model
 
 
 def make_runtime(turns, tmp_path):
@@ -92,6 +93,55 @@ async def test_plain_text_turn_emits_final(tmp_path):
     finals = events_of(session, "final")
     assert finals and "没什么要改的" in finals[0]["summary"]
     assert events_of(session, "assistant.delta")
+
+
+@pytest.mark.asyncio
+async def test_message_can_override_model_without_changing_route(tmp_path):
+    runtime, fake = make_runtime([text_turn("使用覆盖模型")], tmp_path)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path, model="local-coder"), runtime)
+
+    assert fake.calls[0].model == "local-coder"
+
+
+@pytest.mark.asyncio
+async def test_steer_skips_pending_tool_call_at_safe_boundary(tmp_path):
+    session = make_session(tmp_path)
+
+    class SteeringProvider(FakeProvider):
+        async def stream_complete(self, request):
+            self.calls.append(request)
+            turn = self.turns.pop(0)
+            for event in turn:
+                if event.type == "tool_call":
+                    session.enqueue_steer("不要执行工具，先解释风险")
+                yield event
+
+    fake = SteeringProvider(
+        [tool_turn("bash", {"command": "touch should-not-exist"}), text_turn("已按新约束调整")]
+    )
+    runtime = AgentRuntime(
+        model_router=ModelRouter(primary=fake, settings=Settings()),
+        audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+        policy=PolicyEngine(),
+        tools=DefaultToolRuntime(),
+        workspace=LocalWorkspaceRuntime(),
+        clock=SystemClock(),
+        approvals=SessionApprovalBroker(),
+    )
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert not events_of(session, "tool.started")
+    rejected = events_of(session, "tool.rejected")
+    assert rejected and rejected[0]["data"]["reason"] == "steer"
+    assert events_of(session, "run.steer.applied")[0]["skipped_tool_calls"] == 1
+    assert any(
+        "不要执行工具" in str(message.get("content"))
+        for message in fake.calls[1].messages
+        if message.get("role") == "user"
+    )
 
 
 @pytest.mark.asyncio

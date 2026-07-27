@@ -322,11 +322,15 @@ aicode chat
   /status
   /model [name]
   /compact
+  /steer <guidance>
+  /follow-up <message>
   /cancel
   /new
-  /resume <session>
+  /resume [--last|session]
   /exit
 ```
+
+实现状态（2026-07-27）：第一版已完成。Go REPL 与单次命令复用 versioned Go client 和 renderer；Runtime 提供 steer/manual compact contract，AgentLoop 在安全边界应用 steer。TTY、Ctrl-C 和非 TTY 脚本路径均有测试。
 
 行为要求：
 

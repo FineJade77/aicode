@@ -82,6 +82,7 @@ class ModelRouter:
         self,
         *,
         purpose: str,
+        model: str | None = None,
         system: str,
         messages: list[dict],
         tools: list[dict] | tuple = (),
@@ -92,7 +93,8 @@ class ModelRouter:
         is_configured = getattr(self.primary, "is_configured", None)
         if callable(is_configured) and not is_configured():
             raise ProviderNotConfigured("模型 provider 未配置，请设置 API key 后重试")
-        capability = self.capability_for_purpose(purpose)
+        selected_model = model or self.model_for_purpose(purpose)
+        capability = self.capability_for_model(selected_model)
         if not capability.streaming:
             raise ProviderCapabilityError(
                 f"provider profile does not support streaming for {capability.provider}:{capability.model}"
@@ -107,7 +109,7 @@ class ModelRouter:
             system=system,
             messages=messages,
             tools=list(tools),
-            model=self.model_for_purpose(purpose),
+            model=selected_model,
             temperature=temperature,
             max_tokens=min(max_tokens, capability.max_output_tokens),
         )

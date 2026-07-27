@@ -53,8 +53,14 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 			key = "cancel_execution"
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/sessions":
 			key = "create_session"
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/sessions/sess_fixture":
+			key = "session_status"
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages"):
 			key = "send_message"
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/steer"):
+			key = "steer_session"
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/compact"):
+			key = "compact_session"
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
 			cancelCalls++
 			key = "cancel_run_cancelled"
@@ -99,6 +105,30 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	}
 	if sent.Status != "accepted" || sent.RunID != "run_fixture" {
 		t.Fatalf("send response = %#v", sent)
+	}
+
+	status, err := api.GetSession(ctx, "sess_fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Agent.CurrentRunID != "run_fixture" || status.Agent.PendingSteers != 0 {
+		t.Fatalf("session status = %#v", status)
+	}
+
+	steered, err := api.Steer(ctx, "sess_fixture", "keep tests focused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steered.RunID != "run_fixture" || steered.Pending != 1 {
+		t.Fatalf("steer response = %#v", steered)
+	}
+
+	compacted, err := api.Compact(ctx, "sess_fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compacted.Status != "compacted" || compacted.Compaction["session_id"] != "sess_fixture" {
+		t.Fatalf("compact response = %#v", compacted)
 	}
 
 	cancelled, err := api.CancelRun(ctx, "sess_fixture")

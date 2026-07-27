@@ -12,6 +12,7 @@ import (
 	"github.com/FineJade77/aicode/cli/internal/cmd/daemoncmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/doctorcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/modelscmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/replcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/resumecmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/runtimeio"
 	"github.com/FineJade77/aicode/cli/internal/cmd/sandboxcmd"
@@ -83,9 +84,11 @@ func run(args []string) error {
 		return agentrun.Run(cfg, "explain", "请解释 "+strings.Join(args[1:], " "))
 	case "chat":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: aicode chat <message>")
+			return replcmd.Run(cfg)
 		}
 		return agentrun.Run(cfg, "chat", strings.Join(args[1:], " "))
+	case "repl":
+		return replcmd.Run(cfg)
 	default:
 		return agentrun.Run(cfg, "default", strings.Join(args, " "))
 	}
@@ -96,6 +99,8 @@ func printHelp() {
 
 用法:
   aicode "修复这个测试失败"
+  aicode chat
+  aicode repl
   aicode chat "解释当前目录"
   aicode review
   aicode review-rules

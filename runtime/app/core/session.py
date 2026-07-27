@@ -72,13 +72,19 @@ class AgentSession(Protocol):
     compactions: list[CompactionEntry]
     approvals: dict[str, Any]
     agent_queue: Any
+    steer_queue: Any
     agent_runner_task: Any
     current_run_id: str | None
+    current_run_stage: str | None
     auto_accept_edits: bool
 
     def to_dict(self) -> dict[str, Any]: ...
 
     def enqueue_agent_run(self, request: Any) -> Any: ...
+
+    def enqueue_steer(self, message: str) -> int: ...
+
+    def drain_steers(self) -> list[str]: ...
 
     def next_agent_run(self) -> Any | None: ...
 

@@ -36,6 +36,7 @@ type SendMessageRequest struct {
 	Mode      string `json:"mode"`
 	Workspace string `json:"workspace"`
 	Language  string `json:"language"`
+	Model     string `json:"model,omitempty"`
 }
 
 type SendMessageResponse struct {
@@ -47,6 +48,40 @@ type CancelRunResponse struct {
 	Status string  `json:"status"`
 	RunID  *string `json:"run_id"`
 	Queued int     `json:"queued"`
+}
+
+type SessionAgentStatus struct {
+	Running        bool   `json:"running"`
+	Queued         int    `json:"queued"`
+	PendingSteers  int    `json:"pending_steers"`
+	CurrentRunID   string `json:"current_run_id"`
+	Stage          string `json:"stage"`
+	StartedAt      string `json:"started_at"`
+	LastProgressAt string `json:"last_progress_at"`
+	ElapsedSeconds int    `json:"elapsed_seconds"`
+	StalledSeconds int    `json:"stalled_seconds"`
+}
+
+type SessionResponse struct {
+	SessionID string             `json:"session_id"`
+	Workspace string             `json:"workspace"`
+	Language  string             `json:"language"`
+	CreatedAt string             `json:"created_at"`
+	UpdatedAt string             `json:"updated_at"`
+	Messages  []map[string]any   `json:"messages"`
+	Approvals []map[string]any   `json:"approvals"`
+	Agent     SessionAgentStatus `json:"agent"`
+}
+
+type SteerResponse struct {
+	Status  string `json:"status"`
+	RunID   string `json:"run_id"`
+	Pending int    `json:"pending"`
+}
+
+type CompactResponse struct {
+	Status     string         `json:"status"`
+	Compaction map[string]any `json:"compaction"`
 }
 
 type ExecutionRequest struct {
@@ -171,7 +206,50 @@ func (c Client) Contract(ctx context.Context) (APIContract, error) {
 
 func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendMessageRequest) (SendMessageResponse, error) {
 	var out SendMessageResponse
-	if err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/messages", payload, &out); err != nil {
+	if err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/messages", payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) GetSession(ctx context.Context, sessionID string) (SessionResponse, error) {
+	var out SessionResponse
+	value, err := c.GetJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID))
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
+func (c Client) LastSession(ctx context.Context) (SessionResponse, bool, error) {
+	var out SessionResponse
+	value, err := c.GetJSON(ctx, "/v1/sessions?last=true")
+	if err != nil {
+		return out, false, err
+	}
+	if value == nil {
+		return out, false, nil
+	}
+	if err := remarshalJSON(value, &out); err != nil {
+		return out, false, err
+	}
+	return out, true, nil
+}
+
+func (c Client) Steer(ctx context.Context, sessionID string, message string) (SteerResponse, error) {
+	var out SteerResponse
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/steer"
+	if err := c.postJSON(ctx, path, map[string]string{"message": message}, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) Compact(ctx context.Context, sessionID string) (CompactResponse, error) {
+	var out CompactResponse
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/compact"
+	if err := c.postJSON(ctx, path, struct{}{}, &out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -235,7 +313,7 @@ func (c Client) RemoveTrust(ctx context.Context, workspace string) (TrustStatus,
 }
 
 func (c Client) Approve(ctx context.Context, sessionID string, approvalID string, acceptAll bool) error {
-	err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}
@@ -243,7 +321,7 @@ func (c Client) Approve(ctx context.Context, sessionID string, approvalID string
 }
 
 func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {
-	err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}

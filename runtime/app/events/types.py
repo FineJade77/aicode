@@ -9,6 +9,8 @@ EVENT_TYPES = frozenset(
         "session.created",
         "run.queued",
         "run.started",
+        "run.steer.queued",
+        "run.steer.applied",
         "run.cancelled",
         "assistant.delta",
         "tool.started",

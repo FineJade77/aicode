@@ -162,6 +162,22 @@
     },
     {
       "event_id": 19,
+      "type": "run.steer.queued",
+      "run_id": "run_fixture",
+      "status": "queued",
+      "pending": 1,
+      "message": "steer 指令已排队。"
+    },
+    {
+      "event_id": 20,
+      "type": "run.steer.applied",
+      "run_id": "run_fixture",
+      "count": 1,
+      "skipped_tool_calls": 0,
+      "message": "已应用 steer 指令。"
+    },
+    {
+      "event_id": 21,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

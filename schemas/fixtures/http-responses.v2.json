@@ -32,6 +32,42 @@
         "trace_id": "trace_fixture"
       }
     },
+    "session_status": {
+      "session_id": "sess_fixture",
+      "workspace": "/workspace",
+      "language": "zh-CN",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "messages": [],
+      "approvals": [],
+      "agent": {
+        "running": true,
+        "queued": 1,
+        "pending_steers": 0,
+        "current_run_id": "run_fixture",
+        "stage": "model.stream",
+        "started_at": "2026-01-01T00:00:01+00:00",
+        "last_progress_at": "2026-01-01T00:00:02+00:00",
+        "elapsed_seconds": 2,
+        "stalled_seconds": 1
+      },
+      "future_field": true
+    },
+    "steer_session": {
+      "status": "queued",
+      "run_id": "run_fixture",
+      "pending": 1,
+      "future_field": true
+    },
+    "compact_session": {
+      "status": "compacted",
+      "compaction": {
+        "compaction_id": 1,
+        "session_id": "sess_fixture",
+        "summary": "- fixture"
+      },
+      "future_field": true
+    },
     "cancel_run_cancelled": {
       "status": "cancelled",
       "run_id": "run_fixture",

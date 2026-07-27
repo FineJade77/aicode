@@ -27,7 +27,7 @@ Go CLI / Interactive REPL / future IDE / stdio JSON-RPC
                          |
 +---------------- Application Runtime ----------------+
 | SessionService | RunCoordinator | ApprovalService   |
-| TraceService | ProjectTrustService                  |
+| ContextService | TraceService | ProjectTrustService |
 +------------------------+-----------------------------+
                          |
 +-------------------- Agent Core ----------------------+
@@ -59,11 +59,11 @@ Go CLI --sandbox docker -----/                   \-> DockerExecutionBackend
 
 ### 3.1 Go CLI
 
-CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置读写、SSE 输出，以及将 Docker Sandbox 请求转发给 Runtime。
+CLI 负责用户入口、常驻 REPL 状态机、daemon 生命周期、命令参数解析、本地配置读写、SSE 输出，以及将 Docker Sandbox 请求转发给 Runtime。
 
 主要命令：
 
-- `chat`: 与 Agent 对话，可复用或创建 session。
+- `chat`: 带 message 时执行单次对话；不带 message 时进入常驻 REPL，在同一 session 中支持 follow-up、steer、cancel、status/model/compact/new/resume。
 - `review`: 对当前改动做代码审查，Runtime 使用 reviewer 路由和只读工具。
 - `diff`: 分析当前 diff。
 - `test`: 根据测试失败信息让 Agent 辅助修复。
@@ -80,6 +80,8 @@ CLI 负责用户入口、daemon 生命周期、命令参数解析、本地配置
 - `--sandbox docker test|build|lint`: 在 Docker 隔离环境运行项目命令。
 
 CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
+
+REPL 由一个输入 scanner 和一个主状态循环统一协调普通消息、控制命令、SSE、approval 与 signal。普通输入在活跃 run 后排队；`/steer` 通过 Runtime 队列在 AgentLoop 安全边界生效。TTY 中首个 Ctrl-C 取消当前 run、第二个退出；非 TTY 在 EOF 后等待已提交 run 的终态，不输出 prompt。
 
 `--sandbox docker` 不再在 Go 进程内自行启动容器。CLI 只提交版本化 execution request，并在中断时调用统一 cancel API；命令探测、资源限制、进程终态和 audit 均由 Runtime 负责。
 
@@ -122,7 +124,7 @@ manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和
 
 Runtime 分为三层：
 
-- `application/`：会话、run 串行化/取消、审批决议、trace/usage、Project Trust、model 与 execution facade。
+- `application/`：会话、run 串行化/取消/steer、手动 compaction、审批决议、trace/usage、Project Trust、model 与 execution facade。
 - `agent/` + `core/`：transport-independent AgentLoop、ContextManager、Policy，以及 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、Clock/IDs ports。
 - `adapters/`：composition root、SQLite/内存 session、JSONL usage、provider router、host/Docker execution、workspace/project config、tool registry、approval broker 与系统 clock/UUID。
 
@@ -151,8 +153,9 @@ Runtime 使用 FastAPI + Uvicorn，持久化默认落在 `.aicode/state/` 下。
 5. Runtime 立即返回 `run_id`。
 6. CLI 通过 `GET /v1/sessions/{id}/events` 订阅 SSE。
 7. Runtime 持续写入 event，CLI 实时展示。
-8. 如遇 approval，CLI 调用 approve 或 reject API。
-9. Agent 完成后，Runtime 持久化消息、事件、用量和审计记录。
+8. 活跃 run 收到 `/steer` 时，Runtime 排队 guidance；AgentLoop 在下一个模型/工具安全边界写入 history，未开始的旧工具调用不会执行。
+9. 如遇 approval，CLI 调用 approve 或 reject API。
+10. Agent 完成后，Runtime 持久化消息、事件、用量和审计记录；空闲 session 可通过 `/compact` 强制生成新的持久化 context projection。
 
 SSE event 使用递增 `event_id`，CLI 可以用 `Last-Event-ID` 恢复事件流。
 
@@ -190,6 +193,11 @@ stream model response
           |
           v
        persist tool result and continue
+  |
+  +--> pending steer at safe boundary
+          |
+          +--> skip not-yet-started old tool calls
+          +--> persist latest user guidance and continue
   |
   v
 emit run.completed or run.failed

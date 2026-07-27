@@ -6,7 +6,9 @@ from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from app.agent.history import ContextManager, latest_valid_compaction
 from app.agent.loop import AgentLoop
+from app.agent.types import AgentRuntime
 from app.application.errors import Conflict, InvalidRequest, NotFound, ProviderUnavailable
 from app.core.hashing import stable_hash
 from app.core.ports import (
@@ -96,23 +98,59 @@ class RunCoordinator:
         queued = session.enqueue_agent_run(request)
         session.events.set_default_run_id(queued.run_id)
         queue_position = session.agent_queue.qsize()
+        trace_data = {
+            "mode": request.mode,
+            "language": request.language,
+            "message_hash": stable_hash(request.message),
+            "message_preview": request.message[:200],
+            "run_id": queued.run_id,
+            "queued": was_running,
+            "queue_position": queue_position,
+        }
+        model = str(getattr(request, "model", "") or "").strip()
+        if model:
+            trace_data["model"] = model
         self.trace.record(
             "message.received",
             session_id=session.session_id,
             workspace=session.workspace,
-            data={
-                "mode": request.mode,
-                "language": request.language,
-                "message_hash": stable_hash(request.message),
-                "message_preview": request.message[:200],
-                "run_id": queued.run_id,
-                "queued": was_running,
-                "queue_position": queue_position,
-            },
+            data=trace_data,
         )
         await self._emit_queued(session, queued, was_running, queue_position)
         self.ensure_runner(session)
         return {"status": "queued" if was_running else "accepted", "run_id": queued.run_id}
+
+    async def steer(self, session: AgentSession, message: str) -> dict[str, Any]:
+        guidance = message.strip()
+        if not guidance:
+            raise InvalidRequest("steer message must not be empty")
+        run_id = session.current_run_id
+        if not session.agent_runner_active() or run_id is None:
+            raise Conflict("session has no active run to steer")
+        if session.current_run_stage == "finalizing":
+            raise Conflict("active run is already finalizing")
+        pending = session.enqueue_steer(guidance)
+        self.trace.record(
+            "run.steer.queued",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={
+                "run_id": run_id,
+                "pending": pending,
+                "message_hash": stable_hash(guidance),
+                "message_preview": guidance[:200],
+            },
+        )
+        await session.events.put(
+            {
+                "type": "run.steer.queued",
+                "run_id": run_id,
+                "status": "queued",
+                "pending": pending,
+                "message": "steer 指令已排队，将在下一个 AgentLoop 安全边界应用。",
+            }
+        )
+        return {"status": "queued", "run_id": run_id, "pending": pending}
 
     def ensure_runner(self, session: AgentSession) -> None:
         if session.agent_runner_active():
@@ -130,6 +168,7 @@ class RunCoordinator:
         with suppress(asyncio.CancelledError, Exception):
             await task
         session.agent_runner_task = None
+        session.drain_steers()
 
         for approval in session.expire_pending_approvals():
             await session.events.put(
@@ -174,6 +213,18 @@ class RunCoordinator:
                 await session.events.put({"type": "run.started", "message": "开始执行当前任务。"})
                 await self.agent_loop.run(session, queued.request)
             finally:
+                expired_steers = session.drain_steers()
+                if expired_steers:
+                    self.trace.record(
+                        "run.steer.expired",
+                        session_id=session.session_id,
+                        workspace=session.workspace,
+                        data={
+                            "run_id": queued.run_id,
+                            "count": len(expired_steers),
+                            "message_hashes": [stable_hash(message) for message in expired_steers],
+                        },
+                    )
                 session.events.set_current_run_id(None)
                 session.finish_agent_run()
 
@@ -223,6 +274,44 @@ class ApprovalService:
             data={"approval_id": approval_id, "accepted": accepted},
         )
         return {"status": "accepted" if accepted else "rejected", "approval_id": approval_id}
+
+
+class ContextService:
+    def __init__(self, agent: AgentRuntime, trace: TraceSink) -> None:
+        self.agent = agent
+        self.trace = trace
+
+    async def compact(self, session: AgentSession) -> dict[str, Any]:
+        if session.agent_runner_active() or session.current_run_id is not None:
+            raise Conflict("cannot compact a session while a run is active")
+        before = latest_valid_compaction(session)
+        manager = self.agent.context_manager or ContextManager(self.agent)
+        self.agent.context_manager = manager
+        await manager.prepare(
+            session=session,
+            purpose="main",
+            system="Manual persistent session compaction.",
+            tools=[],
+            max_tokens=1_024,
+            force=True,
+        )
+        after = latest_valid_compaction(session)
+        compacted = after is not None and (
+            before is None
+            or after.compaction_id != before.compaction_id
+            or after.created_at != before.created_at
+        )
+        status = "compacted" if compacted else "unchanged"
+        self.trace.record(
+            "context.compact.requested",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={
+                "status": status,
+                "compaction_id": after.compaction_id if after is not None else None,
+            },
+        )
+        return {"status": status, "compaction": after.to_dict() if after is not None else None}
 
 
 class TraceService:

@@ -13,9 +13,11 @@ from app.models.router import ModelRouter
 from app.server.main import (
     CancelExecutionResponse,
     CancelRunResponse,
+    CompactResponse,
     CreateSessionResponse,
     ExecutionResponse,
     SendMessageResponse,
+    SteerResponse,
     TrustListResponse,
     TrustStatusResponse,
 )
@@ -103,6 +105,8 @@ def test_http_response_fixture_matches_runtime_models() -> None:
     assert responses["api_contract"]["min_supported_version"] == CONTRACT_VERSION
     assert CreateSessionResponse.model_validate(responses["create_session"]).session_id == "sess_fixture"
     assert SendMessageResponse.model_validate(responses["send_message"]).run_id == "run_fixture"
+    assert SteerResponse.model_validate(responses["steer_session"]).pending == 1
+    assert CompactResponse.model_validate(responses["compact_session"]).status == "compacted"
 
     cancelled = CancelRunResponse.model_validate(responses["cancel_run_cancelled"])
     idle = CancelRunResponse.model_validate(responses["cancel_run_idle"])

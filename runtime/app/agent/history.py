@@ -44,6 +44,7 @@ class ContextManager:
         *,
         session: AgentSession,
         purpose: str,
+        model: str | None = None,
         system: str,
         tools: list[dict[str, Any]] | tuple[Any, ...],
         max_tokens: int,
@@ -53,6 +54,7 @@ class ContextManager:
             runtime=self.runtime,
             session=session,
             purpose=purpose,
+            model=model,
             system=system,
             tools=tools,
             max_tokens=max_tokens,
@@ -123,13 +125,14 @@ async def prepare_history_for_model(
     runtime: Any,
     session: AgentSession,
     purpose: str,
+    model: str | None = None,
     system: str,
     tools: list[dict[str, Any]] | tuple[Any, ...],
     max_tokens: int,
     force: bool = False,
 ) -> list[dict[str, Any]]:
     history = load_history(session)
-    capability = _capability(runtime, purpose, max_tokens)
+    capability = _capability(runtime, purpose, max_tokens, model=model)
     context_settings = getattr(getattr(runtime.model_runtime, "settings", None), "context", None)
     chars_per_token = float(getattr(capability, "chars_per_token", getattr(context_settings, "chars_per_token", 3.5)))
     reserve_tokens = int(getattr(context_settings, "reserve_tokens", 1_024))
@@ -399,8 +402,16 @@ async def _emit_budget_event(
     await session.events.put(event)
 
 
-def _capability(runtime: Any, purpose: str, max_tokens: int) -> ModelCapability:
+def _capability(
+    runtime: Any,
+    purpose: str,
+    max_tokens: int,
+    *,
+    model: str | None = None,
+) -> ModelCapability:
     router = getattr(runtime, "model_runtime", None)
+    if model and router is not None and hasattr(router, "capability_for_model"):
+        return router.capability_for_model(model)
     if router is not None and hasattr(router, "capability_for_purpose"):
         return router.capability_for_purpose(purpose)
     return ModelCapability(

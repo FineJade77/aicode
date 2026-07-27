@@ -234,7 +234,7 @@
 - eval 影响：既有 deterministic 4-task baseline 保持 PASS；新增 provider transport smoke 覆盖此前 scripted provider 不覆盖的 HTTP/auth/probe/edit approval 链路。
 - 验证：Python 全量 283 项通过（受限沙箱跳过 localhost bind 与 Docker 各 1 项），沙箱外 localhost smoke 1 项通过，Go 全量测试、go vet、Python compileall、deterministic eval baseline 和 `git diff --check` 全部通过。
 
-### `[ ]` T-010 常驻 REPL
+### `[x]` T-010 常驻 REPL
 
 对应：WP1.1
 
@@ -245,6 +245,17 @@
 - persistent session、status/model/compact/new/resume 命令。
 - steer、follow-up 和 cancel。
 - TTY 与非 TTY 行为测试。
+
+完成记录（2026-07-27）：
+
+- `aicode chat` 无 message 时进入常驻 REPL，`aicode repl` 提供等价入口；单次 `aicode chat "..."` 保持原行为。
+- REPL 默认创建并绑定一个 session，支持 `/status`、`/model [name]`、`/compact`、`/new`、`/resume [--last|id]`、`/exit`；模型覆盖按 message 传入 Runtime，不修改全局路由。
+- 普通输入在 run 活跃时作为 follow-up 排入同一 session；`/steer` 进入当前 run 专用队列，由 AgentLoop 在模型/工具之间的安全边界应用，并跳过尚未执行的旧工具调用；`/cancel` 保留既有终态与后续队列语义。
+- Runtime 新增 versioned HTTP contract：session status typed client、`POST /v1/sessions/{id}/steer` 与 `POST /v1/sessions/{id}/compact`；新增 `run.steer.queued/applied` SSE contract fixtures 和 renderer 兼容行为。
+- REPL 使用单一 stdin scanner 协调消息、命令和 approval，避免多个 reader 争抢输入；TTY 支持首个 Ctrl-C 取消、第二个 Ctrl-C 退出，非 TTY 在 EOF 后等待本进程提交的所有 run 终态再稳定退出。
+- 新增 Runtime safe-boundary/model override/manual compaction 测试，Go REPL 覆盖 persistent session、控制命令、steer、TTY/Ctrl-C 与非 TTY follow-up。
+- eval 影响：既有 deterministic 4-task smoke baseline 保持 PASS；新增 steer/REPL contract 与单元测试覆盖交互编排，不修改既有 task/prompt/tool/policy baseline。
+- 验证：Python 全量 292 项通过（Docker 与受限 localhost bind 各跳过 1 项），Go 全量测试、go vet、Python compileall 和 `git diff --check` 全部通过。
 
 ## M3：可嵌入平台
 

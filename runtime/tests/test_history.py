@@ -12,6 +12,8 @@ from app.agent.history import (
     truncate_tool_output,
 )
 from app.agent.types import AgentRuntime
+from app.application.services import ContextService
+from app.audit.logger import AuditLogger
 from app.models.provider import ProviderError
 from app.models.router import ModelRouter
 from app.config.settings import Settings
@@ -256,3 +258,19 @@ async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tm
     event = [item for item in sess.events.events_after(0) if item["type"] == "context.budget"][-1]
     assert event["summary_mode"] == "fallback"
     assert event["summary_error"] == "ProviderError"
+
+
+@pytest.mark.asyncio
+async def test_manual_context_service_persists_compaction(tmp_path):
+    store = SessionStore(path=tmp_path / "manual.sqlite")
+    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    for index in range(5):
+        store.append_message(sess, {"role": "user", "content": f"constraint-{index}"})
+    trace = AuditLogger(path=tmp_path / "audit.jsonl")
+    service = ContextService(AgentRuntime(model_router=None, audit=trace), trace)
+
+    result = await service.compact(sess)
+
+    assert result["status"] == "compacted"
+    assert result["compaction"]["session_id"] == sess.session_id
+    assert latest_valid_compaction(sess) is not None

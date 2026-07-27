@@ -173,6 +173,7 @@ class Session:
     compactions: list[CompactionEntry] = field(default_factory=list)
     approvals: dict[str, PendingApproval] = field(default_factory=dict)
     agent_queue: asyncio.Queue[QueuedAgentRun] = field(default_factory=asyncio.Queue)
+    steer_queue: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
     agent_runner_task: asyncio.Task[Any] | None = None
     current_run_id: str | None = None
     current_run_stage: str | None = None
@@ -203,6 +204,7 @@ class Session:
             "agent": {
                 "running": self.agent_runner_active(),
                 "queued": self.agent_queue.qsize(),
+                "pending_steers": self.steer_queue.qsize(),
                 "current_run_id": self.current_run_id,
                 "stage": self.current_run_stage,
                 "started_at": self.current_run_started_at.isoformat() if self.current_run_started_at else None,
@@ -217,12 +219,26 @@ class Session:
         self.agent_queue.put_nowait(queued)
         return queued
 
+    def enqueue_steer(self, message: str) -> int:
+        self.steer_queue.put_nowait(message)
+        return self.steer_queue.qsize()
+
+    def drain_steers(self) -> list[str]:
+        messages: list[str] = []
+        while True:
+            try:
+                messages.append(self.steer_queue.get_nowait())
+                self.steer_queue.task_done()
+            except asyncio.QueueEmpty:
+                return messages
+
     def append_message(self, message: dict[str, Any]) -> int | None:
         if self.message_appender is not None:
             return self.message_appender(message)
         self.messages.append(message)
-        self.message_ids.append(0)
-        return None
+        message_id = (self.message_ids[-1] if self.message_ids else 0) + 1
+        self.message_ids.append(message_id)
+        return message_id
 
     def append_compaction(self, entry: CompactionEntry) -> CompactionEntry:
         if self.compaction_appender is not None:

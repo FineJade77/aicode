@@ -36,6 +36,7 @@ docs/       设计与开发计划
 - Host 子进程使用最小环境变量 allowlist 和隔离 HOME，不继承 provider/runtime secret。
 - review 模式只读；commit-message 模式无工具，只根据 CLI 提供的 diff 生成提交信息。
 - SQLite session/message 持久化，支持 resume。
+- 常驻 `aicode chat` REPL，支持同 session follow-up、safe-boundary steer、cancel、status/model/compact/new/resume。
 - 同一 session 的 run 串行排队；支持查看当前阶段并取消卡住的 run。
 - 本地 JSONL 审计日志，`edit.applied` 记录 `diff_bytes` 与 `patch_hash`，不记录完整 diff。
 - token/cost 本地统计，支持按天、session、purpose/model/provider 查看。
@@ -141,6 +142,7 @@ CLI 会自动启动 Runtime daemon，并创建 session。没有配置可用 prov
 ## 常用命令
 
 ```bash
+aicode chat
 aicode chat "你好"
 aicode "修复 pytest 失败"
 aicode review
@@ -148,6 +150,28 @@ aicode diff
 aicode test
 aicode explain runtime/app/server/main.py
 aicode commit-message
+```
+
+`aicode chat` 不带 message 时进入常驻 REPL：
+
+```text
+/status
+/model [name]
+/compact
+/steer <guidance>
+/follow-up <message>
+/cancel
+/new
+/resume [--last|session_id]
+/exit
+```
+
+普通输入会追加到当前 session；当前 run 仍活跃时，普通输入等同 follow-up 并排到其后。`/steer` 不会在任意时刻打断工具，而是在 AgentLoop 的下一个安全边界注入最新约束；尚未开始的旧工具调用会被明确跳过。`/model name` 只覆盖此 REPL 后续消息，`/compact` 只允许在 session 空闲时执行。
+
+TTY 中第一次 `Ctrl-C` 取消当前 run，第二次退出。管道输入不会显示 prompt，并会在 EOF 后等待本进程已提交的 run 全部到达终态：
+
+```bash
+printf '解释当前项目\n/follow-up 给出三个改进点\n' | aicode chat
 ```
 
 辅助命令：

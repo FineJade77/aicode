@@ -4,18 +4,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
 )
 
 func PrintJSON(value any) {
+	PrintJSONTo(os.Stdout, value)
+}
+
+// PrintJSONTo renders stable, indented JSON to the supplied writer.
+func PrintJSONTo(out io.Writer, value any) {
 	encoded, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		fmt.Printf("%v\n", value)
+		fmt.Fprintf(out, "%v\n", value)
 		return
 	}
-	fmt.Println(string(encoded))
+	fmt.Fprintln(out, string(encoded))
 }
 
 func PrintReviewRulesTable(value any) {
@@ -396,65 +403,74 @@ func writeUsageGroup(out *strings.Builder, title string, value any) {
 }
 
 func RenderEvent(event map[string]any) {
+	RenderEventTo(os.Stdout, event)
+}
+
+// RenderEventTo keeps event rendering reusable by the one-shot CLI and REPL.
+func RenderEventTo(out io.Writer, event map[string]any) {
 	eventType, _ := event["type"].(string)
 
 	switch eventType {
 	case "session.created":
-		fmt.Printf("工作区: %s\n", stringValue(event["workspace"]))
+		fmt.Fprintf(out, "工作区: %s\n", stringValue(event["workspace"]))
 	case "run.queued":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Fprintln(out, stringValue(event["message"]))
 	case "run.started":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Fprintln(out, stringValue(event["message"]))
+	case "run.steer.queued":
+		fmt.Fprintln(out, stringValue(event["message"]))
+	case "run.steer.applied":
+		fmt.Fprintln(out, stringValue(event["message"]))
 	case "run.cancelled":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Fprintln(out, stringValue(event["message"]))
 	case "assistant.delta":
-		fmt.Print(stringValue(event["text"]))
+		fmt.Fprint(out, stringValue(event["text"]))
 	case "tool.started":
-		fmt.Printf("工具: %s\n", stringValue(event["tool"]))
+		fmt.Fprintf(out, "工具: %s\n", stringValue(event["tool"]))
 	case "tool.output":
 		if detail := toolDetailLine("工具完成", event); detail != "" {
-			fmt.Println(detail)
+			fmt.Fprintln(out, detail)
 		}
 		if line := contextOutputLine(event); line != "" {
-			fmt.Println(line)
+			fmt.Fprintln(out, line)
 		}
 		text := strings.TrimSpace(stringValue(event["text"]))
 		if text != "" {
-			fmt.Println(text)
+			fmt.Fprintln(out, text)
 		}
 	case "context.budget":
 		if line := contextBudgetLine(event); line != "" {
-			fmt.Print(line)
+			fmt.Fprint(out, line)
 		}
 	case "tool.denied":
-		fmt.Printf("工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":
-		fmt.Printf("工具执行已拒绝: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "工具执行已拒绝: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.error":
 		detail := toolDetailLine("工具失败", event)
 		if detail == "" {
 			detail = fmt.Sprintf("工具失败: %s", stringValue(event["tool"]))
 		}
-		fmt.Printf("%s (%s)\n", detail, stringValue(event["error"]))
+		fmt.Fprintf(out, "%s (%s)\n", detail, stringValue(event["error"]))
 	case "approval.requested":
-		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
+		fmt.Fprintf(out, "需要确认: %s\n", stringValue(event["message"]))
 	case "approval.expired":
-		fmt.Printf("确认已过期: %s\n", stringValue(event["message"]))
+		fmt.Fprintf(out, "确认已过期: %s\n", stringValue(event["message"]))
 	case "edit.applied":
-		fmt.Printf("\n已应用编辑: %v (%v)\n", event["path"], event["kind"])
+		fmt.Fprintf(out, "\n已应用编辑: %v (%v)\n", event["path"], event["kind"])
 	case "edit.rejected":
-		fmt.Printf("\n已拒绝编辑: %v\n", event["path"])
+		fmt.Fprintf(out, "\n已拒绝编辑: %v\n", event["path"])
 	case "edit.auto_approved":
-		fmt.Printf("\n[本会话已允许] 自动应用编辑: %v\n", event["path"])
+		fmt.Fprintf(out, "\n[本会话已允许] 自动应用编辑: %v\n", event["path"])
 	case "usage.recorded":
-		fmt.Println(usageLine(event))
+		fmt.Fprintln(out, usageLine(event))
 	case "error":
-		fmt.Printf("\n错误: %s\n", stringValue(event["error"]))
+		fmt.Fprintf(out, "\n错误: %s\n", stringValue(event["error"]))
 	case "final":
-		fmt.Printf("\n%s\n", stringValue(event["summary"]))
+		fmt.Fprintf(out, "\n%s\n", stringValue(event["summary"]))
 	default:
 		if eventType != "" {
-			PrintJSON(event)
+			PrintJSONTo(out, event)
 		}
 	}
 }

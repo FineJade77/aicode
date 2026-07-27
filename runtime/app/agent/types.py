@@ -20,6 +20,7 @@ class AgentRequest(Protocol):
     mode: str
     workspace: str
     language: str
+    model: str | None
 
 
 @dataclass(slots=True)
