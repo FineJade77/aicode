@@ -164,7 +164,6 @@ class SessionEvents:
 class Session:
     session_id: str
     workspace: str
-    language: str
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     events: SessionEvents = field(default_factory=SessionEvents)
@@ -196,7 +195,6 @@ class Session:
         return {
             "session_id": self.session_id,
             "workspace": self.workspace,
-            "language": self.language,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "messages": self.messages,
@@ -369,12 +367,11 @@ class SessionStore:
             return False
         return True
 
-    def create(self, workspace: str, language: str) -> Session:
+    def create(self, workspace: str) -> Session:
         self._ensure_schema()
         session = Session(
             session_id=self.ids.new("sess"),
             workspace=workspace,
-            language=language,
             created_at=self.clock.now(),
             updated_at=self.clock.now(),
             clock=self.clock,
@@ -396,7 +393,7 @@ class SessionStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "select session_id, workspace, language, created_at, updated_at from sessions where session_id = ?",
+                "select session_id, workspace, created_at, updated_at from sessions where session_id = ?",
                 (session_id,),
             ).fetchone()
             if row is None:
@@ -412,7 +409,7 @@ class SessionStore:
         self._ensure_schema()
         with self._connect() as conn:
             rows = conn.execute(
-                "select rowid, session_id, workspace, language, created_at, updated_at from sessions order by updated_at desc, rowid desc"
+                "select rowid, session_id, workspace, created_at, updated_at from sessions order by updated_at desc, rowid desc"
             ).fetchall()
             sessions: list[dict[str, Any]] = []
             for row in rows:
@@ -435,7 +432,7 @@ class SessionStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "select rowid, session_id, workspace, language, created_at, updated_at from sessions order by updated_at desc, rowid desc limit 1"
+                "select rowid, session_id, workspace, created_at, updated_at from sessions order by updated_at desc, rowid desc limit 1"
             ).fetchone()
             if row is None:
                 return None
@@ -535,7 +532,6 @@ class SessionStore:
                 create table if not exists sessions (
                     session_id text primary key,
                     workspace text not null,
-                    language text not null,
                     created_at text not null,
                     updated_at text not null
                 );
@@ -583,6 +579,7 @@ class SessionStore:
             """
             )
             self._ensure_updated_at_column(conn)
+            self._remove_language_column(conn)
         self._schema_ready = True
 
     def _connect(self) -> sqlite3.Connection:
@@ -594,17 +591,16 @@ class SessionStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                insert or ignore into sessions (session_id, workspace, language, created_at, updated_at)
-                values (?, ?, ?, ?, ?)
+                insert or ignore into sessions (session_id, workspace, created_at, updated_at)
+                values (?, ?, ?, ?)
                 """,
-                (session.session_id, session.workspace, session.language, session.created_at.isoformat(), session.updated_at.isoformat()),
+                (session.session_id, session.workspace, session.created_at.isoformat(), session.updated_at.isoformat()),
             )
 
     def _session_from_row(self, row: sqlite3.Row) -> Session:
         return Session(
             session_id=str(row["session_id"]),
             workspace=str(row["workspace"]),
-            language=str(row["language"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
             clock=self.clock,
@@ -865,6 +861,29 @@ class SessionStore:
             return
         conn.execute("alter table sessions add column updated_at text")
         conn.execute("update sessions set updated_at = created_at where updated_at is null")
+
+    def _remove_language_column(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+        if "language" not in columns:
+            return
+        conn.execute(
+            """
+            create table sessions_without_language (
+                session_id text primary key,
+                workspace text not null,
+                created_at text not null,
+                updated_at text not null
+            )
+            """
+        )
+        conn.execute(
+            """
+            insert into sessions_without_language (rowid, session_id, workspace, created_at, updated_at)
+            select rowid, session_id, workspace, created_at, updated_at from sessions
+            """
+        )
+        conn.execute("drop table sessions")
+        conn.execute("alter table sessions_without_language rename to sessions")
 
 
 def default_session_db_path() -> Path:

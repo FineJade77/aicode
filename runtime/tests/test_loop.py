@@ -25,11 +25,10 @@ from tests.fakes import FakeProvider, text_turn, tool_turn
 
 
 class Request:
-    def __init__(self, workspace, message="Fix a bug", mode="default", language="en-US", model=None):
+    def __init__(self, workspace, message="Fix a bug", mode="default", model=None):
         self.workspace = str(workspace)
         self.message = message
         self.mode = mode
-        self.language = language
         self.model = model
 
 
@@ -53,7 +52,7 @@ def make_runtime(turns, tmp_path):
 
 def make_session(tmp_path):
     store = SessionStore(path=tmp_path / "s.sqlite")
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
     return session
 
 
@@ -154,7 +153,7 @@ async def test_context_overflow_forces_one_compaction_retry(tmp_path):
         policy=PolicyEngine(),
     )
     store = SessionStore(path=tmp_path / "overflow.sqlite")
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
     for index in range(4):
         store.append_message(session, {"role": "user", "content": f"Historical goal {index}"})
 
@@ -190,7 +189,7 @@ async def test_context_overflow_is_never_retried_more_than_once(tmp_path):
         policy=PolicyEngine(),
     )
     store = SessionStore(path=tmp_path / "overflow-twice.sqlite")
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
     for index in range(4):
         store.append_message(session, {"role": "user", "content": f"Historical goal {index}"})
 

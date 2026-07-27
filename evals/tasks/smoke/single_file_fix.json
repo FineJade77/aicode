@@ -6,7 +6,6 @@
   "fixture": "single_file_fix",
   "user_request": "Fix the bug in calc.add and run tests to verify the change.",
   "mode": "default",
-  "language": "en-US",
   "tags": ["edit", "verification"],
   "trust": "trusted",
   "approval_policy": {

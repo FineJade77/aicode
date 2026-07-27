@@ -54,7 +54,7 @@ func (api *fakeAPI) CreateSession(_ context.Context, request client.CreateSessio
 	defer api.mu.Unlock()
 	api.sessionCounter++
 	id := "sess_" + string(rune('0'+api.sessionCounter))
-	api.sessions[id] = client.SessionResponse{SessionID: id, Workspace: request.Workspace, Language: request.Language}
+	api.sessions[id] = client.SessionResponse{SessionID: id, Workspace: request.Workspace}
 	api.lastSessionID = id
 	return client.CreateSessionResponse{SessionID: id}, nil
 }

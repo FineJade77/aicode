@@ -29,7 +29,7 @@ docs/       设计与开发计划
 
 - CLI 自动启动、停止和查询 Runtime daemon。
 - HTTP + SSE 事件流，支持 `assistant.delta` 流式输出。
-- Application contract v1 固定 Session snapshot、Turn request、Run/control receipt；HTTP 和未来 transport 只负责映射。
+- Application contract v2 固定 Session snapshot、Turn request、Run/control receipt；HTTP 和未来 transport 只负责映射。
 - 原生 function calling Agent Loop，支持 OpenAI-compatible provider 和 Anthropic provider。
 - 工具集：`read_file`、`search`、`list_files`、`related_files`、`bash`、`edit_file`、`review_diff`。
 - `edit_file` 逐次展示 unified diff，支持 `y` 单次应用、`a` 本 session 后续自动应用、其它输入拒绝。

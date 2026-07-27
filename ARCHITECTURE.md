@@ -41,7 +41,7 @@ Go CLI / Interactive REPL / future IDE / stdio JSON-RPC
 +------------------------------------------------------+
 ```
 
-Application contract v1 是 transport 与内部实现之间的稳定边界，定义 `SessionSnapshot`、`TurnRequest`、`RunReceipt/RunControl`、`SteerReceipt` 和 `CompactionReceipt`；canonical schema 为 `schemas/application-contract.schema.json`。FastAPI/Pydantic DTO 必须显式转换为这些类型，Agent Core 与 Application services 不导入 transport 类型。
+Application contract v2 是 transport 与内部实现之间的稳定边界，定义 `SessionSnapshot`、`TurnRequest`、`RunReceipt/RunControl`、`SteerReceipt` 和 `CompactionReceipt`；canonical schema 为 `schemas/application-contract.schema.json`。FastAPI/Pydantic DTO 必须显式转换为这些类型，Agent Core 与 Application services 不导入 transport 类型。
 
 HTTP/SSE 是当前稳定 transport。`GET /v1/meta/contract` 返回 application contract version/type map、HTTP/SSE contract version、最低兼容版本、Runtime version 和 transport capability；Go client 通过同一结构读取。stdio JSON-RPC 只预留 capability，尚未作为已实现功能发布。
 
@@ -302,7 +302,7 @@ Runtime prompt 由几层组成：
 
 项目规则被明确标记为“项目规则”，不能覆盖系统安全策略、工具策略和用户显式指令。这样可以降低仓库内 prompt injection 的影响。
 
-系统仅提供英文交互。v1 HTTP/Application contract 中的 `language` 字段暂时保留以兼容旧客户端，但所有输入都会归一为 `en-US`，不再存在用户级或项目级语言切换配置。
+系统仅提供英文交互。Application contract v2、HTTP DTO、Go client、session 状态和 SQLite schema 均不再包含 `language` 字段，也不存在用户级或项目级语言切换配置。
 
 ## 11. Configuration
 

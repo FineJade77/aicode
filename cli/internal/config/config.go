@@ -25,8 +25,6 @@ type UIConfig struct {
 	Style string
 }
 
-const DefaultLanguage = "en-US"
-
 type RuntimeConfig struct {
 	URL  string
 	Port int

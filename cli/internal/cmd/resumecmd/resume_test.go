@@ -42,7 +42,6 @@ func TestSessionInfoFromValue(t *testing.T) {
 	info, err := sessionInfoFromValue(map[string]any{
 		"session_id": "sess_1",
 		"workspace":  "/repo",
-		"language":   "en-US",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -50,18 +49,5 @@ func TestSessionInfoFromValue(t *testing.T) {
 	want := sessionInfo{SessionID: "sess_1", Workspace: "/repo"}
 	if info != want {
 		t.Fatalf("sessionInfoFromValue() = %#v, want %#v", info, want)
-	}
-}
-
-func TestSessionInfoFromValueDoesNotRequireLanguage(t *testing.T) {
-	info, err := sessionInfoFromValue(map[string]any{
-		"session_id": "sess_1",
-		"workspace":  "/repo",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.SessionID != "sess_1" || info.Workspace != "/repo" {
-		t.Fatalf("sessionInfoFromValue() = %#v", info)
 	}
 }

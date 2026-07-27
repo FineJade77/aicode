@@ -31,7 +31,6 @@ class Request:
         self.workspace = str(workspace)
         self.message = "Fix add in calc.py and verify the change"
         self.mode = "default"
-        self.language = "en-US"
 
 
 class LocalProviderFixture:
@@ -192,7 +191,7 @@ async def test_no_auth_localhost_profile_probe_and_full_edit_flow(tmp_path: Path
         approvals=SessionApprovalBroker(),
     )
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
 
     async def approve_pending() -> None:
         while True:

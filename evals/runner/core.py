@@ -51,7 +51,6 @@ class EvalRequest:
     workspace: str
     message: str
     mode: str
-    language: str
 
 
 async def run_suite(
@@ -153,13 +152,12 @@ async def run_task(
         approvals=SessionApprovalBroker(),
     )
     store = SessionStore(path=state / "sessions.sqlite")
-    session = store.create(workspace=str(workspace), language=task.language)
+    session = store.create(workspace=str(workspace))
     seed_history(store, session, task)
     request = EvalRequest(
         workspace=str(workspace),
         message=task.user_request,
         mode=task.mode,
-        language=task.language,
     )
     approval_decisions: list[dict[str, Any]] = []
     approver = asyncio.create_task(resolve_approvals(session, task, approval_decisions))

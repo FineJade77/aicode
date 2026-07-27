@@ -65,7 +65,6 @@ class CompactionEntry:
 class AgentSession(Protocol):
     session_id: str
     workspace: str
-    language: str
     events: EventSink
     messages: list[dict[str, Any]]
     message_ids: list[int]

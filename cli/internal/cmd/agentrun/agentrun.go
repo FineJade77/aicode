@@ -33,7 +33,6 @@ func Run(cfg config.Config, mode string, prompt string) error {
 	api := client.New(cfg.Runtime.URL, daemon.Token())
 	session, err := api.CreateSession(ctx, client.CreateSessionRequest{
 		Workspace: root.Path,
-		Language:  config.DefaultLanguage,
 	})
 	if err != nil {
 		return err
@@ -43,7 +42,6 @@ func Run(cfg config.Config, mode string, prompt string) error {
 		Message:   prompt,
 		Mode:      mode,
 		Workspace: root.Path,
-		Language:  config.DefaultLanguage,
 	})
 	if err != nil {
 		return err

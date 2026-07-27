@@ -14,12 +14,11 @@ class InMemorySessionRepository:
         self._sessions: dict[str, Session] = {}
         self._last_session_id: str | None = None
 
-    def create(self, workspace: str, language: str) -> Session:
+    def create(self, workspace: str) -> Session:
         now = self.clock.now()
         session = Session(
             session_id=self.ids.new("sess"),
             workspace=workspace,
-            language=language,
             created_at=now,
             updated_at=now,
             clock=self.clock,

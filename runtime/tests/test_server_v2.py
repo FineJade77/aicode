@@ -13,7 +13,7 @@ async def test_approve_accept_all_sets_session_flag(tmp_path, monkeypatch):
     store = SessionStore(path=tmp_path / "s.sqlite")
     monkeypatch.setattr(server.application_runtime, "sessions", store)
     monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
     approval = session.create_approval("edit", {"path": "a.py"})
 
     response = await server.approve(session.session_id, server.ApprovalRequest(approval_id=approval.approval_id, accept_all=True))
@@ -40,7 +40,7 @@ async def test_send_message_rejects_unconfigured_provider(tmp_path, monkeypatch)
 
     store = SessionStore(path=tmp_path / "s.sqlite")
     monkeypatch.setattr(server.application_runtime, "sessions", store)
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
 
     # Monkeypatch the provider's is_configured to return False
     monkeypatch.setattr(

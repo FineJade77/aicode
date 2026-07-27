@@ -110,10 +110,14 @@ func TestStreamRunEventsSendsRunID(t *testing.T) {
 }
 
 func TestSendMessageReturnsRunID(t *testing.T) {
+	var requestBody map[string]any
 	api := New("http://runtime.test", "")
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost {
 			return nil, fmt.Errorf("method = %s, want POST", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			return nil, err
 		}
 		return jsonResponse(`{"status":"queued","run_id":"run_123"}`), nil
 	})}
@@ -125,7 +129,6 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 		Message:   "hello",
 		Mode:      "default",
 		Workspace: "/repo",
-		Language:  "en-US",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +136,9 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 
 	if response.Status != "queued" || response.RunID != "run_123" {
 		t.Fatalf("response = %#v", response)
+	}
+	if _, ok := requestBody["language"]; ok {
+		t.Fatalf("send-message request contains removed language field: %#v", requestBody)
 	}
 }
 

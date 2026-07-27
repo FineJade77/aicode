@@ -493,7 +493,7 @@ class ExecutionBackend(Protocol): ...
 首批落地（2026-07-27）：
 
 - 新增 `core/` ports/domain、`application/` services/runtime 和 `adapters/` composition root；FastAPI 只持有单一 `ApplicationRuntime`。
-- Application contract v1 使用具名 `SessionSnapshot`、`TurnRequest`、`RunReceipt/RunControl` 与 control receipts，配套 JSON Schema、fixture、Runtime descriptor 和 Go reader；FastAPI/Pydantic 只负责 transport 映射。
+- Application contract v2 使用具名 `SessionSnapshot`、`TurnRequest`、`RunReceipt/RunControl` 与 control receipts，配套 JSON Schema、fixture、Runtime descriptor 和 Go reader；FastAPI/Pydantic 只负责 transport 映射，契约中不再包含 `language` 字段。
 - AgentLoop 通过 ModelRuntime、ToolRegistry、WorkspaceRuntime、ApprovalBroker、TraceSink、Clock 和 ProjectTrust ports 工作；ContextManager 负责模型感知、持久化 compaction。
 - SessionStore 明确为 SQLite adapter，并支持 Clock/ID 注入；新增 InMemorySessionRepository、JSONL usage、workspace/tool/approval/system adapters。
 - 新增 `/v1/meta/contract` 与 Go client contract reader，现有 HTTP/SSE contract 保持 v2，stdio JSON-RPC 标记为 planned。

@@ -37,9 +37,9 @@ type applicationContractFixture struct {
 
 func TestApplicationContractFixtureMatchesClientTypes(t *testing.T) {
 	var fixture applicationContractFixture
-	loadContractFixture(t, "application-contract.v1.json", &fixture)
+	loadContractFixture(t, "application-contract.v2.json", &fixture)
 
-	if fixture.ContractVersion != "1.0" {
+	if fixture.ContractVersion != "2.0" {
 		t.Fatalf("application contract version = %q", fixture.ContractVersion)
 	}
 	if fixture.TurnRequest.Model != "fixture-model" || fixture.TurnRequest.Workspace != "/workspace" {
@@ -122,11 +122,11 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	if contract.Transports["sse"].EventSchema != "v2" {
 		t.Fatalf("SSE contract = %#v", contract.Transports["sse"])
 	}
-	if contract.Application.Version != "1.0" || contract.Application.Types["turn"] != "TurnRequest" {
+	if contract.Application.Version != "2.0" || contract.Application.Types["turn"] != "TurnRequest" {
 		t.Fatalf("application contract = %#v", contract.Application)
 	}
 
-	created, err := api.CreateSession(ctx, CreateSessionRequest{Workspace: "/workspace", Language: "en-US"})
+	created, err := api.CreateSession(ctx, CreateSessionRequest{Workspace: "/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	}
 
 	sent, err := api.SendMessage(ctx, "sess_fixture", SendMessageRequest{
-		Message: "hello", Mode: "default", Workspace: "/workspace", Language: "en-US",
+		Message: "hello", Mode: "default", Workspace: "/workspace",
 	})
 	if err != nil {
 		t.Fatal(err)

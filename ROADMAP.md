@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | CLI + daemon | `[x]` | Go CLI 自动启动/停止/查询 Python Runtime。 |
 | HTTP + SSE | `[x]` | 本机 API、SSE event stream、daemon token auth。 |
-| 可嵌入 Runtime 分层 | `[x]` | Application contract v1、Application Runtime、Agent Core ports 与 adapters composition root 已落地；HTTP/SSE contract v2 可由 Go client 查询。 |
+| 可嵌入 Runtime 分层 | `[x]` | Application contract v2、Application Runtime、Agent Core ports 与 adapters composition root 已落地；HTTP/SSE contract v2 可由 Go client 查询。 |
 | Agent Loop v2 | `[x]` | 原生 function calling，模型自主调用工具。 |
 | 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic。 |
 | 工具系统 | `[x]` | 读文件、搜索、列文件、相关文件、bash、edit、review_diff。 |
@@ -42,7 +42,7 @@
 | Usage | `[x]` | token/cost 本地统计，按 session/day/model 查看。 |
 | Review rules | `[x]` | 确定性 review finding，支持配置禁用和阈值。 |
 | Docker Sandbox | `[~]` | test/build/lint MVP 已完成，仍缺写入挂载和 artifact 导出。 |
-| 单语言交互 | `[x]` | Runtime prompt、CLI、工具、策略、doctor 与 fixtures 统一英文；旧 language 字段仅保留 wire compatibility。 |
+| 单语言交互 | `[x]` | Runtime prompt、CLI、工具、策略、doctor 与 fixtures 统一英文；Application contract v2 已删除 language 字段。 |
 | 配置收敛 | `[~]` | 推荐 `main/reviewer/summarizer`，遗留键仍需迁移期兼容。 |
 | 依赖管理 | `[x]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，`requirements(-dev).lock.txt` 提供可复现安装。 |
 | 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home install/start/stop E2E 已接入 CI。 |
@@ -364,4 +364,4 @@ git diff --check
 
 ## 9. 下一轮建议
 
-M0–M2 与 WP1.4 已完成。下一步建议先实际使用常驻 REPL 收集 trace/eval 证据；需要 IDE、脚本嵌入时再启动 WP2.1 SDK/stdio JSONL RPC，并强制复用 Application contract v1。索引、subagent 和插件继续只由评测结果触发。
+M0–M2 与 WP1.4 已完成。下一步建议先实际使用常驻 REPL 收集 trace/eval 证据；需要 IDE、脚本嵌入时再启动 WP2.1 SDK/stdio JSONL RPC，并强制复用 Application contract v2。索引、subagent 和插件继续只由评测结果触发。

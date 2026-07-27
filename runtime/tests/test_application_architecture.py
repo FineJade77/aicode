@@ -62,7 +62,6 @@ class Request:
         self.workspace = str(workspace)
         self.message = "Explain the current status"
         self.mode = "default"
-        self.language = "en-US"
 
 
 def test_agent_core_import_has_no_transport_or_infrastructure_side_effects() -> None:
@@ -125,7 +124,7 @@ async def test_agent_core_runs_with_fake_model_and_in_memory_session(tmp_path: P
         approvals=SessionApprovalBroker(),
     )
     sessions = InMemorySessionRepository(clock=runtime.clock)
-    session = sessions.create(str(tmp_path), "en-US")
+    session = sessions.create(str(tmp_path))
 
     await AgentLoop(runtime).run(session, Request(tmp_path))
 
@@ -138,7 +137,8 @@ def test_versioned_contract_describes_current_and_future_transports() -> None:
     contract = contract_descriptor("0.1.0")
 
     assert contract["contract_version"] == "2.0"
-    assert contract["application"]["version"] == "1.0"
+    assert contract["application"]["version"] == "2.0"
+    assert contract["application"]["schema"] == "v2"
     assert contract["application"]["types"]["turn"] == "TurnRequest"
     assert contract["transports"]["http"]["status"] == "stable"
     assert contract["transports"]["sse"]["event_schema"] == "v2"

@@ -25,12 +25,11 @@ async def test_session_service_exposes_snapshot_and_binds_turn_contract(tmp_path
     sessions = InMemorySessionRepository()
     service = SessionService(sessions, trace, LocalWorkspaceRuntime())
 
-    created = await service.create(str(tmp_path), "en-US")
+    created = await service.create(str(tmp_path))
     turn = TurnRequest(
         message="inspect",
         mode="chat",
         workspace=str(tmp_path),
-        language="en-US",
         model="fixture-model",
     )
     bound = service.bind_turn(service.require(created.session_id), turn)
@@ -39,15 +38,16 @@ async def test_session_service_exposes_snapshot_and_binds_turn_contract(tmp_path
     assert isinstance(service.get(created.session_id), SessionSnapshot)
     assert isinstance(service.list()[0], SessionSnapshot)
     assert bound.workspace == created.workspace
-    assert bound.language == created.language
     assert bound.model == "fixture-model"
+    assert "language" not in created.to_dict()
+    assert "language" not in bound.to_dict()
 
 
 @pytest.mark.asyncio
 async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> None:
     trace = AuditLogger(path=tmp_path / "audit.jsonl")
     sessions = InMemorySessionRepository()
-    session = sessions.create(str(tmp_path), "en-US")
+    session = sessions.create(str(tmp_path))
 
     class ImmediateLoop:
         async def run(self, target_session, _turn: TurnRequest) -> None:
@@ -64,7 +64,6 @@ async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> No
             message="inspect",
             mode="chat",
             workspace=str(tmp_path),
-            language="en-US",
         ),
     )
     assert session.agent_runner_task is not None
@@ -81,7 +80,7 @@ async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> No
 async def test_context_service_returns_compaction_contract_for_in_memory_adapter(tmp_path: Path) -> None:
     trace = AuditLogger(path=tmp_path / "audit.jsonl")
     sessions = InMemorySessionRepository()
-    session = sessions.create(str(tmp_path), "en-US")
+    session = sessions.create(str(tmp_path))
     for index in range(5):
         session.append_message({"role": "user", "content": f"constraint-{index}"})
     service = ContextService(AgentRuntime(model_router=None, audit=trace), trace)

@@ -35,12 +35,12 @@ class FailingSummaryProvider:
 @pytest.fixture
 def session(tmp_path):
     store = SessionStore(path=tmp_path / "s.sqlite")
-    return store.create(workspace=str(tmp_path), language="en-US"), store
+    return store.create(workspace=str(tmp_path)), store
 
 
 def test_load_history_converts_legacy(session, tmp_path):
     sess, store = session
-    store.append_message(sess, {"message": "Fix a bug", "mode": "default", "workspace": str(tmp_path), "language": "en-US"})
+    store.append_message(sess, {"message": "Fix a bug", "mode": "default", "workspace": str(tmp_path)})
     store.append_message(sess, {"role": "assistant", "content": "Okay"})
     history = load_history(sess)
     assert history[0] == {"role": "user", "content": "Fix a bug"}
@@ -94,7 +94,7 @@ async def test_compact_noop_under_budget(session):
 async def test_persistent_compaction_is_reused_after_restart(tmp_path):
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(path=db_path)
-    sess = store.create(workspace=str(tmp_path), language="en-US")
+    sess = store.create(workspace=str(tmp_path))
     for index in range(10):
         store.append_message(sess, {"role": "user", "content": f"goal-{index} " + "x" * 30_000})
 
@@ -132,7 +132,7 @@ async def test_persistent_compaction_is_reused_after_restart(tmp_path):
 @pytest.mark.asyncio
 async def test_compaction_boundary_keeps_tool_call_and_result_together(tmp_path):
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="en-US")
+    sess = store.create(workspace=str(tmp_path))
     for index in range(8):
         store.append_message(
             sess,
@@ -176,7 +176,7 @@ async def test_compaction_boundary_keeps_tool_call_and_result_together(tmp_path)
 @pytest.mark.asyncio
 async def test_unfinished_tool_call_is_not_compacted(tmp_path):
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="en-US")
+    sess = store.create(workspace=str(tmp_path))
     store.append_message(
         sess,
         {
@@ -205,7 +205,7 @@ async def test_unfinished_tool_call_is_not_compacted(tmp_path):
 async def test_consecutive_compactions_advance_projection(tmp_path):
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(path=db_path)
-    sess = store.create(workspace=str(tmp_path), language="en-US")
+    sess = store.create(workspace=str(tmp_path))
     runtime = AgentRuntime(model_router=None, audit=None)
     for index in range(10):
         store.append_message(sess, {"role": "user", "content": f"first-{index} " + "a" * 30_000})
@@ -234,7 +234,7 @@ async def test_consecutive_compactions_advance_projection(tmp_path):
 @pytest.mark.asyncio
 async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tmp_path):
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="en-US")
+    sess = store.create(workspace=str(tmp_path))
     for index in range(8):
         store.append_message(sess, {"role": "user", "content": f"goal-{index}"})
     original = list(sess.messages)
@@ -262,7 +262,7 @@ async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tm
 @pytest.mark.asyncio
 async def test_manual_context_service_persists_compaction(tmp_path):
     store = SessionStore(path=tmp_path / "manual.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="en-US")
+    sess = store.create(workspace=str(tmp_path))
     for index in range(5):
         store.append_message(sess, {"role": "user", "content": f"constraint-{index}"})
     trace = AuditLogger(path=tmp_path / "audit.jsonl")

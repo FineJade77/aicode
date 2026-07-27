@@ -6,7 +6,6 @@
   "fixture": "long_context_resume",
   "user_request": "Summarize the current goal from the existing long session and continue.",
   "mode": "default",
-  "language": "en-US",
   "tags": ["long-context", "compaction"],
   "trust": "trusted",
   "profile": {

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.adapters.composition import build_application_runtime
 from app.adapters.usage import JsonlUsageRuntime
 from app.agent.loop import AgentLoop
-from app.application.contracts import DEFAULT_LANGUAGE, TurnRequest
+from app.application.contracts import TurnRequest
 from app.application.errors import ApplicationError
 from app.application.services import (
     ApprovalService,
@@ -44,7 +44,6 @@ app.middleware("http")(auth_middleware)
 
 class CreateSessionRequest(BaseModel):
     workspace: str
-    language: str = "en-US"
 
 
 class CreateSessionResponse(BaseModel):
@@ -81,7 +80,6 @@ class MessageRequest(BaseModel):
     message: str
     mode: str = "default"
     workspace: str
-    language: str = "en-US"
     model: str | None = None
 
     def to_contract(self) -> TurnRequest:
@@ -89,7 +87,6 @@ class MessageRequest(BaseModel):
             message=self.message,
             mode=self.mode,
             workspace=self.workspace,
-            language=self.language,
             model=self.model,
         )
 
@@ -249,7 +246,7 @@ async def remove_project_trust(request: TrustRequest) -> dict[str, Any]:
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
-    session = await session_service().create(request.workspace, request.language)
+    session = await session_service().create(request.workspace)
     return CreateSessionResponse(session_id=session.session_id)
 
 
@@ -377,11 +374,6 @@ def require_session(session_id: str) -> AgentSession:
         return session_service().require(session_id)
     except ApplicationError as exc:
         raise_http_error(exc)
-
-
-def effective_session_language(_workspace: str, _requested_language: str) -> str:
-    # Retained as a v1 transport compatibility helper.
-    return DEFAULT_LANGUAGE
 
 
 def bind_message_request_to_session(session: AgentSession, request: MessageRequest) -> TurnRequest:

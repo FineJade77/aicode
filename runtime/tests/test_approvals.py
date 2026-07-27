@@ -7,7 +7,7 @@ from app.sessions.store import Session
 
 @pytest.mark.asyncio
 async def test_session_approval_can_be_resolved() -> None:
-    session = Session(session_id="sess_test", workspace="/tmp/workspace", language="en-US")
+    session = Session(session_id="sess_test", workspace="/tmp/workspace")
     approval = session.create_approval("patch", {"path": "README.md"})
 
     async def resolve_later() -> None:
@@ -21,7 +21,7 @@ async def test_session_approval_can_be_resolved() -> None:
 
 @pytest.mark.asyncio
 async def test_session_approval_rejects_duplicate_resolution() -> None:
-    session = Session(session_id="sess_test", workspace="/tmp/workspace", language="en-US")
+    session = Session(session_id="sess_test", workspace="/tmp/workspace")
     approval = session.create_approval("patch", {"path": "README.md"})
 
     assert session.resolve_approval(approval.approval_id, accepted=False)
@@ -31,7 +31,7 @@ async def test_session_approval_rejects_duplicate_resolution() -> None:
 
 @pytest.mark.asyncio
 async def test_session_approval_timeout_expires_as_rejected() -> None:
-    session = Session(session_id="sess_test", workspace="/tmp/workspace", language="en-US")
+    session = Session(session_id="sess_test", workspace="/tmp/workspace")
     approval = session.create_approval("tool", {"tool": "bash"})
 
     assert await session.wait_for_approval(approval.approval_id, timeout_seconds=0.01) is False

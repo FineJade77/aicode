@@ -7,10 +7,9 @@ from app.models.provider import CompletionResult, ToolCallRequest
 
 
 class FakeRequest:
-    def __init__(self, workspace, mode="default", language="en-US", message="do something"):
+    def __init__(self, workspace, mode="default", message="do something"):
         self.workspace = str(workspace)
         self.mode = mode
-        self.language = language
         self.message = message
 
 
@@ -64,7 +63,7 @@ def test_system_prompt_is_english(tmp_path):
     (tmp_path / ".aicode" / "memory.md").write_text("Auth starts in server/auth.py", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
 
-    request = FakeRequest(tmp_path, mode="review", language="en-US")
+    request = FakeRequest(tmp_path, mode="review")
     prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
 
     assert "Use English for all user-facing output." in prompt

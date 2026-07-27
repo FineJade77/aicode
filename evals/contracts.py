@@ -71,7 +71,6 @@ class EvalTask(BaseModel):
     fixture: str
     user_request: str
     mode: Literal["default", "review", "diff", "test", "explain", "commit_message"] = "default"
-    language: str = "en-US"
     tags: list[str] = Field(default_factory=list)
     trust: Literal["trusted", "untrusted"] = "untrusted"
     approval_policy: dict[Literal["edit", "tool"], Literal["accept", "reject"]] = Field(

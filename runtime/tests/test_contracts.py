@@ -105,9 +105,9 @@ def test_provider_profile_schema_validates_runtime_status() -> None:
     assert set(schema["properties"]["auth_mode"]["enum"]) == {"required", "optional", "none"}
 
 
-def test_application_contract_v1_fixture_round_trips_named_types() -> None:
+def test_application_contract_v2_fixture_round_trips_named_types() -> None:
     schema = load_schema("application-contract.schema.json")
-    fixture = load_fixture("application-contract.v1.json")
+    fixture = load_fixture("application-contract.v2.json")
     contract_names = {
         "turn_request": "turnRequest",
         "run_receipt": "runReceipt",

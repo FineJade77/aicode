@@ -4,6 +4,7 @@
 
 - `http-responses.v2.json`：CLI 使用的关键 HTTP response，包括可空的 `cancel_run.run_id`、execution 和 Project Trust。
 - `sse-events.v2.json`：所有 v2 Runtime event、终态顺序和前向兼容样本。
+- `application-contract.v2.json`：不含语言字段的 Application Runtime 具名契约样本。
 
 兼容规则：
 

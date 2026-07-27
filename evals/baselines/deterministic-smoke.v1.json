@@ -13,13 +13,13 @@
     "aicode_version": "0.1.0",
     "compaction_prompt_version": "aicode.compaction.v1",
     "eval_contract": "1.0",
-    "eval_harness_sha256": "a840f475e33768a2d21421ce5bd5faa33976220c78911a524acd396c3be74b74",
+    "eval_harness_sha256": "d2718dd337176a14932f89d208352b85f22e1a0b74e55c3a5786e9e8fa3bfbf8",
     "eval_runner": "scripted-v1",
     "eval_schema_sha256": "20560af47fca86755225ef8f2734009f0189d72ac3b9728f4a3e563edba12224",
     "fixture_set_sha256": "abb364d78ef28803da05b3207838cbd183f0c15039923af0c75b384a1f4dbadc",
     "policy_sha256": "9296377ec0e7dd2f52c5f52e3fd204139fb3f0b13fac12fe5c53d72b8f6e5981",
     "prompt_sha256": "a68e47623a19255ebe2d34b06c368543a167562dd3cd38156e5de25b793ee23e",
-    "task_set_sha256": "bdc655483445f6c0c0284dbe6e0ebedc3168107cc4a3395524280aea35a86aa6",
+    "task_set_sha256": "e72c1653b15e81367e1cd169550dfa06d974979ec33ffe72daaa12101090849b",
     "tool_schema_sha256": "8e4b9c65e4732ead2f1c87759e5dc34008bfafd6fdc7174ede3e8af284060e07"
   },
   "recorded_metrics": {

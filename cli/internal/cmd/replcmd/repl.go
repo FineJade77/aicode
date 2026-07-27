@@ -423,7 +423,6 @@ func (runner *Runner) submit(
 		Message:   message,
 		Mode:      "chat",
 		Workspace: session.Workspace,
-		Language:  config.DefaultLanguage,
 		Model:     model,
 	})
 	cancel()
@@ -453,7 +452,6 @@ func (runner *Runner) createSession(ctx context.Context) (client.SessionResponse
 	requestCtx, cancel := withTimeout(ctx)
 	created, err := runner.API.CreateSession(requestCtx, client.CreateSessionRequest{
 		Workspace: runner.Workspace,
-		Language:  config.DefaultLanguage,
 	})
 	cancel()
 	if err != nil {
@@ -462,7 +460,6 @@ func (runner *Runner) createSession(ctx context.Context) (client.SessionResponse
 	return client.SessionResponse{
 		SessionID: created.SessionID,
 		Workspace: runner.Workspace,
-		Language:  config.DefaultLanguage,
 	}, nil
 }
 

@@ -248,10 +248,10 @@
 
 完成记录（2026-07-27）：
 
-- 新增 Application contract v1：`SessionSnapshot`、`AgentRunState`、`TurnRequest`、`RunReceipt`、`RunControl`、`SteerReceipt` 与 `CompactionReceipt`，均位于不依赖 FastAPI/Pydantic 的 application 层。
+- Application contract 已升级至 v2：`SessionSnapshot`、`AgentRunState`、`TurnRequest`、`RunReceipt`、`RunControl`、`SteerReceipt` 与 `CompactionReceipt` 均位于不依赖 FastAPI/Pydantic 的 application 层，且已删除 `language` 字段。
 - `SessionService` 公开 snapshot read model，并通过显式 `require` 隔离内部 domain session；`RunCoordinator`、`ContextService` 改为返回具名 contract。
 - FastAPI `MessageRequest` 只作为 transport DTO，并显式转换为 `TurnRequest`；HTTP handler 在边界把 application contract 序列化为现有 v1 HTTP response，外部行为不变。
-- 新增 `application-contract.schema.json`、v1 fixture 和双向 round-trip 测试；`GET /v1/meta/contract` 公开 application contract v1，Go client 可读取 version/schema/type map。
+- `application-contract.schema.json`、v2 fixture 和双向 round-trip 测试已同步；`GET /v1/meta/contract` 公开 application contract v2，Go client 可读取 version/schema/type map。
 - 新增 Application service characterization，覆盖 Session create/get/list/bind、Run submit/cancel 和 in-memory manual compaction 的返回类型。
 - eval 影响：只收紧 Application/transport 类型边界，不修改 prompt、tool、policy 或 Agent 行为；deterministic 4-task smoke baseline 保持 PASS。
 - 验证：Python 全量 297 项通过（Docker 与受限 localhost bind 各跳过 1 项），Go 全量测试、go vet、Python compileall、ruff 和 `git diff --check` 全部通过。

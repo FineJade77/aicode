@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aicode.dev/schemas/application-contract.schema.json",
-  "x-aicode-contract-version": "1.0",
+  "x-aicode-contract-version": "2.0",
   "title": "aicode Application Runtime Contract",
   "$defs": {
     "turnRequest": {
       "type": "object",
-      "required": ["message", "mode", "workspace", "language"],
+      "required": ["message", "mode", "workspace"],
       "properties": {
         "message": {
           "type": "string"
@@ -16,10 +16,6 @@
         },
         "workspace": {
           "type": "string"
-        },
-        "language": {
-          "const": "en-US",
-          "description": "Deprecated v1 compatibility field. The runtime is English-only."
         },
         "model": {
           "type": ["string", "null"]
@@ -140,7 +136,6 @@
       "required": [
         "session_id",
         "workspace",
-        "language",
         "created_at",
         "updated_at",
         "messages",
@@ -153,10 +148,6 @@
         },
         "workspace": {
           "type": "string"
-        },
-        "language": {
-          "const": "en-US",
-          "description": "Deprecated v1 compatibility field. The runtime is English-only."
         },
         "created_at": {
           "type": "string"

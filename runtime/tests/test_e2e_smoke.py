@@ -18,11 +18,10 @@ from tests.fakes import FakeProvider, text_turn, tool_turn
 
 
 class Request:
-    def __init__(self, workspace, message="Fix add", mode="default", language="en-US"):
+    def __init__(self, workspace, message="Fix add", mode="default"):
         self.workspace = str(workspace)
         self.message = message
         self.mode = mode
-        self.language = language
 
 
 @pytest.mark.asyncio
@@ -48,7 +47,7 @@ async def test_full_fix_flow(tmp_path):
         approvals=SessionApprovalBroker(),
     )
     store = SessionStore(path=tmp_path / "s.sqlite")
-    session = store.create(workspace=str(tmp_path), language="en-US")
+    session = store.create(workspace=str(tmp_path))
 
     async def approve_all_pending():
         """Background task that approves all pending edits."""

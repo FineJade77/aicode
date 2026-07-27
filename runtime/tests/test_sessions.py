@@ -9,7 +9,7 @@ from app.sessions.store import Session, SessionEvents, SessionStore, normalize_c
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
     store.append_message(session, {"message": "hello", "mode": "chat"})
 
     reloaded = SessionStore(db_path)
@@ -23,8 +23,8 @@ def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
 
 def test_session_store_lists_newest_first(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
-    first = store.create(workspace="/repo1", language="en-US")
-    second = store.create(workspace="/repo2", language="en-US")
+    first = store.create(workspace="/repo1")
+    second = store.create(workspace="/repo2")
 
     sessions = store.list()
 
@@ -34,8 +34,8 @@ def test_session_store_lists_newest_first(tmp_path: Path) -> None:
 
 def test_session_store_lists_recently_updated_first(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
-    first = store.create(workspace="/repo1", language="en-US")
-    second = store.create(workspace="/repo2", language="en-US")
+    first = store.create(workspace="/repo1")
+    second = store.create(workspace="/repo2")
 
     store.append_message(first, {"message": "resume old session"})
     sessions = store.list()
@@ -47,7 +47,7 @@ def test_session_store_lists_recently_updated_first(tmp_path: Path) -> None:
 def test_session_store_last_survives_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     reloaded = SessionStore(db_path)
 
@@ -57,8 +57,8 @@ def test_session_store_last_survives_restart(tmp_path: Path) -> None:
 def test_session_store_last_tracks_recent_activity_after_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    first = store.create(workspace="/repo1", language="en-US")
-    second = store.create(workspace="/repo2", language="en-US")
+    first = store.create(workspace="/repo1")
+    second = store.create(workspace="/repo2")
 
     store.append_message(first, {"message": "resume old session"})
     reloaded = SessionStore(db_path)
@@ -97,6 +97,8 @@ def test_session_store_migrates_old_schema(tmp_path: Path) -> None:
     assert session.updated_at.isoformat() == "2026-07-16T00:00:00+00:00"
     assert session.compactions == []
     with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+        assert columns == {"session_id", "workspace", "created_at", "updated_at"}
         assert conn.execute(
             "select count(*) from sqlite_master where type = 'table' and name = 'compactions'"
         ).fetchone()[0] == 1
@@ -153,7 +155,7 @@ async def test_session_events_default_after_marks_latest_run_start() -> None:
 async def test_session_store_persists_events(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     await session.events.put({"type": "run.started"})
     await session.events.put({"type": "final", "summary": "done"})
@@ -172,7 +174,7 @@ async def test_session_store_persists_events(tmp_path: Path) -> None:
 async def test_session_store_expires_unresolved_approval_after_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     await session.events.put(
         {
@@ -206,7 +208,7 @@ async def test_session_store_expires_unresolved_approval_after_restart(tmp_path:
 async def test_session_store_does_not_expire_resolved_approval_after_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     await session.events.put(
         {
@@ -232,7 +234,7 @@ async def test_session_store_does_not_expire_resolved_approval_after_restart(tmp
 async def test_session_store_expires_unresolved_edit_approval_after_restart(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     await session.events.put(
         {
@@ -311,7 +313,7 @@ async def test_assistant_delta_flood_does_not_evict_real_events() -> None:
 async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path, event_limit=2)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     for index in range(4):
         await session.events.put({"type": "final", "summary": str(index)})
@@ -332,7 +334,7 @@ async def test_session_store_prunes_persisted_events(tmp_path: Path) -> None:
 async def test_flush_waits_for_pending_writes(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     await session.events.put({"type": "tool.started", "tool": "read_file"})
     await store.flush()
@@ -354,7 +356,7 @@ async def test_flush_waits_for_pending_writes(tmp_path: Path) -> None:
 async def test_event_writer_survives_individual_write_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     original_write = store._write_event_sync
     call_count = {"value": 0}
@@ -395,7 +397,7 @@ async def test_flush_is_a_noop_when_nothing_was_ever_written(tmp_path: Path) -> 
 async def test_aclose_flushes_and_stops_event_writer(tmp_path: Path) -> None:
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(db_path)
-    session = store.create(workspace="/repo", language="en-US")
+    session = store.create(workspace="/repo")
 
     await session.events.put({"type": "final", "summary": "done"})
     assert store.event_writer_status()["writer_running"] is True
@@ -422,9 +424,9 @@ def test_normalize_event_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch)
 
 def test_idle_sessions_are_evicted_beyond_cache_limit(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=2)
-    first = store.create(workspace="/repo1", language="en-US")
-    second = store.create(workspace="/repo2", language="en-US")
-    third = store.create(workspace="/repo3", language="en-US")
+    first = store.create(workspace="/repo1")
+    second = store.create(workspace="/repo2")
+    third = store.create(workspace="/repo3")
 
     assert len(store._sessions) == 2
     assert first.session_id not in store._sessions
@@ -434,8 +436,8 @@ def test_idle_sessions_are_evicted_beyond_cache_limit(tmp_path: Path) -> None:
 
 def test_evicted_session_is_still_reachable_via_get(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=1)
-    first = store.create(workspace="/repo1", language="en-US")
-    store.create(workspace="/repo2", language="en-US")
+    first = store.create(workspace="/repo1")
+    store.create(workspace="/repo2")
 
     assert first.session_id not in store._sessions
 
@@ -448,13 +450,13 @@ def test_evicted_session_is_still_reachable_via_get(tmp_path: Path) -> None:
 
 def test_get_refreshes_recency_and_protects_from_eviction(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=2)
-    first = store.create(workspace="/repo1", language="en-US")
-    store.create(workspace="/repo2", language="en-US")
+    first = store.create(workspace="/repo1")
+    store.create(workspace="/repo2")
 
     # Touch first so it becomes the most recently used session.
     store.get(first.session_id)
 
-    store.create(workspace="/repo3", language="en-US")
+    store.create(workspace="/repo3")
 
     # first was just accessed and must remain; repo2 should be evicted.
     assert first.session_id in store._sessions
@@ -462,10 +464,10 @@ def test_get_refreshes_recency_and_protects_from_eviction(tmp_path: Path) -> Non
 
 def test_session_with_pending_approval_is_never_evicted(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=1)
-    pending = store.create(workspace="/repo1", language="en-US")
+    pending = store.create(workspace="/repo1")
     pending.create_approval("edit", {"path": "a.py"})
 
-    idle = store.create(workspace="/repo2", language="en-US")
+    idle = store.create(workspace="/repo2")
 
     # With cache_limit=1, pending cannot be evicted due to its approval; idle is the only eligible session.
     assert pending.session_id in store._sessions
@@ -480,10 +482,10 @@ def test_session_with_active_agent_runner_is_never_evicted(tmp_path: Path) -> No
 
     async def run() -> None:
         store = SessionStore(tmp_path / "sessions.sqlite", cache_limit=1)
-        running = store.create(workspace="/repo1", language="en-US")
+        running = store.create(workspace="/repo1")
         running.agent_runner_task = asyncio.create_task(_never_finishes())
 
-        idle = store.create(workspace="/repo2", language="en-US")
+        idle = store.create(workspace="/repo2")
 
         assert running.session_id in store._sessions
         assert idle.session_id not in store._sessions
@@ -498,7 +500,7 @@ def test_session_with_active_agent_runner_is_never_evicted(tmp_path: Path) -> No
 
 
 def test_session_status_exposes_active_run_progress() -> None:
-    session = Session(session_id="sess_test", workspace="/repo", language="en-US")
+    session = Session(session_id="sess_test", workspace="/repo")
 
     session.start_agent_run("run_test")
     session.mark_agent_progress("tool.bash")

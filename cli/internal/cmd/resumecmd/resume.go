@@ -116,7 +116,6 @@ func runResumeAgent(cfg config.Config, session sessionInfo, message string) erro
 		Message:   message,
 		Mode:      "chat",
 		Workspace: session.Workspace,
-		Language:  config.DefaultLanguage,
 	})
 	if err != nil {
 		return err

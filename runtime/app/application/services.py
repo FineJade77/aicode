@@ -11,7 +11,6 @@ from app.agent.loop import AgentLoop
 from app.agent.types import AgentRuntime
 from app.application.contracts import (
     CompactionReceipt,
-    DEFAULT_LANGUAGE,
     RunControl,
     RunReceipt,
     SessionSnapshot,
@@ -45,13 +44,12 @@ class SessionService:
         self.trace = trace
         self.workspace = workspace
 
-    async def create(self, workspace: str, _language: str) -> SessionSnapshot:
-        session = self.sessions.create(workspace=workspace, language=DEFAULT_LANGUAGE)
+    async def create(self, workspace: str) -> SessionSnapshot:
+        session = self.sessions.create(workspace=workspace)
         self.trace.record(
             "session.created",
             session_id=session.session_id,
             workspace=session.workspace,
-            data={"language": session.language},
         )
         await session.events.put(
             {
@@ -66,7 +64,6 @@ class SessionService:
         session = self.sessions.get(session_id)
         if session is None:
             raise NotFound("session not found")
-        session.language = DEFAULT_LANGUAGE
         return session
 
     def get(self, session_id: str) -> SessionSnapshot:
@@ -108,7 +105,6 @@ class RunCoordinator:
         queue_position = session.agent_queue.qsize()
         trace_data = {
             "mode": request.mode,
-            "language": request.language,
             "message_hash": stable_hash(request.message),
             "message_preview": request.message[:200],
             "run_id": queued.run_id,

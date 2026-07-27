@@ -24,7 +24,6 @@ var streamReconnectDelay = 250 * time.Millisecond
 
 type CreateSessionRequest struct {
 	Workspace string `json:"workspace"`
-	Language  string `json:"language"`
 }
 
 type CreateSessionResponse struct {
@@ -35,7 +34,6 @@ type SendMessageRequest struct {
 	Message   string `json:"message"`
 	Mode      string `json:"mode"`
 	Workspace string `json:"workspace"`
-	Language  string `json:"language"`
 	Model     string `json:"model,omitempty"`
 }
 
@@ -65,7 +63,6 @@ type SessionAgentStatus struct {
 type SessionResponse struct {
 	SessionID string             `json:"session_id"`
 	Workspace string             `json:"workspace"`
-	Language  string             `json:"language"`
 	CreatedAt string             `json:"created_at"`
 	UpdatedAt string             `json:"updated_at"`
 	Messages  []map[string]any   `json:"messages"`
