@@ -19,7 +19,6 @@ class AgentRequest(Protocol):
     message: str
     mode: str
     workspace: str
-    language: str
     model: str | None
 
 

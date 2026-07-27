@@ -104,7 +104,6 @@ class ToolRuntime(Protocol):
         self,
         workspace: str,
         mode: str,
-        language: str,
         *,
         execution: Any = None,
         session_id: str = "",
@@ -134,8 +133,6 @@ class ToolRegistry(ToolRuntime, Protocol):
 
 @runtime_checkable
 class WorkspaceRuntime(Protocol):
-    def effective_language(self, workspace: str, requested_language: str) -> str: ...
-
     def same_workspace(self, left: str, right: str) -> bool: ...
 
     def prompt_context(self, workspace: Path) -> Any: ...
@@ -172,5 +169,4 @@ class ApprovalBroker(Protocol):
         *,
         kind: str,
         payload: dict[str, Any],
-        language: str,
     ) -> bool | None: ...

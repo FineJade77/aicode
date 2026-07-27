@@ -175,31 +175,20 @@ def test_prior_bypass_inputs_still_deny_after_quote_aware_split(engine):
     assert gate_bash(engine, "rm -rf / && true").verdict == "deny"
 
 
-def test_gate_reason_localized_english(engine):
-    # 默认（中文）
-    zh = engine.gate("bash", {"command": "rm -rf /"})
-    assert "禁止" in zh.reason
-    # 英文会话
-    en = engine.gate("bash", {"command": "rm -rf /"}, language="en-US")
-    assert en.verdict == "deny"
-    assert "not allowed" in en.reason and all(ord(c) < 128 for c in en.reason)
-    # review 模式英文
-    en_review = engine.gate("edit_file", {"path": "a.py"}, mode="review", language="en-US")
-    assert en_review.verdict == "deny"
-    assert "read-only" in en_review.reason
-
-
-def test_gate_verdict_unaffected_by_language(engine):
-    # 语言只影响 reason 文本，不影响判定
-    for cmd in ["ls", "sed -i s/a/b/ f", "git push origin main", "rm -rf /"]:
-        assert engine.gate("bash", {"command": cmd}).verdict == engine.gate("bash", {"command": cmd}, language="en-US").verdict
+def test_gate_reason_is_english(engine):
+    decision = engine.gate("bash", {"command": "rm -rf /"})
+    assert decision.verdict == "deny"
+    assert "not allowed" in decision.reason and all(ord(char) < 128 for char in decision.reason)
+    review = engine.gate("edit_file", {"path": "a.py"}, mode="review")
+    assert review.verdict == "deny"
+    assert "read-only" in review.reason
 
 
 def test_untrusted_workspace_requires_approval_for_project_commands(engine, tmp_path):
     for command in ["pytest", "go test ./...", "npm test", "python3 -m pytest"]:
         decision = gate_bash(engine, command, workspace=tmp_path, trust_level="untrusted")
         assert decision.verdict == "ask", command
-        assert "未信任" in decision.reason
+        assert "untrusted" in decision.reason
 
 
 def test_trusted_workspace_allows_low_risk_project_commands(engine, tmp_path):
@@ -266,7 +255,7 @@ def test_shell_rejects_literal_runtime_secret(engine, tmp_path, monkeypatch):
     decision = gate_bash(engine, "printf provider-secret-value", workspace=tmp_path)
 
     assert decision.verdict == "deny"
-    assert "敏感环境变量" in decision.reason
+    assert "sensitive Runtime environment value" in decision.reason
 
 
 def test_shell_rejects_path_qualified_executable_outside_workspace(engine, tmp_path):

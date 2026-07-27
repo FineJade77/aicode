@@ -20,11 +20,11 @@ class DockerExecutionBackend:
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         if not request.shell_command:
-            raise ValueError("Docker backend 需要 shell_command")
+            raise ValueError("Docker backend requires shell_command")
         if request.network != "none":
-            raise ValueError("Docker backend 当前只支持 network=none")
+            raise ValueError("Docker backend currently supports only network=none")
         if request.writable_paths:
-            raise ValueError("Docker backend 当前只支持只读 workspace")
+            raise ValueError("Docker backend currently supports only a read-only workspace")
 
         workspace = request.workspace.expanduser().resolve()
         with tempfile.TemporaryDirectory(prefix="aicode-sandbox-mask-") as temp_dir:
@@ -59,9 +59,9 @@ def _docker_args(request: ExecutionRequest, workspace: Path, masks: list[tuple[P
     memory = limits.memory or "2g"
     pids = limits.pids_limit or 256
     if not CPU_PATTERN.fullmatch(cpus) or float(cpus) <= 0:
-        raise ValueError("Docker cpus 限制无效")
+        raise ValueError("Docker cpus limit is invalid")
     if not MEMORY_PATTERN.fullmatch(memory):
-        raise ValueError("Docker memory 限制无效")
+        raise ValueError("Docker memory limit is invalid")
 
     args = [
         "docker",

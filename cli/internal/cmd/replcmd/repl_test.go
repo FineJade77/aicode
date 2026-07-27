@@ -196,7 +196,6 @@ func TestNonTTYQueuesFollowUpsWithModelOverride(t *testing.T) {
 		Out:       &out,
 		Err:       &stderr,
 		Workspace: "/workspace",
-		Language:  "zh-CN",
 	}
 
 	if err := runner.Run(context.Background()); err != nil {
@@ -233,7 +232,6 @@ func TestREPLControlCommandsManagePersistentSession(t *testing.T) {
 		Out:       &out,
 		Err:       &stderr,
 		Workspace: "/workspace",
-		Language:  "zh-CN",
 	}
 
 	if err := runner.Run(context.Background()); err != nil {
@@ -245,7 +243,7 @@ func TestREPLControlCommandsManagePersistentSession(t *testing.T) {
 	if api.sessionCounter != 2 || api.compactCalls != 1 || api.modelCalls != 1 {
 		t.Fatalf("create=%d compact=%d models=%d", api.sessionCounter, api.compactCalls, api.modelCalls)
 	}
-	for _, expected := range []string{"Session Status", "当前消息模型覆盖: local-coder", "上下文压缩: compacted", "新会话: sess_2", "恢复会话: sess_1"} {
+	for _, expected := range []string{"Session Status", "Current message model override: local-coder", "Context compaction: compacted", "New session: sess_2", "Resumed session: sess_1"} {
 		if !strings.Contains(out.String(), expected) {
 			t.Fatalf("output missing %q: %s", expected, out.String())
 		}
@@ -258,7 +256,6 @@ func TestResumeLastUsesSessionBeforeREPLBootstrap(t *testing.T) {
 	api.sessions["sess_1"] = client.SessionResponse{
 		SessionID: "sess_1",
 		Workspace: "/previous",
-		Language:  "zh-CN",
 	}
 	api.lastSessionID = "sess_1"
 	var out bytes.Buffer
@@ -268,13 +265,12 @@ func TestResumeLastUsesSessionBeforeREPLBootstrap(t *testing.T) {
 		Out:       &out,
 		Err:       io.Discard,
 		Workspace: "/workspace",
-		Language:  "zh-CN",
 	}
 
 	if err := runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "恢复会话: sess_1\n工作区: /previous") {
+	if !strings.Contains(out.String(), "Resumed session: sess_1\nWorkspace: /previous") {
 		t.Fatalf("previous session was not resumed: %q", out.String())
 	}
 }
@@ -290,7 +286,6 @@ func TestSteerAppliesWhileRunIsActive(t *testing.T) {
 		Out:         &out,
 		Err:         &stderr,
 		Workspace:   "/workspace",
-		Language:    "zh-CN",
 		Interactive: true,
 	}
 
@@ -318,12 +313,11 @@ func TestNonTTYReturnsCommandErrorsWithoutPromptNoise(t *testing.T) {
 		Out:       &out,
 		Err:       &stderr,
 		Workspace: "/workspace",
-		Language:  "zh-CN",
 	}
 
 	err := runner.Run(context.Background())
 
-	if err == nil || !strings.Contains(err.Error(), "未知 REPL 命令") {
+	if err == nil || !strings.Contains(err.Error(), "unknown REPL command") {
 		t.Fatalf("error = %v", err)
 	}
 	if stderr.Len() != 0 {
@@ -347,7 +341,6 @@ func TestApprovalDoesNotConsumePendingFollowUpAsDecision(t *testing.T) {
 		Out:         &out,
 		Err:         &stderr,
 		Workspace:   "/workspace",
-		Language:    "zh-CN",
 		Interactive: true,
 	}
 	done := make(chan error, 1)
@@ -363,7 +356,7 @@ func TestApprovalDoesNotConsumePendingFollowUpAsDecision(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		runner.outputMu.Lock()
-		prompted := strings.Contains(out.String(), "y=允许")
+		prompted := strings.Contains(out.String(), "y=allow")
 		runner.outputMu.Unlock()
 		if prompted {
 			break
@@ -413,7 +406,6 @@ func TestCtrlCFirstCancelsActiveRun(t *testing.T) {
 		Out:         &out,
 		Err:         &stderr,
 		Workspace:   "/workspace",
-		Language:    "zh-CN",
 		Interactive: true,
 		Signals:     signals,
 	}

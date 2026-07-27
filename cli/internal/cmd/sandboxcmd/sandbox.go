@@ -23,10 +23,10 @@ const sandboxTimeout = 30 * time.Minute
 
 func Run(cfg config.Config, sandbox string, args []string) error {
 	if sandbox != "docker" {
-		return fmt.Errorf("暂只支持: aicode --sandbox docker <test|build|lint>")
+		return fmt.Errorf("currently supported: aicode --sandbox docker <test|build|lint>")
 	}
 	if len(args) != 1 || !supportedSandboxAction(args[0]) {
-		return fmt.Errorf("用法: aicode --sandbox docker <test|build|lint>")
+		return fmt.Errorf("usage: aicode --sandbox docker <test|build|lint>")
 	}
 	root, err := workspace.Detect()
 	if err != nil {
@@ -57,7 +57,7 @@ func Run(cfg config.Config, sandbox string, args []string) error {
 		cancelContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, _ = api.CancelExecution(cancelContext, executionID)
-		return fmt.Errorf("sandbox execution 已取消")
+		return fmt.Errorf("sandbox execution was cancelled")
 	}
 	if err != nil {
 		return err
@@ -65,7 +65,7 @@ func Run(cfg config.Config, sandbox string, args []string) error {
 	renderExecution(response)
 	if response.Status != "succeeded" {
 		return fmt.Errorf(
-			"sandbox execution %s（exit=%d, status=%s）",
+			"sandbox execution %s (exit=%d, status=%s)",
 			response.ExecutionID,
 			response.ExitCode,
 			response.Status,
@@ -104,7 +104,7 @@ func renderExecution(response client.ExecutionResponse) {
 func newExecutionID() (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("生成 execution id 失败: %w", err)
+		return "", fmt.Errorf("failed to generate execution id: %w", err)
 	}
 	return "exec_" + hex.EncodeToString(raw), nil
 }

@@ -13,7 +13,7 @@ import (
 
 func Run(cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: aicode daemon <start|stop|status>")
+		return fmt.Errorf("usage: aicode daemon <start|stop|status>")
 	}
 
 	switch args[0] {
@@ -21,13 +21,13 @@ func Run(cfg config.Config, args []string) error {
 		if err := daemon.Start(cfg); err != nil {
 			return err
 		}
-		fmt.Println("Runtime daemon 已启动。")
+		fmt.Println("Runtime daemon started.")
 		return nil
 	case "stop":
 		if err := daemon.Stop(); err != nil {
 			return err
 		}
-		fmt.Println("Runtime daemon 已停止。")
+		fmt.Println("Runtime daemon stopped.")
 		return nil
 	case "status":
 		ctx, cancel := context.WithTimeout(context.Background(), runtimeio.DefaultTimeout)
@@ -39,6 +39,6 @@ func Run(cfg config.Config, args []string) error {
 		renderer.PrintDaemonStatus(status)
 		return nil
 	default:
-		return fmt.Errorf("未知 daemon 命令: %s", args[0])
+		return fmt.Errorf("unknown daemon command: %s", args[0])
 	}
 }

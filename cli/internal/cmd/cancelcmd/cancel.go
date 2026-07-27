@@ -35,11 +35,11 @@ func Run(cfg config.Config, args []string) error {
 		if response.RunID != nil {
 			runID = *response.RunID
 		}
-		fmt.Printf("已取消任务 %s；队列中剩余 %d 个任务。\n", runID, response.Queued)
+		fmt.Printf("Cancelled run %s; %d runs remain queued.\n", runID, response.Queued)
 	case "idle":
-		fmt.Println("该会话当前没有正在执行的任务。")
+		fmt.Println("This session has no active run.")
 	default:
-		fmt.Printf("取消请求状态: %s\n", response.Status)
+		fmt.Printf("Cancellation status: %s\n", response.Status)
 	}
 	return nil
 }
@@ -62,16 +62,16 @@ func resolveSessionID(cfg config.Config, args []string) (string, error) {
 	}
 	payload, ok := value.(map[string]any)
 	if !ok || payload == nil {
-		return "", fmt.Errorf("没有可取消的 session")
+		return "", fmt.Errorf("no session is available to cancel")
 	}
 	sessionID, _ := payload["session_id"].(string)
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return "", fmt.Errorf("session 响应缺少 session_id")
+		return "", fmt.Errorf("session response is missing session_id")
 	}
 	return sessionID, nil
 }
 
 func usage() error {
-	return fmt.Errorf("用法: aicode cancel <session_id> 或 aicode cancel --last")
+	return fmt.Errorf("usage: aicode cancel <session_id> or aicode cancel --last")
 }

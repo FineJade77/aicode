@@ -22,7 +22,6 @@ class DefaultToolRuntime:
         self,
         workspace: str,
         mode: str,
-        language: str,
         *,
         execution: Any = None,
         session_id: str = "",
@@ -32,7 +31,6 @@ class DefaultToolRuntime:
         return build_tool_context(
             workspace,
             mode,
-            language,
             execution=execution,
             session_id=session_id,
             run_id=run_id,

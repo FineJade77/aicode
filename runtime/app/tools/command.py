@@ -62,7 +62,7 @@ def resolve_internal_argv(argv: tuple[str, ...], cwd: Path) -> tuple[str, ...]:
         resolved.relative_to(cwd.resolve())
     except ValueError:
         return (str(resolved), *argv[1:])
-    raise ValueError(f"拒绝执行 workspace PATH 中的内部工具: {executable}")
+    raise ValueError(f"refusing to run an internal tool from the workspace PATH: {executable}")
 
 
 async def run_shell_command(

@@ -92,9 +92,9 @@ class TrustStore:
         except FileNotFoundError:
             return {"schema_version": TRUST_SCHEMA_VERSION, "projects": {}}
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"读取 project trust store 失败: {exc}") from exc
+            raise ValueError(f"failed to read the project trust store: {exc}") from exc
         if raw.get("schema_version") != TRUST_SCHEMA_VERSION or not isinstance(raw.get("projects"), dict):
-            raise ValueError("project trust store schema 无效")
+            raise ValueError("project trust store schema is invalid")
         return raw
 
     def _write(self, data: dict[str, Any]) -> None:
@@ -121,13 +121,13 @@ class TrustStore:
             path.relative_to(workspace)
         except ValueError:
             return
-        raise ValueError("project trust store 必须位于 workspace 外")
+        raise ValueError("project trust store must be outside the workspace")
 
 
 def canonical_workspace(workspace: Path) -> Path:
     canonical = workspace.expanduser().resolve()
     if not canonical.is_dir():
-        raise ValueError(f"workspace 不存在或不是目录: {canonical}")
+        raise ValueError(f"workspace does not exist or is not a directory: {canonical}")
     return canonical
 
 

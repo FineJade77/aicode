@@ -9,7 +9,6 @@ def test_parse_project_config() -> None:
     config = parse_project_config(
         {
             "projectName": "demo",
-            "defaultLanguage": "en-US",
             "commands": {"test": "python3 -m pytest tests/unit"},
             "protectedPaths": [".env", "secret/**"],
             "workspaces": [{"name": "api", "path": "../api", "mode": "read_only"}],
@@ -22,7 +21,6 @@ def test_parse_project_config() -> None:
     )
 
     assert config.project_name == "demo"
-    assert config.default_language == "en-US"
     assert config.commands["test"] == "python3 -m pytest tests/unit"
     assert ".env" in config.protected_paths
     assert ".ssh/**" in config.protected_paths

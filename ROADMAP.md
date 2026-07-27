@@ -42,7 +42,7 @@
 | Usage | `[x]` | token/cost 本地统计，按 session/day/model 查看。 |
 | Review rules | `[x]` | 确定性 review finding，支持配置禁用和阈值。 |
 | Docker Sandbox | `[~]` | test/build/lint MVP 已完成，仍缺写入挂载和 artifact 导出。 |
-| Prompt 国际化 | `[~]` | Runtime prompt 支持中英文；CLI 固定文案仍以中文为主。 |
+| 单语言交互 | `[x]` | Runtime prompt、CLI、工具、策略、doctor 与 fixtures 统一英文；旧 language 字段仅保留 wire compatibility。 |
 | 配置收敛 | `[~]` | 推荐 `main/reviewer/summarizer`，遗留键仍需迁移期兼容。 |
 | 依赖管理 | `[x]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，`requirements(-dev).lock.txt` 提供可复现安装。 |
 | 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home install/start/stop E2E 已接入 CI。 |
@@ -205,7 +205,7 @@
 
 - [ ] 为 prompt 安全层级增加回归测试。
   - `.aicode/rules.md` 不能覆盖系统安全策略。
-  - 英文模式下也明确 project rules 的安全边界。
+  - 英文 system prompt 明确 project rules 的安全边界。
   - review/commit-message/explain mode 的 prompt 约束保持一致。
 
 ### 4.2 收敛配置体验
@@ -302,7 +302,7 @@ aicode models --json
 - [ ] 失败原因摘要。
 - [ ] `aicode pr-description`。
 - [ ] `aicode explain <symbol>` 更精准。
-- [ ] 英文 CLI 固定文案补齐。
+- [x] CLI 固定文案统一英文。
 
 验收：
 

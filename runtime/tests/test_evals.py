@@ -1,6 +1,4 @@
 import json
-from pathlib import Path
-
 import pytest
 
 from evals import EVAL_CONTRACT_VERSION, REPORT_SCHEMA_VERSION, TRACE_SCHEMA_VERSION

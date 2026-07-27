@@ -4,9 +4,9 @@
   "suite": "smoke",
   "description": "A small-context model must compact before its first main request and finish from the projection.",
   "fixture": "long_context_resume",
-  "user_request": "根据已有长会话，概括当前目标并继续。",
+  "user_request": "Summarize the current goal from the existing long session and continue.",
   "mode": "default",
-  "language": "zh-CN",
+  "language": "en-US",
   "tags": ["long-context", "compaction"],
   "trust": "trusted",
   "profile": {
@@ -28,13 +28,13 @@
   "model_script": [
     {
       "purpose": "summarizer",
-      "text": "- 当前目标：恢复长会话并继续。\\n- 未修改任何文件。",
+      "text": "- Current goal: resume the long session and continue.\\n- No files were modified.",
       "input_tokens": 100,
       "output_tokens": 20
     },
     {
       "purpose": "main",
-      "text": "长会话已从持久化摘要恢复，当前目标仍是继续任务。",
+      "text": "The long session was restored from its persistent summary, and the current goal remains to continue the task.",
       "input_tokens": 80,
       "output_tokens": 15
     }
@@ -46,7 +46,7 @@
     "required_events": ["context.budget", "usage.recorded", "final"],
     "forbidden_events": ["edit.applied", "tool.output"],
     "required_audit_events": ["usage.recorded", "session.final"],
-    "final_contains": ["持久化摘要恢复"],
+    "final_contains": ["restored from its persistent summary"],
     "minimum_compactions": 1,
     "maximum_agent_executions": 0
   }

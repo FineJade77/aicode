@@ -56,7 +56,7 @@ func SetWorkspace(workspacePath string, name string, targetPath string) (string,
 func RemoveWorkspace(workspacePath string, name string) (string, bool, []WorkspaceEntry, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return "", false, nil, errors.New("workspace name 不能为空")
+		return "", false, nil, errors.New("workspace name must not be empty")
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -85,13 +85,13 @@ func newWorkspaceEntry(name string, targetPath string) (WorkspaceEntry, error) {
 	name = strings.TrimSpace(name)
 	targetPath = strings.TrimSpace(targetPath)
 	if name == "" {
-		return WorkspaceEntry{}, errors.New("workspace name 不能为空")
+		return WorkspaceEntry{}, errors.New("workspace name must not be empty")
 	}
 	if strings.ContainsAny(name, ":/\\ \t\r\n") {
-		return WorkspaceEntry{}, fmt.Errorf("workspace name 只能使用不含空白、冒号或路径分隔符的短名称: %s", name)
+		return WorkspaceEntry{}, fmt.Errorf("workspace name must be a short name without whitespace, colons, or path separators: %s", name)
 	}
 	if targetPath == "" {
-		return WorkspaceEntry{}, errors.New("workspace path 不能为空")
+		return WorkspaceEntry{}, errors.New("workspace path must not be empty")
 	}
 	return WorkspaceEntry{Name: name, Path: targetPath, Mode: "read_only"}, nil
 }

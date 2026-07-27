@@ -16,7 +16,7 @@ import (
 
 func Run(cfg config.Config, mode string, prompt string) error {
 	if strings.TrimSpace(prompt) == "" {
-		return fmt.Errorf("请输入任务内容")
+		return fmt.Errorf("enter a task")
 	}
 	if err := runtimeio.EnsureDaemon(cfg); err != nil {
 		return err
@@ -33,7 +33,7 @@ func Run(cfg config.Config, mode string, prompt string) error {
 	api := client.New(cfg.Runtime.URL, daemon.Token())
 	session, err := api.CreateSession(ctx, client.CreateSessionRequest{
 		Workspace: root.Path,
-		Language:  cfg.UI.Language,
+		Language:  config.DefaultLanguage,
 	})
 	if err != nil {
 		return err
@@ -43,12 +43,12 @@ func Run(cfg config.Config, mode string, prompt string) error {
 		Message:   prompt,
 		Mode:      mode,
 		Workspace: root.Path,
-		Language:  cfg.UI.Language,
+		Language:  config.DefaultLanguage,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("会话: %s\n", session.SessionID)
+	fmt.Printf("Session: %s\n", session.SessionID)
 	return runtimeio.StreamAndHandle(ctx, api, session.SessionID, run.RunID)
 }

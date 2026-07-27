@@ -29,9 +29,9 @@ from app.sessions.store import SessionStore
 class Request:
     def __init__(self, workspace: Path) -> None:
         self.workspace = str(workspace)
-        self.message = "修复 calc.py 中的 add 并验证"
+        self.message = "Fix add in calc.py and verify the change"
         self.mode = "default"
-        self.language = "zh-CN"
+        self.language = "en-US"
 
 
 class LocalProviderFixture:
@@ -84,8 +84,8 @@ class LocalProviderFixture:
                         },
                     ),
                     3: tool_chunk("tc_verify", "bash", {"command": "python3 -m py_compile calc.py"}),
-                    4: text_chunk("修复已完成。"),
-                    5: text_chunk("已通过 py_compile 验证。"),
+                    4: text_chunk("The fix is complete."),
+                    5: text_chunk("Verified with py_compile."),
                 }
                 self._sse(responses[fixture.agent_calls])
 
@@ -192,7 +192,7 @@ async def test_no_auth_localhost_profile_probe_and_full_edit_flow(tmp_path: Path
         approvals=SessionApprovalBroker(),
     )
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    session = store.create(workspace=str(tmp_path), language="en-US")
 
     async def approve_pending() -> None:
         while True:
@@ -308,4 +308,4 @@ async def test_probe_fails_when_model_returns_text_instead_of_native_tool_call()
 
     assert result["status"] == "error"
     assert result["checks"][-1]["code"] == "tools_unsupported"
-    assert "猜测 JSON" in result["checks"][-1]["summary"]
+    assert "guess JSON" in result["checks"][-1]["summary"]

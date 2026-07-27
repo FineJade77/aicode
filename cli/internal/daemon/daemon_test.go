@@ -112,7 +112,7 @@ func TestRuntimeInstallationRejectsManifestTraversal(t *testing.T) {
 	})
 
 	_, err := runtimeInstallationFromManifest(manifestPath)
-	if err == nil || !strings.Contains(err.Error(), "不能逃逸安装目录") {
+	if err == nil || !strings.Contains(err.Error(), "must not escape the installation directory") {
 		t.Fatalf("expected traversal error, got %v", err)
 	}
 }

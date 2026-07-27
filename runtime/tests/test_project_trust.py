@@ -102,6 +102,6 @@ def test_trust_store_inside_workspace_is_rejected(tmp_path: Path) -> None:
     try:
         store.trust(workspace)
     except ValueError as exc:
-        assert "workspace 外" in str(exc)
+        assert "outside the workspace" in str(exc)
     else:
         raise AssertionError("trust store inside workspace must be rejected")

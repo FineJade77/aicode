@@ -47,7 +47,6 @@ type Runner struct {
 	Out         io.Writer
 	Err         io.Writer
 	Workspace   string
-	Language    string
 	Interactive bool
 	Signals     <-chan os.Signal
 
@@ -97,7 +96,6 @@ func Run(cfg config.Config) error {
 		Out:         os.Stdout,
 		Err:         os.Stderr,
 		Workspace:   root.Path,
-		Language:    cfg.UI.Language,
 		Interactive: isTerminal(os.Stdin),
 		Signals:     signals,
 	}
@@ -119,10 +117,6 @@ func (runner *Runner) Run(parent context.Context) error {
 	if runner.Err == nil {
 		runner.Err = io.Discard
 	}
-	if strings.TrimSpace(runner.Language) == "" {
-		runner.Language = "zh-CN"
-	}
-
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
@@ -143,9 +137,9 @@ func (runner *Runner) Run(parent context.Context) error {
 	streams := make(chan streamResult, 16)
 	go scanInput(ctx, runner.In, inputs)
 
-	runner.printf("会话: %s\n", session.SessionID)
+	runner.printf("Session: %s\n", session.SessionID)
 	if runner.Interactive {
-		runner.printf("常驻 REPL 已启动；输入 /help 查看命令。\n")
+		runner.printf("Persistent REPL started. Enter /help to list commands.\n")
 		runner.prompt(session.SessionID)
 	}
 
@@ -171,7 +165,7 @@ func (runner *Runner) Run(parent context.Context) error {
 				return runner.result()
 			}
 			interruptArmed = true
-			runner.printf("\n正在取消当前 run；再次按 Ctrl-C 退出。\n")
+			runner.printf("\nCancelling the current run; press Ctrl-C again to exit.\n")
 			go runner.cancelFromSignal(ctx, session.SessionID)
 		case input := <-inputs:
 			if input.err != nil {
@@ -203,7 +197,7 @@ func (runner *Runner) Run(parent context.Context) error {
 					if err := runner.submit(ctx, session, model, line, active, events, streams); err != nil {
 						runner.printError(err)
 					}
-					runner.printf("仍有待确认操作；请输入 y、n%s，或使用 /cancel。\n", approvalAllHint(pending.kind))
+					runner.printf("An approval is still pending; enter y, n%s, or use /cancel.\n", approvalAllHint(pending.kind))
 				}
 				if runner.Interactive {
 					runner.prompt(session.SessionID)
@@ -259,7 +253,7 @@ func (runner *Runner) Run(parent context.Context) error {
 			if stringValue(event.value["type"]) == "approval.requested" {
 				approvalID := stringValue(event.value["approval_id"])
 				if approvalID == "" {
-					runner.printError(errors.New("approval.requested 缺少 approval_id"))
+					runner.printError(errors.New("approval.requested is missing approval_id"))
 					continue
 				}
 				kind := stringValue(event.value["kind"])
@@ -267,9 +261,9 @@ func (runner *Runner) Run(parent context.Context) error {
 					if diff := stringValue(event.value["diff"]); diff != "" {
 						runner.printf("%s\n", diff)
 					}
-					runner.printf("应用这个编辑吗？[y=应用 / a=应用并允许本会话后续编辑 / n=拒绝]: ")
+					runner.printf("Apply this edit? [y=apply / a=apply and allow later edits in this session / n=deny]: ")
 				} else {
-					runner.printf("允许执行这个工具操作吗？[y=允许 / n=拒绝]: ")
+					runner.printf("Allow this tool operation? [y=allow / n=deny]: ")
 				}
 				pending = &approvalPrompt{runID: event.runID, approvalID: approvalID, kind: kind}
 			}
@@ -322,7 +316,7 @@ func (runner *Runner) handleCommand(
 	case "/model":
 		if argument != "" {
 			model = argument
-			runner.printf("当前消息模型覆盖: %s\n", model)
+			runner.printf("Current message model override: %s\n", model)
 			break
 		}
 		requestCtx, cancel := withTimeout(ctx)
@@ -333,12 +327,12 @@ func (runner *Runner) handleCommand(
 			break
 		}
 		if model != "" {
-			runner.printf("当前消息模型覆盖: %s\n\n", model)
+			runner.printf("Current message model override: %s\n\n", model)
 		}
 		runner.printf("%s", renderer.ModelRoutesTable(value))
 	case "/compact":
 		if len(active) > 0 {
-			runner.printError(errors.New("/compact 只能在当前 run 完成后执行"))
+			runner.printError(errors.New("/compact can run only after the current run finishes"))
 			break
 		}
 		requestCtx, cancel := withTimeout(ctx)
@@ -348,7 +342,7 @@ func (runner *Runner) handleCommand(
 			runner.printError(err)
 			break
 		}
-		runner.printf("上下文压缩: %s\n", result.Status)
+		runner.printf("Context compaction: %s\n", result.Status)
 	case "/cancel":
 		requestCtx, cancel := withTimeout(ctx)
 		result, err := runner.API.CancelRun(requestCtx, session.SessionID)
@@ -357,10 +351,10 @@ func (runner *Runner) handleCommand(
 			runner.printError(err)
 			break
 		}
-		runner.printf("取消状态: %s（排队 %d）\n", result.Status, result.Queued)
+		runner.printf("Cancellation status: %s (queued %d)\n", result.Status, result.Queued)
 	case "/new":
 		if len(active) > 0 {
-			runner.printError(errors.New("/new 只能在当前 run 完成后执行"))
+			runner.printError(errors.New("/new can run only after the current run finishes"))
 			break
 		}
 		created, err := runner.createSession(ctx)
@@ -371,10 +365,10 @@ func (runner *Runner) handleCommand(
 		previous := session
 		runner.previousSession = &previous
 		session = created
-		runner.printf("新会话: %s\n", session.SessionID)
+		runner.printf("New session: %s\n", session.SessionID)
 	case "/resume":
 		if len(active) > 0 {
-			runner.printError(errors.New("/resume 只能在当前 run 完成后执行"))
+			runner.printError(errors.New("/resume can run only after the current run finishes"))
 			break
 		}
 		resumed, err := runner.resumeSession(ctx, argument)
@@ -385,10 +379,10 @@ func (runner *Runner) handleCommand(
 		previous := session
 		runner.previousSession = &previous
 		session = resumed
-		runner.printf("恢复会话: %s\n工作区: %s\n", session.SessionID, session.Workspace)
+		runner.printf("Resumed session: %s\nWorkspace: %s\n", session.SessionID, session.Workspace)
 	case "/steer":
 		if argument == "" {
-			runner.printError(errors.New("用法: /steer <guidance>"))
+			runner.printError(errors.New("usage: /steer <guidance>"))
 			break
 		}
 		requestCtx, cancel := withTimeout(ctx)
@@ -398,19 +392,19 @@ func (runner *Runner) handleCommand(
 			runner.printError(err)
 			break
 		}
-		runner.printf("steer 已排队: run=%s pending=%d\n", result.RunID, result.Pending)
+		runner.printf("Steering queued: run=%s pending=%d\n", result.RunID, result.Pending)
 	case "/follow-up", "/followup":
 		if argument == "" {
-			runner.printError(errors.New("用法: /follow-up <message>"))
+			runner.printError(errors.New("usage: /follow-up <message>"))
 			break
 		}
 		if err := runner.submit(ctx, session, model, argument, active, events, streams); err != nil {
 			runner.printError(err)
 		}
 	case "/approve", "/reject":
-		runner.printError(errors.New("当前没有待确认操作"))
+		runner.printError(errors.New("no approval is pending"))
 	default:
-		runner.printError(fmt.Errorf("未知 REPL 命令 %s；输入 /help 查看命令", command))
+		runner.printError(fmt.Errorf("unknown REPL command %s; enter /help to list commands", command))
 	}
 	return false, session, model
 }
@@ -429,7 +423,7 @@ func (runner *Runner) submit(
 		Message:   message,
 		Mode:      "chat",
 		Workspace: session.Workspace,
-		Language:  session.Language,
+		Language:  config.DefaultLanguage,
 		Model:     model,
 	})
 	cancel()
@@ -459,7 +453,7 @@ func (runner *Runner) createSession(ctx context.Context) (client.SessionResponse
 	requestCtx, cancel := withTimeout(ctx)
 	created, err := runner.API.CreateSession(requestCtx, client.CreateSessionRequest{
 		Workspace: runner.Workspace,
-		Language:  runner.Language,
+		Language:  config.DefaultLanguage,
 	})
 	cancel()
 	if err != nil {
@@ -468,7 +462,7 @@ func (runner *Runner) createSession(ctx context.Context) (client.SessionResponse
 	return client.SessionResponse{
 		SessionID: created.SessionID,
 		Workspace: runner.Workspace,
-		Language:  runner.Language,
+		Language:  config.DefaultLanguage,
 	}, nil
 }
 
@@ -476,7 +470,7 @@ func (runner *Runner) resumeSession(ctx context.Context, target string) (client.
 	target = strings.TrimSpace(target)
 	if target == "" || target == "--last" {
 		if runner.previousSession == nil {
-			return client.SessionResponse{}, errors.New("没有可恢复的上一条 session")
+			return client.SessionResponse{}, errors.New("no previous session is available to resume")
 		}
 		return *runner.previousSession, nil
 	}
@@ -519,7 +513,7 @@ func (runner *Runner) cancelFromSignal(ctx context.Context, sessionID string) {
 		runner.printError(err)
 		return
 	}
-	runner.printf("取消状态: %s（排队 %d）\n", result.Status, result.Queued)
+	runner.printf("Cancellation status: %s (queued %d)\n", result.Status, result.Queued)
 }
 
 func (runner *Runner) printStatus(session client.SessionResponse, model string) {
@@ -528,10 +522,9 @@ func (runner *Runner) printStatus(session client.SessionResponse, model string) 
 		modelLabel = "route:main"
 	}
 	runner.printf(
-		"Session Status\nsession: %s\nworkspace: %s\nlanguage: %s\nmodel: %s\nrunning: %t\nqueued: %d\npending_steers: %d\nrun: %s\nstage: %s\n",
+		"Session Status\nsession: %s\nworkspace: %s\nmodel: %s\nrunning: %t\nqueued: %d\npending_steers: %d\nrun: %s\nstage: %s\n",
 		session.SessionID,
 		session.Workspace,
-		session.Language,
 		modelLabel,
 		session.Agent.Running,
 		session.Agent.Queued,
@@ -560,7 +553,7 @@ func (runner *Runner) printError(err error) {
 	if !runner.Interactive {
 		return
 	}
-	fmt.Fprintf(runner.Err, "错误: %v\n", err)
+	fmt.Fprintf(runner.Err, "Error: %v\n", err)
 }
 
 func (runner *Runner) result() error {
@@ -619,7 +612,7 @@ func isApprovalAnswer(line string, kind string) bool {
 
 func approvalAllHint(kind string) string {
 	if kind == "edit" {
-		return "、a"
+		return ", a"
 	}
 	return ""
 }
@@ -643,17 +636,17 @@ func isTerminal(file *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-const helpText = `REPL 命令:
-  /status                 查看当前 session、run、queue 和模型覆盖
-  /model [name]           查看模型路由，或设置后续消息的模型
-  /compact                空闲时持久化压缩当前 session 上下文
-  /steer <guidance>       在当前 run 的下一个安全边界调整执行
-  /follow-up <message>    在当前 session 排队后续任务
-  /cancel                 取消当前 run，保留后续队列
-  /new                    为当前 workspace 创建新 session
-  /resume [--last|id]     切换到已有 session
-  /exit                   等待本 REPL 已提交的 run 完成后退出
+const helpText = `REPL commands:
+  /status                 Show the current session, run, queue, and model override
+  /model [name]           Show model routes or set the model for later messages
+  /compact                Persistently compact the current session context while idle
+  /steer <guidance>       Adjust the active run at its next safe boundary
+  /follow-up <message>    Queue another run in the current session
+  /cancel                 Cancel the active run and preserve later queued runs
+  /new                    Create a new session for the current workspace
+  /resume [--last|id]     Switch to an existing session
+  /exit                   Exit after runs submitted by this REPL finish
 
-普通输入会发送到当前 session；run 活跃时会作为 follow-up 排队。
-Ctrl-C 第一次取消当前 run，第二次退出。
+Normal input is sent to the current session; while a run is active, it is queued as a follow-up.
+The first Ctrl-C cancels the active run; the second exits.
 `

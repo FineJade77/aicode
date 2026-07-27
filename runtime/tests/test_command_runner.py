@@ -30,7 +30,7 @@ async def test_run_command_reports_timeout(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert result.timed_out
-    assert "命令超时" in result.stderr
+    assert "command timed out" in result.stderr
 
 
 @pytest.mark.asyncio

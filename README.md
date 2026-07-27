@@ -1,6 +1,6 @@
 # aicode
 
-`aicode` 是一个本地优先、CLI-first、默认中文交互的 AI Coding Agent。Go CLI 负责命令行交互、daemon 管理、SSE 渲染和审批输入；Python Runtime 是唯一的 agent 大脑，负责模型调用、工具执行、安全策略、审计、session 持久化和 usage 统计。
+`aicode` 是一个本地优先、CLI-first、统一使用英文交互的 AI Coding Agent。Go CLI 负责命令行交互、daemon 管理、SSE 渲染和审批输入；Python Runtime 是唯一的 agent 大脑，负责模型调用、工具执行、安全策略、审计、session 持久化和 usage 统计。
 
 当前项目已经完成模型驱动 Agent Loop：模型通过 OpenAI-compatible `tools` 或 Anthropic `tool_use` 自主调用工具探索代码、运行安全命令、提出编辑；所有文件写入都必须经过 inline diff 确认。
 
@@ -372,7 +372,6 @@ aicode config get models.main
 常用设置：
 
 ```bash
-aicode config set ui.language en-US
 aicode config set models.main gpt-5
 aicode config set models.reviewer gpt-5
 aicode config set models.summarizer gpt-5-mini
@@ -409,7 +408,6 @@ aicode config unset pricing.openai_compatible.gpt-5.input_per_1m
 
 ```bash
 export AICODE_HOME="/tmp/aicode-dev"
-export AICODE_DEFAULT_LANGUAGE="zh-CN"
 export AICODE_PROVIDER_TYPE="openai_compatible"
 export AICODE_OPENAI_API_KEY="..."
 export OPENAI_API_KEY="..."
@@ -458,7 +456,6 @@ Runtime 会在每次模型请求前估算 system prompt、tool schema、session 
 
 ```json
 {
-  "defaultLanguage": "zh-CN",
   "commands": {
     "test": "python3 -m pytest tests/unit",
     "build": "npm run build",
@@ -486,7 +483,6 @@ Runtime 会在每次模型请求前估算 system prompt、tool schema、session 
 
 字段说明：
 
-- `defaultLanguage`: 项目级输出语言，创建 session 时优先于用户级 `ui.language`。
 - `commands.*`: 常用项目命令，会注入 prompt；`commands.test/build/lint` 也会被 Docker sandbox 使用。
 - `protectedPaths`: 项目追加的受保护路径；读取、搜索、list/related、review、编辑和 shell 都会跳过或拦截。系统 mandatory patterns 始终合并生效，不能移除。
 - `review.disabledRules`: 禁用指定 review 规则。

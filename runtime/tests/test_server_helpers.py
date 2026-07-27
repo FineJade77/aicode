@@ -51,39 +51,32 @@ def test_detect_test_command_for_go_work(tmp_path: Path) -> None:
 
 
 def test_message_request_is_bound_to_session_context(tmp_path: Path) -> None:
-    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
-    request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="en")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="en-US")
+    request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="fr-FR")
 
     effective = bind_message_request_to_session(session, request)
 
     assert isinstance(effective, TurnRequest)
     assert effective.workspace == session.workspace
-    assert effective.language == "zh-CN"
-    assert request.language == "en"
+    assert effective.language == "en-US"
+    assert request.language == "fr-FR"
 
 
-def test_effective_session_language_prefers_project_default(tmp_path: Path) -> None:
-    config_dir = tmp_path / ".aicode"
-    config_dir.mkdir()
-    (config_dir / "config.json").write_text('{"defaultLanguage":"en-US"}', encoding="utf-8")
-
-    assert effective_session_language(str(tmp_path), "zh-CN") == "en-US"
+def test_effective_session_language_ignores_requested_language(tmp_path: Path) -> None:
+    assert effective_session_language(str(tmp_path), "fr-FR") == "en-US"
 
 
-def test_effective_session_language_falls_back_to_request(tmp_path: Path) -> None:
+def test_effective_session_language_is_english(tmp_path: Path) -> None:
     assert effective_session_language(str(tmp_path), "en-US") == "en-US"
 
 
 @pytest.mark.asyncio
-async def test_create_session_uses_project_default_language(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config_dir = tmp_path / ".aicode"
-    config_dir.mkdir()
-    (config_dir / "config.json").write_text('{"defaultLanguage":"en-US"}', encoding="utf-8")
+async def test_create_session_normalizes_language_to_english(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
     monkeypatch.setattr(server.application_runtime, "sessions", store)
     monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
 
-    response = await create_session(CreateSessionRequest(workspace=str(tmp_path), language="zh-CN"))
+    response = await create_session(CreateSessionRequest(workspace=str(tmp_path), language="fr-FR"))
     session = store.get(response.session_id)
 
     assert session is not None
@@ -95,8 +88,8 @@ def test_message_request_rejects_workspace_mismatch(tmp_path: Path) -> None:
     other = tmp_path / "other"
     repo.mkdir()
     other.mkdir()
-    session = Session(session_id="sess_test", workspace=str(repo), language="zh-CN")
-    request = MessageRequest(message="hello", mode="default", workspace=str(other), language="zh-CN")
+    session = Session(session_id="sess_test", workspace=str(repo), language="en-US")
+    request = MessageRequest(message="hello", mode="default", workspace=str(other), language="en-US")
 
     with pytest.raises(HTTPException) as exc_info:
         bind_message_request_to_session(session, request)
@@ -106,9 +99,9 @@ def test_message_request_rejects_workspace_mismatch(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_run_coordinator_serializes_queued_messages(tmp_path: Path) -> None:
-    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
-    first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
-    second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="en-US")
+    first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="en-US")
+    second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="en-US")
     first_run = session.enqueue_agent_run(first)
     second_run = session.enqueue_agent_run(second)
     active = 0
@@ -140,7 +133,7 @@ async def test_run_coordinator_serializes_queued_messages(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_run_coordinator_queues_steer_for_active_run(tmp_path: Path) -> None:
-    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="en-US")
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -155,11 +148,11 @@ async def test_run_coordinator_queues_steer_for_active_run(tmp_path: Path) -> No
         AuditLogger(path=tmp_path / "audit.jsonl"),
         BlockingLoop(),
     )
-    request = TurnRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
+    request = TurnRequest(message="first", mode="default", workspace=str(tmp_path), language="en-US")
     accepted = await coordinator.submit(session, request)
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    result = await coordinator.steer(session, "只修改测试")
+    result = await coordinator.steer(session, "Modify tests only")
 
     assert result.to_dict() == {"status": "queued", "run_id": accepted.run_id, "pending": 1}
     assert session.to_dict()["agent"]["pending_steers"] == 1
@@ -173,7 +166,7 @@ async def test_run_coordinator_queues_steer_for_active_run(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_run_coordinator_rejects_steer_when_idle(tmp_path: Path) -> None:
-    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="en-US")
     coordinator = RunCoordinator(
         ModelRouter(primary=FakeProvider([]), settings=Settings()),
         AuditLogger(path=tmp_path / "audit.jsonl"),
@@ -189,9 +182,9 @@ async def test_cancel_run_stops_current_and_continues_queue(monkeypatch: pytest.
     store = SessionStore(tmp_path / "sessions.sqlite")
     monkeypatch.setattr(server.application_runtime, "sessions", store)
     monkeypatch.setattr(server.application_runtime, "trace", AuditLogger(path=tmp_path / "audit.jsonl"))
-    session = store.create(workspace=str(tmp_path), language="zh-CN")
-    first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN")
-    second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN")
+    session = store.create(workspace=str(tmp_path), language="en-US")
+    first = MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="en-US")
+    second = MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="en-US")
     first_run = session.enqueue_agent_run(first)
     second_run = session.enqueue_agent_run(second)
     first_started = asyncio.Event()
@@ -242,7 +235,7 @@ async def test_cancel_run_stops_current_and_continues_queue(monkeypatch: pytest.
 async def test_cancel_run_is_idempotent_when_session_is_idle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "sessions.sqlite")
     monkeypatch.setattr(server.application_runtime, "sessions", store)
-    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    session = store.create(workspace=str(tmp_path), language="en-US")
 
     response = await cancel_run(session.session_id)
 
@@ -266,14 +259,14 @@ async def test_queued_run_history_does_not_include_future_message(monkeypatch: p
     )
     monkeypatch.setattr(server.application_runtime, "agent", runtime)
 
-    session = store.create(workspace=str(tmp_path), language="zh-CN")
+    session = store.create(workspace=str(tmp_path), language="en-US")
     await server.send_message(
         session.session_id,
-        MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="zh-CN"),
+        MessageRequest(message="first", mode="default", workspace=str(tmp_path), language="en-US"),
     )
     await server.send_message(
         session.session_id,
-        MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="zh-CN"),
+        MessageRequest(message="second", mode="default", workspace=str(tmp_path), language="en-US"),
     )
 
     assert session.agent_runner_task is not None
@@ -289,8 +282,8 @@ async def test_queued_run_history_does_not_include_future_message(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_emit_run_queued_marks_queued_run(tmp_path: Path) -> None:
-    session = Session(session_id="sess_test", workspace=str(tmp_path), language="zh-CN")
-    request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="zh-CN")
+    session = Session(session_id="sess_test", workspace=str(tmp_path), language="en-US")
+    request = MessageRequest(message="hello", mode="default", workspace=str(tmp_path), language="en-US")
     queued = session.enqueue_agent_run(request)
 
     await RunCoordinator._emit_queued(session, queued, was_running=True, queue_position=2)

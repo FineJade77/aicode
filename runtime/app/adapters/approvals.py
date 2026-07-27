@@ -14,11 +14,10 @@ class SessionApprovalBroker:
         *,
         kind: str,
         payload: dict[str, Any],
-        language: str,
     ) -> bool | None:
         approval = session.create_approval(kind, payload)
         session.mark_agent_progress(f"approval.{kind}")
-        message = "waiting for user approval" if language.startswith("en") else "等待用户确认"
+        message = "waiting for user approval"
         await session.events.put(
             {
                 "type": "approval.requested",

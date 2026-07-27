@@ -18,7 +18,7 @@ def user_message(text: str) -> dict[str, Any]:
 
 
 def user_note(text: str) -> dict[str, Any]:
-    return {"role": "user", "content": f"[系统提示] {text}"}
+    return {"role": "user", "content": f"[system note] {text}"}
 
 
 def assistant_message(result: CompletionResult) -> dict[str, Any]:

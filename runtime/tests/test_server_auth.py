@@ -67,5 +67,5 @@ def test_is_authorized_open_when_no_token_configured(monkeypatch: pytest.MonkeyP
 
 def test_is_authorized_rejects_malformed_header(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(auth, "RUNTIME_TOKEN", "secret")
-    assert auth.is_authorized("secret") is False  # 缺少 "Bearer " 前缀
+    assert auth.is_authorized("secret") is False  # Missing the "Bearer " prefix.
     assert auth.is_authorized("") is False

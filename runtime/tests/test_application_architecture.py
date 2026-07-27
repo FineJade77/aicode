@@ -60,9 +60,9 @@ class MemoryTrace:
 class Request:
     def __init__(self, workspace: Path) -> None:
         self.workspace = str(workspace)
-        self.message = "说明当前状态"
+        self.message = "Explain the current status"
         self.mode = "default"
-        self.language = "zh-CN"
+        self.language = "en-US"
 
 
 def test_agent_core_import_has_no_transport_or_infrastructure_side_effects() -> None:
@@ -114,7 +114,7 @@ def test_application_and_agent_layers_do_not_import_transports_or_adapters() -> 
 @pytest.mark.asyncio
 async def test_agent_core_runs_with_fake_model_and_in_memory_session(tmp_path: Path) -> None:
     trace = MemoryTrace()
-    model = ModelRouter(primary=FakeProvider([text_turn("无需修改")]), settings=Settings())
+    model = ModelRouter(primary=FakeProvider([text_turn("No changes needed")]), settings=Settings())
     runtime = AgentRuntime(
         model_router=model,
         audit=trace,
@@ -125,12 +125,12 @@ async def test_agent_core_runs_with_fake_model_and_in_memory_session(tmp_path: P
         approvals=SessionApprovalBroker(),
     )
     sessions = InMemorySessionRepository(clock=runtime.clock)
-    session = sessions.create(str(tmp_path), "zh-CN")
+    session = sessions.create(str(tmp_path), "en-US")
 
     await AgentLoop(runtime).run(session, Request(tmp_path))
 
     assert session.events.events_after(0)[-1]["type"] == "final"
-    assert session.events.events_after(0)[-1]["summary"] == "无需修改"
+    assert session.events.events_after(0)[-1]["summary"] == "No changes needed"
     assert any(event["event_type"] == "session.final" for event in trace.events)
 
 

@@ -22,9 +22,10 @@ type Config struct {
 }
 
 type UIConfig struct {
-	Language string
-	Style    string
+	Style string
 }
+
+const DefaultLanguage = "en-US"
 
 type RuntimeConfig struct {
 	URL  string
@@ -85,8 +86,7 @@ type KeyDoc struct {
 func Default() Config {
 	return Config{
 		UI: UIConfig{
-			Language: "zh-CN",
-			Style:    "codex",
+			Style: "codex",
 		},
 		Runtime: RuntimeConfig{
 			URL:  "http://127.0.0.1:8765",
@@ -159,8 +159,6 @@ func Load() (Config, error) {
 		value = strings.Trim(strings.TrimSpace(value), `"`)
 
 		switch section + "." + key {
-		case "ui.language":
-			cfg.UI.Language = value
 		case "ui.style":
 			cfg.UI.Style = value
 		case "runtime.url":
@@ -264,9 +262,6 @@ func applyEnvOverrides(cfg *Config) {
 	if envURL := os.Getenv("AICODE_RUNTIME_URL"); envURL != "" {
 		cfg.Runtime.URL = envURL
 	}
-	if envLanguage := os.Getenv("AICODE_DEFAULT_LANGUAGE"); envLanguage != "" {
-		cfg.UI.Language = envLanguage
-	}
 	if model := os.Getenv("AICODE_MODEL_DEFAULT"); model != "" {
 		cfg.Models.Default = model
 	}
@@ -359,7 +354,6 @@ func applyEnvOverrides(cfg *Config) {
 func (cfg Config) RuntimeEnv() []string {
 	env := filteredRuntimeBaseEnv(os.Environ())
 	runtime := []string{
-		"AICODE_DEFAULT_LANGUAGE=" + cfg.UI.Language,
 		"AICODE_MODEL_MAIN=" + cfg.Models.Main,
 		"AICODE_MODEL_REVIEWER=" + cfg.Models.Reviewer,
 		"AICODE_MODEL_SUMMARIZER=" + cfg.Models.Summarizer,
@@ -390,7 +384,6 @@ func (cfg Config) RuntimeEnv() []string {
 
 func filteredRuntimeBaseEnv(env []string) []string {
 	managed := map[string]bool{
-		"AICODE_DEFAULT_LANGUAGE":              true,
 		"AICODE_MODEL_DEFAULT":                 true,
 		"AICODE_MODEL_MAIN":                    true,
 		"AICODE_MODEL_PLANNER":                 true,
@@ -428,7 +421,6 @@ func filteredRuntimeBaseEnv(env []string) []string {
 
 func (cfg Config) Entries() []Entry {
 	entries := []Entry{
-		{"ui.language", cfg.UI.Language},
 		{"ui.style", cfg.UI.Style},
 		{"runtime.url", cfg.Runtime.URL},
 		{"runtime.port", strconv.Itoa(cfg.Runtime.Port)},
@@ -476,154 +468,148 @@ func KeyDocs() []KeyDoc {
 	defaults := Default()
 	return []KeyDoc{
 		{
-			Key:         "ui.language",
-			Default:     defaults.UI.Language,
-			Env:         "AICODE_DEFAULT_LANGUAGE",
-			Description: "默认交互语言，支持 zh-CN 或 en-US。",
-		},
-		{
 			Key:         "ui.style",
 			Default:     defaults.UI.Style,
 			Env:         "",
-			Description: "CLI 输出风格，当前默认 codex。",
+			Description: "CLI output style; the current default is codex.",
 		},
 		{
 			Key:         "runtime.url",
 			Default:     defaults.Runtime.URL,
 			Env:         "AICODE_RUNTIME_URL",
-			Description: "CLI 连接 Runtime daemon 的 URL。",
+			Description: "URL used by the CLI to connect to the Runtime daemon.",
 		},
 		{
 			Key:         "runtime.port",
 			Default:     strconv.Itoa(defaults.Runtime.Port),
 			Env:         "",
-			Description: "CLI 自动启动 Runtime daemon 时使用的端口。",
+			Description: "Port used when the CLI starts the Runtime daemon.",
 		},
 		{
 			Key:         "models.main",
 			Default:     defaults.Models.Main,
 			Env:         "AICODE_MODEL_MAIN",
-			Description: "v2 agent loop 主模型（唯一路由）。",
+			Description: "Primary model for the v2 agent loop.",
 		},
 		{
 			Key:         "models.reviewer",
 			Default:     defaults.Models.Reviewer,
 			Env:         "AICODE_MODEL_REVIEWER",
-			Description: "review 模式汇总结果使用的模型。",
+			Description: "Model used to summarize review-mode results.",
 		},
 		{
 			Key:         "models.summarizer",
 			Default:     defaults.Models.Summarizer,
 			Env:         "AICODE_MODEL_SUMMARIZER",
-			Description: "普通 chat/diff/test 汇总使用的模型。",
+			Description: "Model used for chat, diff, and test summaries.",
 		},
 		{
 			Key:         "provider.type",
 			Default:     defaults.Provider.Type,
 			Env:         "AICODE_PROVIDER_TYPE",
-			Description: "主模型使用的 provider 类型，支持 openai_compatible 或 anthropic。",
+			Description: "Provider type for the primary model: openai_compatible or anthropic.",
 		},
 		{
 			Key:         "provider.anthropic.base_url",
 			Default:     defaults.Anthropic.BaseURL,
 			Env:         "AICODE_ANTHROPIC_BASE_URL",
-			Description: "Anthropic provider 的 API base URL。",
+			Description: "API base URL for the Anthropic provider.",
 		},
 		{
 			Key:         "provider.anthropic.api_key_env",
 			Default:     defaults.Anthropic.APIKeyEnv,
 			Env:         "AICODE_ANTHROPIC_API_KEY_ENV",
-			Description: "Runtime 从哪个环境变量读取 Anthropic provider API key。",
+			Description: "Environment variable from which Runtime reads the Anthropic API key.",
 		},
 		{
 			Key:         "provider.anthropic.timeout_seconds",
 			Default:     formatFloat(defaults.Anthropic.TimeoutSeconds),
 			Env:         "AICODE_ANTHROPIC_TIMEOUT_SECONDS",
-			Description: "Anthropic provider 请求超时时间，单位秒。",
+			Description: "Anthropic provider request timeout in seconds.",
 		},
 		{
 			Key:         "provider.openai_compatible.profile",
 			Default:     defaults.OpenAICompatible.Profile,
 			Env:         "AICODE_OPENAI_PROFILE",
-			Description: "Provider Profile 名称，例如 openai、ollama、llama_cpp 或 lm_studio。",
+			Description: "Provider Profile name, such as openai, ollama, llama_cpp, or lm_studio.",
 		},
 		{
 			Key:         "provider.openai_compatible.profile_schema_version",
 			Default:     strconv.Itoa(defaults.OpenAICompatible.ProfileSchemaVersion),
 			Env:         "AICODE_OPENAI_PROFILE_SCHEMA_VERSION",
-			Description: "Provider Profile 契约版本，当前为 1。",
+			Description: "Provider Profile contract version; currently 1.",
 		},
 		{
 			Key:         "provider.openai_compatible.base_url",
 			Default:     defaults.OpenAICompatible.BaseURL,
 			Env:         "AICODE_OPENAI_BASE_URL",
-			Description: "OpenAI-compatible provider 的 API base URL。",
+			Description: "API base URL for the OpenAI-compatible provider.",
 		},
 		{
 			Key:         "provider.openai_compatible.api_key_env",
 			Default:     defaults.OpenAICompatible.APIKeyEnv,
 			Env:         "AICODE_OPENAI_API_KEY_ENV",
-			Description: "Runtime 从哪个环境变量读取 provider API key。",
+			Description: "Environment variable from which Runtime reads the provider API key.",
 		},
 		{
 			Key:         "provider.openai_compatible.auth_mode",
 			Default:     defaults.OpenAICompatible.AuthMode,
 			Env:         "AICODE_OPENAI_AUTH_MODE",
-			Description: "认证模式：required、optional 或 none；本地 no-auth endpoint 使用 none。",
+			Description: "Authentication mode: required, optional, or none. Use none for a local no-auth endpoint.",
 		},
 		{
 			Key:         "provider.openai_compatible.timeout_seconds",
 			Default:     formatFloat(defaults.OpenAICompatible.TimeoutSeconds),
 			Env:         "AICODE_OPENAI_TIMEOUT_SECONDS",
-			Description: "OpenAI-compatible 请求超时时间，单位秒。",
+			Description: "OpenAI-compatible request timeout in seconds.",
 		},
 		{
 			Key:         "provider.openai_compatible.context_window",
 			Default:     strconv.Itoa(defaults.OpenAICompatible.ContextWindow),
 			Env:         "AICODE_OPENAI_CONTEXT_WINDOW",
-			Description: "Profile 默认 context window token 数。",
+			Description: "Default context-window token count for this profile.",
 		},
 		{
 			Key:         "provider.openai_compatible.max_output_tokens",
 			Default:     strconv.Itoa(defaults.OpenAICompatible.MaxOutputTokens),
 			Env:         "AICODE_OPENAI_MAX_OUTPUT_TOKENS",
-			Description: "Profile 默认最大输出 token 数。",
+			Description: "Default maximum output-token count for this profile.",
 		},
 		{
 			Key:         "provider.openai_compatible.tool_calling",
 			Default:     strconv.FormatBool(defaults.OpenAICompatible.ToolCalling),
 			Env:         "AICODE_OPENAI_TOOL_CALLING",
-			Description: "是否声明支持原生 OpenAI tools；false 时 Agent 快速失败。",
+			Description: "Whether the profile supports native OpenAI tools; false makes the Agent fail fast.",
 		},
 		{
 			Key:         "provider.openai_compatible.streaming",
 			Default:     strconv.FormatBool(defaults.OpenAICompatible.Streaming),
 			Env:         "AICODE_OPENAI_STREAMING",
-			Description: "是否声明支持 SSE streaming；当前 Agent 要求为 true。",
+			Description: "Whether the profile supports SSE streaming; the Agent currently requires true.",
 		},
 		{
 			Key:         "provider.openai_compatible.tokenizer",
 			Default:     defaults.OpenAICompatible.Tokenizer,
 			Env:         "AICODE_OPENAI_TOKENIZER",
-			Description: "token 预算估算策略，当前支持 chars。",
+			Description: "Token-budget estimation strategy; currently chars.",
 		},
 		{
 			Key:         "provider.openai_compatible.chars_per_token",
 			Default:     formatFloat(defaults.OpenAICompatible.CharsPerToken),
 			Env:         "AICODE_OPENAI_CHARS_PER_TOKEN",
-			Description: "chars tokenizer 的字符/token 估算比。",
+			Description: "Estimated characters per token for the chars tokenizer.",
 		},
 		{
 			Key:         "pricing.<provider>.<model>.input_per_1m",
 			Default:     "unset",
 			Env:         "AICODE_MODEL_PRICES_JSON",
-			Description: "本地成本估算输入 token 单价，单位 USD / 1M tokens。",
+			Description: "Input-token price for local cost estimates, in USD per 1M tokens.",
 		},
 		{
 			Key:         "pricing.<provider>.<model>.output_per_1m",
 			Default:     "unset",
 			Env:         "AICODE_MODEL_PRICES_JSON",
-			Description: "本地成本估算输出 token 单价，单位 USD / 1M tokens。",
+			Description: "Output-token price for local cost estimates, in USD per 1M tokens.",
 		},
 	}
 }
@@ -710,25 +696,24 @@ func configKeyTarget(key string) (string, string, error) {
 	if strings.HasPrefix(key, "pricing.") {
 		section, name, ok := strings.Cut(strings.TrimPrefix(key, "pricing."), ".")
 		if !ok {
-			return "", "", fmt.Errorf("pricing 配置项格式应为 pricing.<provider>.<model>.<input_per_1m|output_per_1m>")
+			return "", "", fmt.Errorf("pricing key must be pricing.<provider>.<model>.<input_per_1m|output_per_1m>")
 		}
 		lastDot := strings.LastIndex(name, ".")
 		if lastDot < 0 {
-			return "", "", fmt.Errorf("pricing 配置项格式应为 pricing.<provider>.<model>.<input_per_1m|output_per_1m>")
+			return "", "", fmt.Errorf("pricing key must be pricing.<provider>.<model>.<input_per_1m|output_per_1m>")
 		}
 		model := name[:lastDot]
 		field := name[lastDot+1:]
 		if strings.TrimSpace(section) == "" || strings.TrimSpace(model) == "" {
-			return "", "", fmt.Errorf("pricing provider 和 model 不能为空")
+			return "", "", fmt.Errorf("pricing provider and model must not be empty")
 		}
 		if field != "input_per_1m" && field != "output_per_1m" {
-			return "", "", fmt.Errorf("pricing 只支持 input_per_1m 或 output_per_1m")
+			return "", "", fmt.Errorf("pricing supports only input_per_1m or output_per_1m")
 		}
 		return "pricing." + section + "." + model, field, nil
 	}
 
 	supported := map[string][2]string{
-		"ui.language":                        {"ui", "language"},
 		"ui.style":                           {"ui", "style"},
 		"runtime.url":                        {"runtime", "url"},
 		"runtime.port":                       {"runtime", "port"},
@@ -763,7 +748,7 @@ func configKeyTarget(key string) (string, string, error) {
 			keys = append(keys, key)
 		}
 		slices.Sort(keys)
-		return "", "", fmt.Errorf("暂只支持设置: %s", strings.Join(keys, ", "))
+		return "", "", fmt.Errorf("supported keys: %s", strings.Join(keys, ", "))
 	}
 	return target[0], target[1], nil
 }
@@ -773,7 +758,7 @@ func formatConfigLine(section string, key string, value string) (string, error) 
 		(section == "provider.openai_compatible" &&
 			(key == "profile_schema_version" || key == "context_window" || key == "max_output_tokens")) {
 		if _, err := strconv.Atoi(value); err != nil {
-			return "", fmt.Errorf("%s.%s 必须是整数: %w", section, key, err)
+			return "", fmt.Errorf("%s.%s must be an integer: %w", section, key, err)
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
@@ -781,13 +766,13 @@ func formatConfigLine(section string, key string, value string) (string, error) 
 		(section == "provider.openai_compatible" && key == "chars_per_token") ||
 		strings.HasPrefix(section, "pricing.") {
 		if _, err := strconv.ParseFloat(value, 64); err != nil {
-			return "", fmt.Errorf("%s.%s 必须是数字: %w", section, key, err)
+			return "", fmt.Errorf("%s.%s must be a number: %w", section, key, err)
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
 	if section == "provider.openai_compatible" && (key == "tool_calling" || key == "streaming") {
 		if _, err := strconv.ParseBool(value); err != nil {
-			return "", fmt.Errorf("%s.%s 必须是 true 或 false: %w", section, key, err)
+			return "", fmt.Errorf("%s.%s must be true or false: %w", section, key, err)
 		}
 		return fmt.Sprintf("%s = %s", key, value), nil
 	}
@@ -1011,7 +996,6 @@ func Home() (string, error) {
 
 func DefaultContent() string {
 	return `[ui]
-language = "zh-CN"
 style = "codex"
 
 [runtime]

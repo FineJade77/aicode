@@ -23,7 +23,7 @@ func EnsureDaemon(cfg config.Config) error {
 		return nil
 	}
 
-	fmt.Println("Runtime daemon 未运行，正在启动...")
+	fmt.Println("Runtime daemon is not running; starting it...")
 	if err := daemon.Start(cfg); err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func handleInteractiveEvent(api client.Client, sessionID string, event map[strin
 	case "approval.requested":
 		approvalID, _ := event["approval_id"].(string)
 		if approvalID == "" {
-			return fmt.Errorf("approval.requested 缺少 approval_id")
+			return fmt.Errorf("approval.requested is missing approval_id")
 		}
 		if kind, _ := event["kind"].(string); kind == "edit" {
 			if diff, _ := event["diff"].(string); diff != "" {
@@ -81,7 +81,7 @@ func handleInteractiveEvent(api client.Client, sessionID string, event map[strin
 			}
 			return resolveEditApproval(api, sessionID, approvalID)
 		}
-		return resolveApprovalWithPrompt(api, sessionID, approvalID, "允许执行这个工具操作吗？输入 y 确认，其它任意输入拒绝 [y/N]: ")
+		return resolveApprovalWithPrompt(api, sessionID, approvalID, "Allow this tool operation? Enter y to approve; any other input denies [y/N]: ")
 	default:
 		return nil
 	}
@@ -105,7 +105,7 @@ func resolveApprovalWithPrompt(api client.Client, sessionID string, approvalID s
 }
 
 func resolveEditApproval(api client.Client, sessionID string, approvalID string) error {
-	fmt.Print("应用这个编辑吗？[y=应用 / a=应用并允许本会话后续编辑 / 其它=拒绝]: ")
+	fmt.Print("Apply this edit? [y=apply / a=apply and allow later edits in this session / other=deny]: ")
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))

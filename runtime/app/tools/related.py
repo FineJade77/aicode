@@ -74,11 +74,11 @@ class RelatedFilesTool:
         root, workspace_name = resolve_tool_workspace(context, args.get("workspace"))
         raw_path = str(args.get("path") or "")
         if not raw_path:
-            raise ToolError("path 不能为空")
+            raise ToolError("path must not be empty")
         target = resolve_workspace_path(root, raw_path)
         reject_protected_path(root, target, context.protected_paths)
         if not target.is_file():
-            raise ToolError(f"文件不存在: {raw_path}")
+            raise ToolError(f"file does not exist: {raw_path}")
 
         limit = max(1, min(int(args.get("limit") or DEFAULT_RELATED_LIMIT), MAX_RELATED_LIMIT))
         related = find_related_files(root, target, context.protected_paths, limit=limit)
@@ -86,7 +86,7 @@ class RelatedFilesTool:
         if not related:
             return ToolResult(
                 success=True,
-                text=f"{target_label} 未找到明显相关文件",
+                text=f"No clearly related files found for {target_label}",
                 data={"path": target_label, "related": [], "workspace": workspace_name or "main"},
             )
 
@@ -113,7 +113,7 @@ class RelatedFilesTool:
                 item["match"] = candidate.match
             payload.append(item)
 
-        text = f"{target_label} 相关文件 {len(related)} 个:\n" + "\n".join(rows)
+        text = f"{len(related)} related files for {target_label}:\n" + "\n".join(rows)
         return ToolResult(
             success=True,
             text=text,

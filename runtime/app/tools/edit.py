@@ -34,13 +34,13 @@ def _read_existing_text(target: Path, rel: str) -> str:
     try:
         return target.read_text("utf-8")
     except UnicodeDecodeError as exc:
-        raise EditError(f"文件不是 UTF-8 文本，无法编辑: {rel}") from exc
+        raise EditError(f"file is not editable UTF-8 text: {rel}") from exc
 
 
 def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[str]) -> EditProposal:
     raw_path = str(arguments.get("path") or "").strip()
     if not raw_path:
-        raise EditError("path 不能为空")
+        raise EditError("path must not be empty")
     try:
         target = resolve_workspace_path(workspace, raw_path)
     except ToolError as exc:
@@ -55,33 +55,33 @@ def build_edit_proposal(workspace: Path, arguments: dict, protected_paths: list[
     new_text = str(arguments.get("new_text") or "")
     delete = bool(arguments.get("delete"))
     if contains_known_environment_secret(old_text) or contains_known_environment_secret(new_text):
-        raise EditError("编辑内容包含 Runtime 敏感环境变量值，已拒绝写入")
+        raise EditError("edit content contains a sensitive Runtime environment value; write denied")
 
     if delete:
         if not target.is_file():
-            raise EditError(f"文件不存在，无法删除: {rel}")
+            raise EditError(f"file does not exist and cannot be deleted: {rel}")
         original = _read_existing_text(target, rel)
         diff = unified_diff(original, "", rel)
         return EditProposal(path=rel, kind="delete", diff=diff, new_content=None, base_hash=file_hash(target))
 
     if not target.exists():
         if old_text:
-            raise EditError(f"文件不存在: {rel}")
+            raise EditError(f"file does not exist: {rel}")
         if not new_text:
-            raise EditError("创建文件时 new_text 不能为空")
+            raise EditError("new_text must not be empty when creating a file")
         diff = unified_diff("", new_text, rel)
         return EditProposal(path=rel, kind="create", diff=diff, new_content=new_text, base_hash=None)
 
     if not target.is_file():
-        raise EditError(f"不是普通文件: {rel}")
+        raise EditError(f"path is not a regular file: {rel}")
     if not old_text:
-        raise EditError("修改已有文件必须提供 old_text（文件中完整且唯一的原文片段）")
+        raise EditError("editing an existing file requires old_text containing an exact, unique source fragment")
     original = _read_existing_text(target, rel)
     count = original.count(old_text)
     if count == 0:
-        raise EditError(f"未找到 old_text，请先 read_file 确认原文: {rel}")
+        raise EditError(f"old_text was not found; use read_file to confirm the source first: {rel}")
     if count > 1:
-        raise EditError(f"old_text 在文件中出现 {count} 次，不唯一，请扩大片段范围: {rel}")
+        raise EditError(f"old_text occurs {count} times and is not unique; expand the source fragment: {rel}")
     updated = original.replace(old_text, new_text, 1)
     diff = unified_diff(original, updated, rel)
     return EditProposal(path=rel, kind="replace", diff=diff, new_content=updated, base_hash=file_hash(target))
@@ -91,14 +91,14 @@ def apply_edit(workspace: Path, proposal: EditProposal) -> None:
     target = resolve_workspace_path(workspace, proposal.path)
     if proposal.kind == "create":
         if target.exists():
-            raise EditStaleError(f"文件已被外部创建: {proposal.path}")
+            raise EditStaleError(f"file was created externally: {proposal.path}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(proposal.new_content or "", encoding="utf-8")
         return
     if not target.is_file():
-        raise EditStaleError(f"文件已被外部删除: {proposal.path}")
+        raise EditStaleError(f"file was deleted externally: {proposal.path}")
     if file_hash(target) != proposal.base_hash:
-        raise EditStaleError(f"文件已被外部修改，请重新 read_file 后再试: {proposal.path}")
+        raise EditStaleError(f"file was modified externally; use read_file again before retrying: {proposal.path}")
     if proposal.kind == "delete":
         target.unlink()
         return

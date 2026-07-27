@@ -6,23 +6,18 @@
   "properties": {
     "projectName": {
       "type": "string",
-      "description": "项目显示名，仅作为上下文提示。"
-    },
-    "defaultLanguage": {
-      "type": "string",
-      "enum": ["zh-CN", "en-US"],
-      "description": "项目级默认交互语言；创建 session 时优先于用户级 ui.language。"
+      "description": "Project display name, used only as a context hint."
     },
     "commands": {
       "type": "object",
-      "description": "项目常用命令记忆，会注入 prompt；commands.test/build/lint 也用于 Docker sandbox 命令探测，commands.test 还用于 aicode test。",
+      "description": "Known project commands injected into the prompt. commands.test/build/lint are also used for Docker sandbox detection, and commands.test is used by aicode test.",
       "additionalProperties": {
         "type": "string"
       }
     },
     "protectedPaths": {
       "type": "array",
-      "description": "项目额外 protected path glob。系统内置的 .env、SSH/GPG/cloud credentials 和私钥规则始终合并生效，不能由仓库配置移除；Project Trust 也不属于仓库配置。",
+      "description": "Additional protected-path globs. Built-in .env, SSH/GPG/cloud credential, and private-key rules always apply and cannot be removed by repository configuration. Project Trust is also external to repository configuration.",
       "items": {
         "type": "string"
       }

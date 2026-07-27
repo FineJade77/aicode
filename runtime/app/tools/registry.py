@@ -33,18 +33,18 @@ DEFAULT_SEARCH_TIMEOUT = 30
 DEFAULT_BASH_TIMEOUT = 120
 MAX_BASH_TIMEOUT = 600
 
-WORKSPACE_ARG = {"type": "string", "description": "可选：配置的只读 workspace 名称，默认主 workspace"}
+WORKSPACE_ARG = {"type": "string", "description": "Optional configured read-only workspace name; defaults to the primary workspace"}
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "read_file",
-        "description": "读取文本文件，按行号返回。文件较大时用 offset/limit 分段继续读。",
+        "description": "Read a text file with line numbers. Use offset and limit to continue through large files.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "相对路径"},
-                "offset": {"type": "integer", "description": "起始行号，从 1 开始", "default": 1},
-                "limit": {"type": "integer", "description": f"读取行数，默认 {DEFAULT_READ_LINES}，最大 {MAX_READ_LINES}"},
+                "path": {"type": "string", "description": "Relative path"},
+                "offset": {"type": "integer", "description": "Starting line number, beginning at 1", "default": 1},
+                "limit": {"type": "integer", "description": f"Number of lines; default {DEFAULT_READ_LINES}, maximum {MAX_READ_LINES}"},
                 "workspace": WORKSPACE_ARG,
             },
             "required": ["path"],
@@ -52,12 +52,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "search",
-        "description": "在代码库中用正则搜索文本，定位符号、字符串或文件；query 为正则表达式，可用 glob 过滤。",
+        "description": "Search repository text with a regular expression to locate symbols, strings, or files. Optionally filter with a glob.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "正则表达式"},
-                "glob": {"type": "string", "description": "可选：文件过滤，如 *.py 或 src/**"},
+                "query": {"type": "string", "description": "Regular expression"},
+                "glob": {"type": "string", "description": "Optional file filter such as *.py or src/**"},
                 "limit": {"type": "integer", "default": MAX_SEARCH_RESULTS},
                 "workspace": WORKSPACE_ARG,
             },
@@ -66,7 +66,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "list_files",
-        "description": "列出目录结构。只在需要了解目录布局时使用，找具体内容用 search。",
+        "description": "List directory structure. Use this to understand layout; use search to find specific content.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -78,11 +78,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "related_files",
-        "description": "基于源码/测试命名、同名文件和引用行，查找与指定文件相关的只读上下文文件。",
+        "description": "Find read-only context related to a file using source/test naming, matching names, and reference lines.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "相对路径"},
+                "path": {"type": "string", "description": "Relative path"},
                 "limit": {"type": "integer", "default": 20},
                 "workspace": WORKSPACE_ARG,
             },
@@ -91,12 +91,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "bash",
-        "description": "在主 workspace 执行 shell 命令（git、测试、构建等）。低风险命令直接执行；中风险需要用户确认；破坏性命令会被拒绝。",
+        "description": "Run shell commands in the primary workspace. Low-risk commands run directly, medium-risk commands require approval, and destructive commands are denied.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
-                "timeout": {"type": "integer", "description": f"秒，默认 {DEFAULT_BASH_TIMEOUT}", "default": DEFAULT_BASH_TIMEOUT},
+                "timeout": {"type": "integer", "description": f"Seconds; default {DEFAULT_BASH_TIMEOUT}", "default": DEFAULT_BASH_TIMEOUT},
             },
             "required": ["command"],
         },
@@ -104,10 +104,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "edit_file",
         "description": (
-            "编辑主 workspace 的文件，用户确认 diff 后生效。"
-            "replace：old_text 必须是文件中完整且唯一的原文片段，new_text 为替换内容；"
-            "create：文件不存在时 old_text 留空、new_text 为完整内容；"
-            "delete：delete 参数设为 true。每次编辑独立确认。"
+            "Edit files in the primary workspace after the user approves the diff. "
+            "For replace, old_text must be an exact, unique source fragment and new_text is its replacement. "
+            "For create, leave old_text empty and provide the complete file in new_text. "
+            "For delete, set delete to true. Each edit is approved independently."
         ),
         "input_schema": {
             "type": "object",
@@ -122,7 +122,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "review_diff",
-        "description": "对当前 git diff 运行确定性 review 规则，输出结构化 finding。",
+        "description": "Run deterministic review rules on the current git diff and return structured findings.",
         "input_schema": {"type": "object", "properties": {}},
     },
 ]
@@ -147,7 +147,6 @@ def tool_schemas_for_mode(mode: str) -> list[dict[str, Any]]:
 def build_tool_context(
     workspace: str,
     mode: str,
-    language: str,
     *,
     execution: Any = None,
     session_id: str = "",
@@ -158,7 +157,6 @@ def build_tool_context(
     return ToolContext(
         workspace=Path(workspace),
         mode=mode,
-        language=language,
         protected_paths=project_config.protected_paths,
         workspace_refs=project_config.workspaces,
         review_disabled_rules=project_config.review.disabled_rules,
@@ -180,14 +178,14 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
 
 def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> str | None:
     expected_type = schema.get("type")
-    label = path or "参数"
+    label = path or "arguments"
 
     if expected_type == "object":
         if not isinstance(value, dict):
-            return f"{label} 应为 object"
+            return f"{label} must be an object"
         for key in schema.get("required") or []:
             if key not in value:
-                return f"缺少必填字段: {key}"
+                return f"missing required field: {key}"
         properties = schema.get("properties") or {}
         for key, item in value.items():
             property_schema = properties.get(key)
@@ -199,11 +197,11 @@ def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> str
         return None
 
     if expected_type == "string" and not isinstance(value, str):
-        return f"{label} 应为 string"
+        return f"{label} must be a string"
     if expected_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
-        return f"{label} 应为 integer"
+        return f"{label} must be an integer"
     if expected_type == "boolean" and not isinstance(value, bool):
-        return f"{label} 应为 boolean"
+        return f"{label} must be a boolean"
     return None
 
 
@@ -212,7 +210,7 @@ async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -
     validation_error = validate_tool_arguments(name, arguments)
     if validation_error is not None:
         return with_duration(
-            ToolResult(success=False, error=f"参数校验失败: {validation_error}", data={"validation_error": validation_error}),
+            ToolResult(success=False, error=f"argument validation failed: {validation_error}", data={"validation_error": validation_error}),
             started,
         )
 
@@ -230,11 +228,11 @@ async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -
         if name == "bash":
             return with_duration(await run_bash(context, arguments), started)
         if name == "edit_file":
-            return with_duration(ToolResult(success=False, error="edit_file 由 agent loop 单独处理", risk_level="medium"), started)
-        return with_duration(ToolResult(success=False, error=f"未知工具: {name}", risk_level="high"), started)
+            return with_duration(ToolResult(success=False, error="edit_file is handled by the agent loop", risk_level="medium"), started)
+        return with_duration(ToolResult(success=False, error=f"unknown tool: {name}", risk_level="high"), started)
     except ToolError as exc:
         return with_duration(ToolResult(success=False, error=str(exc)), started)
-    except Exception as exc:  # 工具异常回给模型，不中断循环
+    except Exception as exc:  # Return tool failures to the model without interrupting the loop.
         return with_duration(ToolResult(success=False, error=f"{exc.__class__.__name__}: {exc}", risk_level="high"), started)
 
 
@@ -251,19 +249,19 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
     target = resolve_workspace_path(root, str(arguments.get("path") or ""))
     reject_protected_path(root, target, context.protected_paths)
     if not target.is_file():
-        raise ToolError(f"文件不存在: {arguments.get('path')}")
+        raise ToolError(f"file does not exist: {arguments.get('path')}")
     offset = max(1, int(arguments.get("offset") or 1))
     limit = max(1, min(int(arguments.get("limit") or DEFAULT_READ_LINES), MAX_READ_LINES))
     lines = target.read_text("utf-8", errors="replace").splitlines()
     if lines and offset > len(lines):
-        raise ToolError(f"offset {offset} 超出文件行数 {len(lines)}")
+        raise ToolError(f"offset {offset} exceeds the file's {len(lines)} lines")
     chunk = lines[offset - 1 : offset - 1 + limit]
     shown = "\n".join(f"{offset + index}\t{line}" for index, line in enumerate(chunk))
     label = scoped_display_path(workspace_name, root, target)
     end = offset + len(chunk) - 1
-    header = f"{label} 共 {len(lines)} 行，显示第 {offset}-{end} 行"
+    header = f"{label} has {len(lines)} lines; showing {offset}-{end}"
     if end < len(lines):
-        header += f"（未完，可用 offset={end + 1} 继续读）"
+        header += f" (more available; continue with offset={end + 1})"
     return ToolResult(success=True, text=f"{header}\n{shown}", data={"path": label, "total_lines": len(lines), "offset": offset, "shown": len(chunk)})
 
 
@@ -271,14 +269,14 @@ async def run_search(context: ToolContext, arguments: dict[str, Any]) -> ToolRes
     root, workspace_name = resolve_tool_workspace(context, arguments.get("workspace"))
     query = str(arguments.get("query") or "")
     if not query:
-        raise ToolError("query 不能为空")
+        raise ToolError("query must not be empty")
     limit = max(1, min(int(arguments.get("limit") or MAX_SEARCH_RESULTS), MAX_SEARCH_RESULTS))
     glob_pattern = str(arguments.get("glob") or "")
 
     try:
         pattern = re.compile(query)
     except re.error as exc:
-        raise ToolError(f"正则表达式无效: {exc}")
+        raise ToolError(f"invalid regular expression: {exc}")
 
     if shutil.which("rg"):
         return await _search_with_rg(context, root, workspace_name, query, glob_pattern, limit)
@@ -334,12 +332,12 @@ async def _search_with_rg(
 
     prefix = f"{workspace_name}: " if workspace_name else ""
     if proc.timed_out:
-        raise ToolError(f"搜索超时（{DEFAULT_SEARCH_TIMEOUT}s）: {query}")
+        raise ToolError(f"search timed out ({DEFAULT_SEARCH_TIMEOUT}s): {query}")
     if returncode == 1:
-        return ToolResult(success=True, text=f"{prefix}没有匹配: {query}", data={"query": query, "matches": 0})
+        return ToolResult(success=True, text=f"{prefix}no matches: {query}", data={"query": query, "matches": 0})
     if returncode != 0:
         stderr_text = proc.stderr.strip()
-        raise ToolError(stderr_text or "rg 执行失败")
+        raise ToolError(stderr_text or "rg failed")
 
     matches: list[str] = []
     for line in proc.stdout.splitlines():
@@ -351,10 +349,10 @@ async def _search_with_rg(
         matches.append(line)
 
     if not matches:
-        return ToolResult(success=True, text=f"{prefix}没有匹配: {query}", data={"query": query, "matches": 0})
+        return ToolResult(success=True, text=f"{prefix}no matches: {query}", data={"query": query, "matches": 0})
     return ToolResult(
         success=True,
-        text=f"{prefix}匹配 {len(matches)} 处:\n" + "\n".join(matches),
+        text=f"{prefix}{len(matches)} matches:\n" + "\n".join(matches),
         data={"query": query, "matches": len(matches)},
     )
 
@@ -403,14 +401,14 @@ def _search_with_python(
 
     prefix = f"{workspace_name}: " if workspace_name else ""
     if not matches:
-        return ToolResult(success=True, text=f"{prefix}没有匹配: {query}", data={"query": query, "matches": 0})
-    return ToolResult(success=True, text=f"{prefix}匹配 {len(matches)} 处:\n" + "\n".join(matches), data={"query": query, "matches": len(matches)})
+        return ToolResult(success=True, text=f"{prefix}no matches: {query}", data={"query": query, "matches": 0})
+    return ToolResult(success=True, text=f"{prefix}{len(matches)} matches:\n" + "\n".join(matches), data={"query": query, "matches": len(matches)})
 
 
 async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
     command = str(arguments.get("command") or "").strip()
     if not command:
-        raise ToolError("command 不能为空")
+        raise ToolError("command must not be empty")
     timeout = max(1, min(int(arguments.get("timeout") or DEFAULT_BASH_TIMEOUT), MAX_BASH_TIMEOUT))
     result = await run_shell_command(
         command,
@@ -438,7 +436,7 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
     if result.timed_out:
         return ToolResult(
             success=False,
-            error=f"命令超时（{timeout}s）",
+            error=f"command timed out ({timeout}s)",
             risk_level="medium",
             data=data,
         )

@@ -66,7 +66,6 @@ def default_protected_paths() -> list[str]:
 @dataclass(slots=True)
 class ProjectConfig:
     project_name: str | None = None
-    default_language: str | None = None
     commands: dict[str, str] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=default_protected_paths)
     workspaces: list[WorkspaceRef] = field(default_factory=list)
@@ -94,7 +93,6 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
 
     return ProjectConfig(
         project_name=as_optional_str(raw.get("projectName")),
-        default_language=as_optional_str(raw.get("defaultLanguage")),
         commands={str(key): str(value) for key, value in commands.items()} if isinstance(commands, dict) else {},
         protected_paths=effective_protected_paths(protected_paths),
         workspaces=parse_workspaces(workspaces),

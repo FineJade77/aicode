@@ -4,10 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.history import ContextManager, load_history, persist_message, truncate_tool_output
-from app.agent.prompts import BUDGET_NOTE_EN, BUDGET_NOTE_ZH, VERIFY_NOTE_EN, VERIFY_NOTE_ZH, build_system_prompt
+from app.agent.prompts import BUDGET_NOTE, VERIFY_NOTE, build_system_prompt
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRuntime
-from app.agent.utils import localized
 from app.core.hashing import stable_hash
 from app.core.session import AgentSession
 from app.models.provider import (
@@ -43,7 +42,7 @@ async def run_turn_safely(session: AgentSession, request: Any, runtime: AgentRun
                 workspace=session.workspace,
                 data={"mode": request.mode, "error_type": exc.__class__.__name__, "error": str(exc)},
             )
-        message = localized(request.language, f"Agent 执行失败: {exc}", f"Agent execution failed: {exc}")
+        message = f"Agent execution failed: {exc}"
         await session.events.put({"type": "error", "error": message, "error_type": exc.__class__.__name__})
         await session.events.put({"type": "final", "summary": message})
 
@@ -56,7 +55,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         or runtime.model_runtime is None
         or runtime.approvals is None
     ):
-        raise RuntimeError("AgentRuntime 缺少 workspace、tools、model 或 approval runtime adapter")
+        raise RuntimeError("AgentRuntime is missing a workspace, tools, model, or approval runtime adapter")
     system = build_system_prompt(request, runtime.workspace.prompt_context(Path(request.workspace)))
     history = load_history(session)
     # Persist only the run that is starting, so queued future prompts do not leak into this history.
@@ -72,7 +71,6 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
     context = runtime.tools.build_context(
         request.workspace,
         request.mode,
-        request.language,
         execution=runtime.execution,
         session_id=session.session_id,
         run_id=session.current_run_id or "",
@@ -115,7 +113,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         if not result.tool_calls:
             if applied_edits > 0 and not verify_note_sent:
                 verify_note_sent = True
-                note = user_note(localized(request.language, VERIFY_NOTE_ZH, VERIFY_NOTE_EN))
+                note = user_note(VERIFY_NOTE)
                 history.append(note)
                 persist_message(session, note)
                 continue
@@ -131,7 +129,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
             persist_message(session, reply)
 
     else:
-        note = user_note(localized(request.language, BUDGET_NOTE_ZH, BUDGET_NOTE_EN))
+        note = user_note(BUDGET_NOTE)
         history.append(note)
         persist_message(session, note)
         session.mark_agent_progress("model.request")
@@ -226,13 +224,9 @@ async def apply_pending_steers(
     if not steers:
         return False
 
-    skipped_message = localized(
-        request.language,
-        "用户追加了 steer 指令，当前工具调用未执行；请按新约束重新规划。",
-        "The user added steering guidance, so this tool call was not executed; re-plan with the new constraint.",
-    )
+    skipped_message = "The user added steering guidance, so this tool call was not executed; re-plan with the new constraint."
     for call in pending_tool_calls:
-        reply = tool_message(call.id, f"[未执行] {skipped_message}")
+        reply = tool_message(call.id, f"[not executed] {skipped_message}")
         history.append(reply)
         persist_message(session, reply)
         await session.events.put(
@@ -247,11 +241,7 @@ async def apply_pending_steers(
 
     steer_text = "\n".join(f"- {message}" for message in steers)
     note = user_note(
-        localized(
-            request.language,
-            f"用户在当前 run 中追加了 steer 指令。请优先遵循这些最新约束并调整后续执行：\n{steer_text}",
-            f"The user added steering guidance during this run. Prioritize these latest constraints and adjust the remaining work:\n{steer_text}",
-        )
+        f"The user added steering guidance during this run. Prioritize these latest constraints and adjust the remaining work:\n{steer_text}"
     )
     history.append(note)
     persist_message(session, note)
@@ -273,11 +263,7 @@ async def apply_pending_steers(
             "type": "run.steer.applied",
             "count": len(steers),
             "skipped_tool_calls": len(pending_tool_calls),
-            "message": localized(
-                request.language,
-                "已在 AgentLoop 安全边界应用 steer 指令。",
-                "Steering guidance was applied at an AgentLoop safe boundary.",
-            ),
+            "message": "Steering guidance was applied at an AgentLoop safe boundary.",
         }
     )
     return True
@@ -299,10 +285,9 @@ async def execute_gated(
         parse_error = call.arguments[TOOL_ARGUMENT_PARSE_ERROR_KEY]
     if parse_error is not None:
         detail = parse_error.get("error", "") if isinstance(parse_error, dict) else str(parse_error)
-        message = localized(
-            request.language,
-            f"工具 {call.name} 的参数不是合法 JSON，已跳过执行。请重新生成合法 JSON 参数后再调用该工具。{detail}",
-            f"Tool {call.name} received invalid JSON arguments and was not executed. Regenerate valid JSON arguments before calling it again. {detail}",
+        message = (
+            f"Tool {call.name} received invalid JSON arguments and was not executed. "
+            f"Regenerate valid JSON arguments before calling it again. {detail}"
         ).strip()
         if runtime.trace is not None:
             runtime.trace.record(
@@ -321,16 +306,15 @@ async def execute_gated(
                 duration_ms=0,
             )
         )
-        return f"[工具参数解析失败] {message}", 0
+        return f"[tool argument parse failed] {message}", 0
 
     if runtime.tools is None:
-        raise RuntimeError("AgentRuntime 缺少 tool runtime adapter")
+        raise RuntimeError("AgentRuntime is missing a tool runtime adapter")
     validation_error = runtime.tools.validate_arguments(call.name, call.arguments)
     if validation_error is not None:
-        message = localized(
-            request.language,
-            f"工具 {call.name} 参数校验失败，已跳过执行。请按工具 schema 重新生成参数。{validation_error}",
-            f"Tool {call.name} arguments failed validation and were not executed. Regenerate arguments that match the tool schema. {validation_error}",
+        message = (
+            f"Tool {call.name} arguments failed validation and were not executed. "
+            f"Regenerate arguments that match the tool schema. {validation_error}"
         ).strip()
         if runtime.trace is not None:
             runtime.trace.record(
@@ -354,13 +338,12 @@ async def execute_gated(
                 duration_ms=0,
             )
         )
-        return f"[工具参数校验失败] {message}", 0
+        return f"[tool argument validation failed] {message}", 0
 
     gate = policy.gate(
         call.name,
         call.arguments,
         mode=request.mode,
-        language=request.language,
         workspace=context.workspace,
         protected_paths=context.protected_paths,
         trust_level=context.trust_level,
@@ -399,7 +382,7 @@ async def execute_gated(
                 "risk_level": gate.risk_level,
             }
         )
-        return f"[被策略拒绝] {gate.reason}", 0
+        return f"[denied by policy] {gate.reason}", 0
 
     if call.name == "edit_file":
         return await execute_edit(session, request, call, runtime, context)
@@ -407,13 +390,12 @@ async def execute_gated(
     if gate.verdict == "ask":
         accepted = await request_approval(
             session,
-            request,
             "tool",
             {"tool": call.name, "tool_call_id": call.id, "args": call.arguments, "reason": gate.reason},
             runtime,
         )
         if accepted is not True:
-            reason = localized(request.language, "用户拒绝执行该命令", "user rejected the command")
+            reason = "user rejected the command"
             await session.events.put(
                 {
                     "type": "tool.rejected",
@@ -465,7 +447,7 @@ async def execute_gated(
             duration_ms=result.duration_ms,
         )
     )
-    return f"[错误] {truncate_tool_output(call.name, result.error)}", 0
+    return f"[error] {truncate_tool_output(call.name, result.error)}", 0
 
 
 async def execute_edit(
@@ -476,7 +458,7 @@ async def execute_edit(
     context: Any,
 ) -> tuple[str, int]:
     if runtime.tools is None or runtime.clock is None:
-        raise RuntimeError("AgentRuntime 缺少 tool runtime 或 clock adapter")
+        raise RuntimeError("AgentRuntime is missing a tool runtime or clock adapter")
     started = runtime.clock.monotonic()
     workspace = Path(request.workspace)
     try:
@@ -491,7 +473,7 @@ async def execute_edit(
                 duration_ms=elapsed_ms(started, runtime),
             )
         )
-        return f"[编辑失败] {exc}", 0
+        return f"[edit failed] {exc}", 0
 
     auto = session.auto_accept_edits and not runtime.tools.is_protected_path(proposal.path, context.protected_paths)
     if auto:
@@ -500,14 +482,13 @@ async def execute_edit(
     else:
         accepted = await request_approval(
             session,
-            request,
             "edit",
             {"path": proposal.path, "kind": proposal.kind, "diff": proposal.diff, "tool_call_id": call.id},
             runtime,
         )
 
     if accepted is not True:
-        reason = localized(request.language, "用户拒绝了此编辑", "user rejected this edit")
+        reason = "user rejected this edit"
         await session.events.put({"type": "edit.rejected", "path": proposal.path, "tool_call_id": call.id})
         return f"[{reason}] {proposal.path}", 0
 
@@ -523,8 +504,8 @@ async def execute_edit(
                 duration_ms=elapsed_ms(started, runtime),
             )
         )
-        marker = "·stale" if "Stale" in exc.__class__.__name__ else ""
-        return f"[编辑失败{marker}] {exc}", 0
+        marker = " stale" if "Stale" in exc.__class__.__name__ else ""
+        return f"[edit failed{marker}] {exc}", 0
     duration_ms = elapsed_ms(started, runtime)
     patch_hash = stable_hash(proposal.diff)
     if runtime.trace is not None:
@@ -551,7 +532,7 @@ async def execute_edit(
             "duration_ms": duration_ms,
         }
     )
-    return f"已应用编辑 {proposal.path}:\n{proposal.diff}", 1
+    return f"Applied edit to {proposal.path}:\n{proposal.diff}", 1
 
 
 def tool_event(
@@ -611,18 +592,16 @@ def elapsed_ms(started: float, runtime: AgentRuntime) -> int:
 
 async def request_approval(
     session: AgentSession,
-    request: Any,
     kind: str,
     payload: dict[str, Any],
     runtime: AgentRuntime,
 ) -> bool | None:
     if runtime.approvals is None:
-        raise RuntimeError("AgentRuntime 缺少 approval broker")
+        raise RuntimeError("AgentRuntime is missing an approval broker")
     return await runtime.approvals.request(
         session,
         kind=kind,
         payload=payload,
-        language=request.language,
     )
 
 

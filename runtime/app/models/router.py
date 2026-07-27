@@ -92,7 +92,7 @@ class ModelRouter:
     ) -> CompletionResult:
         is_configured = getattr(self.primary, "is_configured", None)
         if callable(is_configured) and not is_configured():
-            raise ProviderNotConfigured("模型 provider 未配置，请设置 API key 后重试")
+            raise ProviderNotConfigured("The model provider is not configured. Set an API key and retry.")
         selected_model = model or self.model_for_purpose(purpose)
         capability = self.capability_for_model(selected_model)
         if not capability.streaming:
@@ -158,7 +158,7 @@ class ModelRouter:
                         "name": "provider",
                         "status": "fail",
                         "code": "probe_unsupported",
-                        "summary": f"provider {self.settings.provider.type!r} 尚未实现 models probe",
+                        "summary": f"provider {self.settings.provider.type!r} does not implement the models probe",
                     }
                 ],
                 "latency_ms": 0,

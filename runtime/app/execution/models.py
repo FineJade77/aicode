@@ -23,9 +23,9 @@ class ResourceLimits:
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0 or self.timeout_seconds > 3600:
-            raise ValueError("timeout_seconds 必须在 0-3600 秒之间")
+            raise ValueError("timeout_seconds must be between 0 and 3600 seconds")
         if self.pids_limit is not None and not 1 <= self.pids_limit <= 65535:
-            raise ValueError("pids_limit 必须在 1-65535 之间")
+            raise ValueError("pids_limit must be between 1 and 65535")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,11 +54,11 @@ class ExecutionRequest:
         has_argv = bool(self.argv)
         has_shell = bool(self.shell_command and self.shell_command.strip())
         if has_argv == has_shell:
-            raise ValueError("ExecutionRequest 必须且只能设置 argv 或 shell_command")
+            raise ValueError("ExecutionRequest must set exactly one of argv or shell_command")
         if self.backend not in {"host", "docker"}:
-            raise ValueError(f"不支持的 execution backend: {self.backend}")
+            raise ValueError(f"unsupported execution backend: {self.backend}")
         if not self.execution_id.strip():
-            raise ValueError("execution_id 不能为空")
+            raise ValueError("execution_id must not be empty")
 
     @property
     def executable(self) -> str:

@@ -41,8 +41,8 @@ func TestCollectCommitDiffContextPrefersStagedDiff(t *testing.T) {
 	}
 }
 
-func TestCommitMessagePromptEnglishIsOutputOnly(t *testing.T) {
-	prompt := commitMessagePrompt("en-US", commitDiffContext{
+func TestCommitMessagePromptIsOutputOnly(t *testing.T) {
+	prompt := commitMessagePrompt(commitDiffContext{
 		Source: "working tree",
 		Status: " M cli/main.go",
 		Stat:   "cli/main.go | 2 ++",

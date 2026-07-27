@@ -109,7 +109,7 @@ func TestSetReviewRuleDisabledRejectsUnknownRule(t *testing.T) {
 	if rules != nil {
 		t.Fatalf("rules = %#v", rules)
 	}
-	if !strings.Contains(err.Error(), "未知 review 规则") {
+	if !strings.Contains(err.Error(), "unknown review rule") {
 		t.Fatalf("error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, ".aicode", "config.json")); !os.IsNotExist(statErr) {
@@ -228,7 +228,7 @@ func TestSetReviewNumberRejectsInvalidValue(t *testing.T) {
 	if path != "" {
 		t.Fatalf("path = %q", path)
 	}
-	if !strings.Contains(err.Error(), "必须在 50 到 50000 之间") {
+	if !strings.Contains(err.Error(), "must be between 50 and 50000") {
 		t.Fatalf("error = %v", err)
 	}
 }

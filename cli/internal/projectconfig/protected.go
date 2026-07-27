@@ -38,7 +38,7 @@ func ListProtectedPaths(workspacePath string) (string, []string, bool, error) {
 func AddProtectedPath(workspacePath string, pattern string) (string, []string, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
-		return "", nil, errors.New("protected path 不能为空")
+		return "", nil, errors.New("protected path must not be empty")
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -57,7 +57,7 @@ func AddProtectedPath(workspacePath string, pattern string) (string, []string, e
 func RemoveProtectedPath(workspacePath string, pattern string) (string, bool, []string, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
-		return "", false, nil, errors.New("protected path 不能为空")
+		return "", false, nil, errors.New("protected path must not be empty")
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -68,7 +68,7 @@ func RemoveProtectedPath(workspacePath string, pattern string) (string, bool, []
 
 	values, _ := effectiveProtectedPaths(raw)
 	if containsString(MandatoryProtectedPaths(), pattern) {
-		return path, false, values, fmt.Errorf("系统敏感 protected path 不可移除: %s", pattern)
+		return path, false, values, fmt.Errorf("mandatory sensitive protected path cannot be removed: %s", pattern)
 	}
 	removed := containsString(values, pattern)
 	values = removeValue(values, pattern)

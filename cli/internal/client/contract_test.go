@@ -126,7 +126,7 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 		t.Fatalf("application contract = %#v", contract.Application)
 	}
 
-	created, err := api.CreateSession(ctx, CreateSessionRequest{Workspace: "/workspace", Language: "zh-CN"})
+	created, err := api.CreateSession(ctx, CreateSessionRequest{Workspace: "/workspace", Language: "en-US"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	}
 
 	sent, err := api.SendMessage(ctx, "sess_fixture", SendMessageRequest{
-		Message: "hello", Mode: "default", Workspace: "/workspace", Language: "zh-CN",
+		Message: "hello", Mode: "default", Workspace: "/workspace", Language: "en-US",
 	})
 	if err != nil {
 		t.Fatal(err)

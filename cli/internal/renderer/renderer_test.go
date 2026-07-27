@@ -16,7 +16,7 @@ func TestUsageLineIncludesPurpose(t *testing.T) {
 		"estimated_cost": 0.00012345,
 	})
 
-	want := "用量: purpose=reviewer model=stub input=12 output=3 cost=$0.00012345"
+	want := "Usage: purpose=reviewer model=stub input=12 output=3 cost=$0.00012345"
 	if line != want {
 		t.Fatalf("usageLine() = %q, want %q", line, want)
 	}
@@ -29,7 +29,7 @@ func TestUsageLineDefaultsMissingPurpose(t *testing.T) {
 		"output_tokens": 3,
 	})
 
-	want := "用量: purpose=unknown model=stub input=12 output=3 cost=$0"
+	want := "Usage: purpose=unknown model=stub input=12 output=3 cost=$0"
 	if line != want {
 		t.Fatalf("usageLine() = %q, want %q", line, want)
 	}
@@ -38,10 +38,10 @@ func TestUsageLineDefaultsMissingPurpose(t *testing.T) {
 func TestRenderEventPrintsRunStatus(t *testing.T) {
 	output := captureRenderEvent(map[string]any{
 		"type":    "run.queued",
-		"message": "任务已排队，等待当前会话中的上一条任务完成。",
+		"message": "The run is queued until the previous run finishes.",
 	})
 
-	assertContains(t, output, "任务已排队")
+	assertContains(t, output, "run is queued")
 }
 
 func TestRenderEventPrintsReadFileContextStatus(t *testing.T) {
@@ -59,7 +59,7 @@ func TestRenderEventPrintsReadFileContextStatus(t *testing.T) {
 		},
 	})
 
-	assertContains(t, output, "上下文: 已读取 src/utils.py (依赖映射: src/service.py)，工具输出已截断")
+	assertContains(t, output, "Context: read src/utils.py (dependency mapping: src/service.py); tool output was truncated")
 	assertContains(t, output, "# src/utils.py")
 }
 
@@ -72,7 +72,7 @@ func TestRenderEventPrintsToolObservability(t *testing.T) {
 		"exit_code":   float64(0),
 	})
 
-	assertContains(t, output, "工具完成: bash [12ms, exit=0]")
+	assertContains(t, output, "Tool completed: bash [12ms, exit=0]")
 	assertContains(t, output, "exit=0")
 }
 
@@ -80,20 +80,20 @@ func TestRenderEventPrintsToolErrorObservability(t *testing.T) {
 	output := captureRenderEvent(map[string]any{
 		"type":        "tool.error",
 		"tool":        "bash",
-		"error":       "命令超时",
+		"error":       "command timed out",
 		"duration_ms": float64(1000),
 		"exit_code":   float64(-9),
 		"timed_out":   true,
 	})
 
-	assertContains(t, output, "工具失败: bash [1000ms, exit=-9, timeout] (命令超时)")
+	assertContains(t, output, "Tool failed: bash [1000ms, exit=-9, timeout] (command timed out)")
 }
 
 func TestRenderAssistantDelta(t *testing.T) {
-	output := captureRenderEvent(map[string]any{"type": "assistant.delta", "text": "你好"})
-	assertContains(t, output, "你好")
+	output := captureRenderEvent(map[string]any{"type": "assistant.delta", "text": "hello"})
+	assertContains(t, output, "hello")
 	if strings.HasSuffix(output, "\n\n") {
-		t.Fatalf("delta 不应额外换行: %q", output)
+		t.Fatalf("delta should not add an extra newline: %q", output)
 	}
 }
 
@@ -105,13 +105,13 @@ func TestRenderEditApplied(t *testing.T) {
 func TestRenderEditRejected(t *testing.T) {
 	output := captureRenderEvent(map[string]any{"type": "edit.rejected", "path": "a.py"})
 	assertContains(t, output, "a.py")
-	assertContains(t, output, "已拒绝编辑")
+	assertContains(t, output, "Edit rejected")
 }
 
 func TestRenderEditAutoApproved(t *testing.T) {
 	output := captureRenderEvent(map[string]any{"type": "edit.auto_approved", "path": "a.py"})
 	assertContains(t, output, "a.py")
-	assertContains(t, output, "自动应用编辑")
+	assertContains(t, output, "Edit applied automatically")
 }
 
 func TestRenderEventPrintsContextBudget(t *testing.T) {
@@ -132,18 +132,18 @@ func TestRenderEventPrintsContextBudget(t *testing.T) {
 		},
 	})
 
-	assertContains(t, output, "上下文预算: coder 压缩 1 条观测")
+	assertContains(t, output, "Context budget: coder compacted 1 observations")
 	assertContains(t, output, "read_file src/big.py: 30000 -> 18000 chars")
 }
 
 func TestReviewRulesTable(t *testing.T) {
 	table := ReviewRulesTable(reviewRulesFixture())
 
-	assertContains(t, table, "Review 配置")
+	assertContains(t, table, "Review configuration")
 	assertContains(t, table, "disabledRules: large_diff, old_rule")
 	assertContains(t, table, "largeDiffThreshold: 1200")
 	assertContains(t, table, "Warnings")
-	assertContains(t, table, "old_rule: disabledRules 包含未知规则 old_rule，该配置不会生效。")
+	assertContains(t, table, "old_rule: disabledRules contains unknown rule old_rule; this entry has no effect.")
 	assertContains(t, table, "disabled")
 	assertContains(t, table, "large_diff")
 	assertContains(t, table, "enabled")
@@ -157,8 +157,8 @@ func TestReviewRulesMarkdown(t *testing.T) {
 	assertContains(t, doc, "- disabledRules: `large_diff, old_rule`")
 	assertContains(t, doc, "## Config Warnings")
 	assertContains(t, doc, "| State | Severity | Rule | Description |")
-	assertContains(t, doc, "| disabled | medium | `large_diff` | 当前 diff 超过阈值 |")
-	assertContains(t, doc, "| enabled | high | `secret_added` | 新增内容匹配凭证 |")
+	assertContains(t, doc, "| disabled | medium | `large_diff` | The diff exceeds the configured threshold |")
+	assertContains(t, doc, "| enabled | high | `secret_added` | Added content matches a credential pattern |")
 }
 
 func TestModelRoutesTable(t *testing.T) {
@@ -236,14 +236,14 @@ func TestModelProbeTable(t *testing.T) {
 				"name":       "endpoint",
 				"status":     "pass",
 				"code":       "reachable",
-				"summary":    "发现 1 个模型",
+				"summary":    "discovered 1 model",
 				"latency_ms": float64(4),
 			},
 			map[string]any{
 				"name":    "tools",
 				"status":  "pass",
 				"code":    "tools_ok",
-				"summary": "原生 tool calling 正常",
+				"summary": "native tool calling works",
 			},
 		},
 		"discovered_models": []any{"local-coder"},
@@ -358,7 +358,7 @@ func reviewRulesFixture() map[string]any {
 		"config_warnings": []any{
 			map[string]any{
 				"rule":    "old_rule",
-				"message": "disabledRules 包含未知规则 old_rule，该配置不会生效。",
+				"message": "disabledRules contains unknown rule old_rule; this entry has no effect.",
 			},
 		},
 		"rules": []any{
@@ -366,15 +366,15 @@ func reviewRulesFixture() map[string]any {
 				"id":          "large_diff",
 				"severity":    "medium",
 				"enabled":     false,
-				"title":       "diff 规模较大",
-				"description": "当前 diff 超过阈值",
+				"title":       "Large diff",
+				"description": "The diff exceeds the configured threshold",
 			},
 			map[string]any{
 				"id":          "secret_added",
 				"severity":    "high",
 				"enabled":     true,
-				"title":       "新增行包含疑似密钥",
-				"description": "新增内容匹配凭证",
+				"title":       "Added line may contain a secret",
+				"description": "Added content matches a credential pattern",
 			},
 		},
 	}

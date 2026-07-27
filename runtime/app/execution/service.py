@@ -25,7 +25,7 @@ class ExecutionService:
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         if request.execution_id in self._active:
-            raise ValueError(f"execution_id 已存在: {request.execution_id}")
+            raise ValueError(f"execution_id already exists: {request.execution_id}")
         backend: ExecutionBackend = self.host if request.backend == "host" else self.docker
         self._active[request.execution_id] = backend
         self._record("execution.started", request, None)

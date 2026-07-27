@@ -47,7 +47,6 @@ type resumeTarget struct {
 type sessionInfo struct {
 	SessionID string
 	Workspace string
-	Language  string
 }
 
 func parseResumeArgs(args []string) (resumeTarget, error) {
@@ -67,7 +66,7 @@ func parseResumeArgs(args []string) (resumeTarget, error) {
 }
 
 func resumeUsage() error {
-	return fmt.Errorf("用法: aicode resume <session_id> [message] 或 aicode resume --last [message]")
+	return fmt.Errorf("usage: aicode resume <session_id> [message] or aicode resume --last [message]")
 }
 
 func fetchResumeSession(cfg config.Config, target resumeTarget) (any, error) {
@@ -79,25 +78,21 @@ func fetchResumeSession(cfg config.Config, target resumeTarget) (any, error) {
 
 func sessionInfoFromValue(value any) (sessionInfo, error) {
 	if value == nil {
-		return sessionInfo{}, fmt.Errorf("没有可恢复的 session")
+		return sessionInfo{}, fmt.Errorf("no session is available to resume")
 	}
 	payload, ok := value.(map[string]any)
 	if !ok {
-		return sessionInfo{}, fmt.Errorf("session 响应格式无效")
+		return sessionInfo{}, fmt.Errorf("invalid session response")
 	}
 	sessionID := strings.TrimSpace(stringValueFromMap(payload, "session_id"))
 	workspacePath := strings.TrimSpace(stringValueFromMap(payload, "workspace"))
-	language := strings.TrimSpace(stringValueFromMap(payload, "language"))
 	if sessionID == "" {
-		return sessionInfo{}, fmt.Errorf("session 缺少 session_id")
+		return sessionInfo{}, fmt.Errorf("session is missing session_id")
 	}
 	if workspacePath == "" {
-		return sessionInfo{}, fmt.Errorf("session 缺少 workspace")
+		return sessionInfo{}, fmt.Errorf("session is missing workspace")
 	}
-	if language == "" {
-		language = "zh-CN"
-	}
-	return sessionInfo{SessionID: sessionID, Workspace: workspacePath, Language: language}, nil
+	return sessionInfo{SessionID: sessionID, Workspace: workspacePath}, nil
 }
 
 func stringValueFromMap(payload map[string]any, key string) string {
@@ -121,13 +116,13 @@ func runResumeAgent(cfg config.Config, session sessionInfo, message string) erro
 		Message:   message,
 		Mode:      "chat",
 		Workspace: session.Workspace,
-		Language:  session.Language,
+		Language:  config.DefaultLanguage,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("恢复会话: %s\n", session.SessionID)
-	fmt.Printf("工作区: %s\n", session.Workspace)
+	fmt.Printf("Resumed session: %s\n", session.SessionID)
+	fmt.Printf("Workspace: %s\n", session.Workspace)
 	return runtimeio.StreamAndHandle(ctx, api, session.SessionID, run.RunID)
 }

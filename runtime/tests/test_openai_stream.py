@@ -1,5 +1,3 @@
-import asyncio
-
 import httpx
 import pytest
 
@@ -13,7 +11,7 @@ def sse_bytes(*chunks: str) -> bytes:
 
 
 STREAM_BODY = sse_bytes(
-    '{"choices":[{"delta":{"content":"你好"}}]}',
+    '{"choices":[{"delta":{"content":"hello"}}]}',
     '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc_1","function":{"name":"read_file","arguments":"{\\"pa"}}]}}]}',
     '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\\": \\"a.py\\"}"}}]}}]}',
     '{"choices":[{"delta":{}}],"usage":{"prompt_tokens":12,"completion_tokens":5},"model":"m1"}',
@@ -82,7 +80,7 @@ async def test_stream_parses_text_tool_calls_and_usage(monkeypatch):
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
     events = [event async for event in provider.stream_complete(request)]
     assert [e.type for e in events] == ["text_delta", "tool_call", "done"]
-    assert events[0].text == "你好"
+    assert events[0].text == "hello"
     assert events[1].tool_call.name == "read_file"
     assert events[1].tool_call.arguments == {"path": "a.py"}
     assert events[2].usage.input_tokens == 12
@@ -242,5 +240,5 @@ async def test_aclose_closes_client(monkeypatch):
     await provider.aclose()
     assert client.is_closed
     assert provider._client is None
-    # 再次 aclose 幂等，不报错
+    # A second aclose call is idempotent.
     await provider.aclose()

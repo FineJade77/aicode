@@ -297,12 +297,12 @@ Runtime prompt 由几层组成：
 - 当前 mode 的任务说明。
 - 项目规则 `.aicode/rules.md`。
 - 项目记忆 `.aicode/memory.md`。
-- 受保护路径、推荐命令和默认语言。
+- 受保护路径和推荐命令。
 - 最近消息和必要的历史摘要。
 
 项目规则被明确标记为“项目规则”，不能覆盖系统安全策略、工具策略和用户显式指令。这样可以降低仓库内 prompt injection 的影响。
 
-默认输出语言由项目配置 `defaultLanguage` 控制；当前 prompt 支持中文和英文模式，但 CLI 的部分固定提示仍以中文为主。
+系统仅提供英文交互。v1 HTTP/Application contract 中的 `language` 字段暂时保留以兼容旧客户端，但所有输入都会归一为 `en-US`，不再存在用户级或项目级语言切换配置。
 
 ## 11. Configuration
 
@@ -310,7 +310,7 @@ Runtime prompt 由几层组成：
 
 用户级配置位于 `~/.aicode/config.toml`，包含：
 
-- `ui`: 默认语言、输出风格等交互设置。
+- `ui`: 输出风格等交互设置。
 - `runtime`: Runtime URL 和 port。
 - `models.main`: 常规 Agent 模型。
 - `models.reviewer`: review 模式模型。
@@ -325,7 +325,6 @@ Runtime prompt 由几层组成：
 
 项目级配置位于 `.aicode/config.json`，包含：
 
-- `defaultLanguage`: 项目默认输出语言。
 - `commands.test/build/lint`: 项目推荐命令。
 - `protectedPaths`: 项目追加的保护路径；Runtime/CLI 始终与 `.env*`、SSH/GPG/cloud credentials、包管理凭证和私钥 mandatory patterns 合并，仓库配置不能移除系统规则。
 - `review`: 审查规则和严重级别设置。

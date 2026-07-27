@@ -18,7 +18,8 @@
           "type": "string"
         },
         "language": {
-          "type": "string"
+          "const": "en-US",
+          "description": "Deprecated v1 compatibility field. The runtime is English-only."
         },
         "model": {
           "type": ["string", "null"]
@@ -154,7 +155,8 @@
           "type": "string"
         },
         "language": {
-          "type": "string"
+          "const": "en-US",
+          "description": "Deprecated v1 compatibility field. The runtime is English-only."
         },
         "created_at": {
           "type": "string"

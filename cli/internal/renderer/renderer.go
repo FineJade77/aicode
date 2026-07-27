@@ -255,7 +255,7 @@ func ReviewRulesTable(value any) string {
 	}
 
 	var out strings.Builder
-	out.WriteString("Review 配置\n")
+	out.WriteString("Review configuration\n")
 	if config, ok := root["effective_config"].(map[string]any); ok {
 		out.WriteString(fmt.Sprintf("disabledRules: %s\n", joinStringList(config["disabled_rules"])))
 		out.WriteString(fmt.Sprintf("largeDiffThreshold: %v\n", config["large_diff_threshold"]))
@@ -412,7 +412,7 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 
 	switch eventType {
 	case "session.created":
-		fmt.Fprintf(out, "工作区: %s\n", stringValue(event["workspace"]))
+		fmt.Fprintf(out, "Workspace: %s\n", stringValue(event["workspace"]))
 	case "run.queued":
 		fmt.Fprintln(out, stringValue(event["message"]))
 	case "run.started":
@@ -426,9 +426,9 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 	case "assistant.delta":
 		fmt.Fprint(out, stringValue(event["text"]))
 	case "tool.started":
-		fmt.Fprintf(out, "工具: %s\n", stringValue(event["tool"]))
+		fmt.Fprintf(out, "Tool: %s\n", stringValue(event["tool"]))
 	case "tool.output":
-		if detail := toolDetailLine("工具完成", event); detail != "" {
+		if detail := toolDetailLine("Tool completed", event); detail != "" {
 			fmt.Fprintln(out, detail)
 		}
 		if line := contextOutputLine(event); line != "" {
@@ -443,29 +443,29 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 			fmt.Fprint(out, line)
 		}
 	case "tool.denied":
-		fmt.Fprintf(out, "工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "Tool denied by policy: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":
-		fmt.Fprintf(out, "工具执行已拒绝: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "Tool execution rejected: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.error":
-		detail := toolDetailLine("工具失败", event)
+		detail := toolDetailLine("Tool failed", event)
 		if detail == "" {
-			detail = fmt.Sprintf("工具失败: %s", stringValue(event["tool"]))
+			detail = fmt.Sprintf("Tool failed: %s", stringValue(event["tool"]))
 		}
 		fmt.Fprintf(out, "%s (%s)\n", detail, stringValue(event["error"]))
 	case "approval.requested":
-		fmt.Fprintf(out, "需要确认: %s\n", stringValue(event["message"]))
+		fmt.Fprintf(out, "Approval required: %s\n", stringValue(event["message"]))
 	case "approval.expired":
-		fmt.Fprintf(out, "确认已过期: %s\n", stringValue(event["message"]))
+		fmt.Fprintf(out, "Approval expired: %s\n", stringValue(event["message"]))
 	case "edit.applied":
-		fmt.Fprintf(out, "\n已应用编辑: %v (%v)\n", event["path"], event["kind"])
+		fmt.Fprintf(out, "\nEdit applied: %v (%v)\n", event["path"], event["kind"])
 	case "edit.rejected":
-		fmt.Fprintf(out, "\n已拒绝编辑: %v\n", event["path"])
+		fmt.Fprintf(out, "\nEdit rejected: %v\n", event["path"])
 	case "edit.auto_approved":
-		fmt.Fprintf(out, "\n[本会话已允许] 自动应用编辑: %v\n", event["path"])
+		fmt.Fprintf(out, "\n[allowed for this session] Edit applied automatically: %v\n", event["path"])
 	case "usage.recorded":
 		fmt.Fprintln(out, usageLine(event))
 	case "error":
-		fmt.Fprintf(out, "\n错误: %s\n", stringValue(event["error"]))
+		fmt.Fprintf(out, "\nError: %s\n", stringValue(event["error"]))
 	case "final":
 		fmt.Fprintf(out, "\n%s\n", stringValue(event["summary"]))
 	default:
@@ -509,12 +509,12 @@ func contextOutputLine(event map[string]any) string {
 		if path == "" {
 			return ""
 		}
-		line := fmt.Sprintf("上下文: 已读取 %s", path)
+		line := fmt.Sprintf("Context: read %s", path)
 		if label := contextKindLabel(kind); label != "" && sourcePath != "" {
 			line += fmt.Sprintf(" (%s: %s)", label, sourcePath)
 		}
 		if boolValue(data["truncated"]) {
-			line += "，工具输出已截断"
+			line += "; tool output was truncated"
 		}
 		return line
 	case "find_files":
@@ -528,10 +528,10 @@ func contextOutputLine(event map[string]any) string {
 		query := stringValue(data["query"])
 		count := len(sliceValue(data["files"]))
 		if sourcePath != "" && query != "" {
-			return fmt.Sprintf("上下文: %s %s -> %s，命中 %d 个候选", label, sourcePath, query, count)
+			return fmt.Sprintf("Context: %s %s -> %s, %d candidates", label, sourcePath, query, count)
 		}
 		if query != "" {
-			return fmt.Sprintf("上下文: %s query=%s，命中 %d 个候选", label, query, count)
+			return fmt.Sprintf("Context: %s query=%s, %d candidates", label, query, count)
 		}
 	}
 	return ""
@@ -547,7 +547,7 @@ func contextBudgetLine(event map[string]any) string {
 			purpose = "model"
 		}
 		return fmt.Sprintf(
-			"上下文预算: %s %v -> %v tokens\n",
+			"Context budget: %s %v -> %v tokens\n",
 			purpose,
 			event["before_tokens"],
 			event["after_tokens"],
@@ -559,7 +559,7 @@ func contextBudgetLine(event map[string]any) string {
 		purpose = "model"
 	}
 	out.WriteString(fmt.Sprintf(
-		"上下文预算: %s 压缩 %v 条观测，当前约 %v/%v chars\n",
+		"Context budget: %s compacted %v observations, now approximately %v/%v chars\n",
 		purpose,
 		event["per_observation_compactions"],
 		event["estimated_observation_chars"],
@@ -589,13 +589,13 @@ func contextBudgetLine(event map[string]any) string {
 func contextKindLabel(kind string) string {
 	switch kind {
 	case "test_mapping":
-		return "测试映射"
+		return "test mapping"
 	case "dependency_mapping":
-		return "依赖映射"
+		return "dependency mapping"
 	case "search_result":
-		return "搜索命中"
+		return "search matches"
 	case "file_lookup":
-		return "文件定位"
+		return "file lookup"
 	default:
 		return ""
 	}
@@ -611,7 +611,7 @@ func usageLine(event map[string]any) string {
 		cost = "0"
 	}
 	return fmt.Sprintf(
-		"用量: purpose=%s model=%s input=%v output=%v cost=$%s",
+		"Usage: purpose=%s model=%s input=%v output=%v cost=$%s",
 		purpose,
 		stringValue(event["model"]),
 		event["input_tokens"],

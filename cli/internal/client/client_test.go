@@ -125,7 +125,7 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 		Message:   "hello",
 		Mode:      "default",
 		Workspace: "/repo",
-		Language:  "zh-CN",
+		Language:  "en-US",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestStreamUnauthorizedExplainsTokenRecovery(t *testing.T) {
 func assertRuntimeAuthHint(t *testing.T, err error) {
 	t.Helper()
 	text := err.Error()
-	for _, want := range []string{"Runtime 认证失败", "runtime.token", "aicode daemon stop", "aicode daemon start"} {
+	for _, want := range []string{"Runtime authentication failed", "runtime.token", "aicode daemon stop", "aicode daemon start"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("error %q does not contain %q", text, want)
 		}

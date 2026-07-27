@@ -150,7 +150,7 @@ class OpenAICompatibleProvider:
                     "configuration",
                     "fail",
                     "auth_required",
-                    f"缺少 API key 环境变量 {self.settings.api_key_env}",
+                    f"API key environment variable {self.settings.api_key_env} is missing",
                 )
             )
             return probe_result(model, checks, discovered_models, started)
@@ -172,7 +172,7 @@ class OpenAICompatibleProvider:
                     "endpoint",
                     "fail",
                     "endpoint_unreachable",
-                    f"无法连接模型发现端点: {safe_exception_text(exc)}",
+                    f"could not connect to the model discovery endpoint: {safe_exception_text(exc)}",
                     endpoint_started,
                 )
             )
@@ -184,7 +184,7 @@ class OpenAICompatibleProvider:
                     "endpoint",
                     "fail",
                     "auth_failed",
-                    f"模型发现端点拒绝认证（HTTP {response.status_code}）",
+                    f"model discovery endpoint rejected authentication (HTTP {response.status_code})",
                     endpoint_started,
                 )
             )
@@ -195,7 +195,7 @@ class OpenAICompatibleProvider:
                     "endpoint",
                     "fail",
                     "endpoint_http_error",
-                    f"模型发现端点返回 HTTP {response.status_code}",
+                    f"model discovery endpoint returned HTTP {response.status_code}",
                     endpoint_started,
                 )
             )
@@ -210,7 +210,7 @@ class OpenAICompatibleProvider:
                     "endpoint",
                     "fail",
                     "invalid_models_response",
-                    "模型发现端点未返回 OpenAI-compatible JSON",
+                    "model discovery endpoint did not return OpenAI-compatible JSON",
                     endpoint_started,
                 )
             )
@@ -221,7 +221,7 @@ class OpenAICompatibleProvider:
                 "endpoint",
                 "pass",
                 "reachable",
-                f"发现 {len(discovered_models)} 个模型",
+                f"discovered {len(discovered_models)} models",
                 endpoint_started,
             )
         )
@@ -231,11 +231,11 @@ class OpenAICompatibleProvider:
                     "model",
                     "fail",
                     "model_not_found",
-                    f"配置模型 {model!r} 不在 /models 返回列表中",
+                    f"configured model {model!r} is not present in the /models response",
                 )
             )
             return probe_result(model, checks, discovered_models, started)
-        checks.append(probe_check("model", "pass", "model_found", f"已发现配置模型 {model!r}"))
+        checks.append(probe_check("model", "pass", "model_found", f"configured model {model!r} was discovered"))
 
         if not self.settings.streaming:
             checks.append(
@@ -243,7 +243,7 @@ class OpenAICompatibleProvider:
                     "streaming",
                     "fail",
                     "streaming_disabled",
-                    "profile 声明 streaming=false；当前 Agent 运行时要求 SSE streaming",
+                    "profile declares streaming=false, but the Agent runtime requires SSE streaming",
                 )
             )
             return probe_result(model, checks, discovered_models, started)
@@ -253,7 +253,7 @@ class OpenAICompatibleProvider:
                     "tools",
                     "fail",
                     "tools_disabled",
-                    "profile 声明 tool_calling=false；不会退化为从文本猜测 JSON",
+                    "profile declares tool_calling=false; aicode will not guess JSON from text",
                 )
             )
             return probe_result(model, checks, discovered_models, started)
@@ -313,12 +313,12 @@ class OpenAICompatibleProvider:
                     "streaming",
                     "fail",
                     "stream_incomplete",
-                    "SSE 流未产生 done 终态",
+                    "SSE stream did not produce a terminal done event",
                     stream_started,
                 )
             )
             return probe_result(model, checks, discovered_models, started)
-        checks.append(probe_check("streaming", "pass", "stream_ok", "SSE streaming 正常", stream_started))
+        checks.append(probe_check("streaming", "pass", "stream_ok", "SSE streaming works", stream_started))
 
         if tools:
             matched = any(
@@ -331,11 +331,11 @@ class OpenAICompatibleProvider:
                         "tools",
                         "fail",
                         "tools_unsupported",
-                        "模型未返回要求的原生 tool call；不会从文本猜测 JSON",
+                        "model did not return the required native tool call; aicode will not guess JSON from text",
                     )
                 )
                 return probe_result(model, checks, discovered_models, started)
-            checks.append(probe_check("tools", "pass", "tools_ok", "原生 tool calling 正常"))
+            checks.append(probe_check("tools", "pass", "tools_ok", "native tool calling works"))
 
         return probe_result(model, checks, discovered_models, started)
 
@@ -444,12 +444,12 @@ def classify_completion_probe_error(exc: ProviderError) -> tuple[str, str]:
     if any(marker in normalized for marker in ("tool", "function")) and any(
         marker in normalized for marker in ("unsupported", "not support", "unknown", "invalid")
     ):
-        return "tools_unsupported", f"endpoint 拒绝 tools 请求: {message}"
+        return "tools_unsupported", f"endpoint rejected the tools request: {message}"
     if any(marker in normalized for marker in ("model not found", "unknown model", "does not exist")):
-        return "model_not_found", f"completion endpoint 找不到配置模型: {message}"
+        return "model_not_found", f"completion endpoint could not find the configured model: {message}"
     if any(marker in normalized for marker in ("401", "403", "unauthorized", "forbidden")):
-        return "auth_failed", f"completion endpoint 认证失败: {message}"
-    return "streaming_failed", f"SSE completion probe 失败: {message}"
+        return "auth_failed", f"completion endpoint authentication failed: {message}"
+    return "streaming_failed", f"SSE completion probe failed: {message}"
 
 
 def safe_exception_text(exc: BaseException) -> str:

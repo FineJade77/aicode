@@ -11,6 +11,7 @@ from app.agent.loop import AgentLoop
 from app.agent.types import AgentRuntime
 from app.application.contracts import (
     CompactionReceipt,
+    DEFAULT_LANGUAGE,
     RunControl,
     RunReceipt,
     SessionSnapshot,
@@ -44,9 +45,8 @@ class SessionService:
         self.trace = trace
         self.workspace = workspace
 
-    async def create(self, workspace: str, language: str) -> SessionSnapshot:
-        effective = self.workspace.effective_language(workspace, language)
-        session = self.sessions.create(workspace=workspace, language=effective)
+    async def create(self, workspace: str, _language: str) -> SessionSnapshot:
+        session = self.sessions.create(workspace=workspace, language=DEFAULT_LANGUAGE)
         self.trace.record(
             "session.created",
             session_id=session.session_id,
@@ -66,6 +66,7 @@ class SessionService:
         session = self.sessions.get(session_id)
         if session is None:
             raise NotFound("session not found")
+        session.language = DEFAULT_LANGUAGE
         return session
 
     def get(self, session_id: str) -> SessionSnapshot:
@@ -80,7 +81,7 @@ class SessionService:
     def bind_turn(self, session: AgentSession, request: TurnRequest) -> TurnRequest:
         if not self.workspace.same_workspace(session.workspace, request.workspace):
             raise InvalidRequest("message workspace does not match session workspace")
-        return request.bind(workspace=session.workspace, language=session.language)
+        return request.bind(workspace=session.workspace)
 
 
 class RunCoordinator:
@@ -97,7 +98,9 @@ class RunCoordinator:
     async def submit(self, session: AgentSession, request: TurnRequest) -> RunReceipt:
         configured = getattr(self.model.primary, "is_configured", None)
         if callable(configured) and not configured():
-            raise ProviderUnavailable("模型 provider 未配置，请设置 API key（如 OPENAI_API_KEY 或 ANTHROPIC_API_KEY）后重试")
+            raise ProviderUnavailable(
+                "The model provider is not configured. Set an API key such as OPENAI_API_KEY or ANTHROPIC_API_KEY and retry."
+            )
         was_running = session.agent_runner_active() or session.agent_queue.qsize() > 0
         session.events.set_default_after(session.events.last_event_id())
         queued = session.enqueue_agent_run(request)
@@ -152,7 +155,7 @@ class RunCoordinator:
                 "run_id": run_id,
                 "status": "queued",
                 "pending": pending,
-                "message": "steer 指令已排队，将在下一个 AgentLoop 安全边界应用。",
+                "message": "Steering guidance is queued and will be applied at the next AgentLoop safe boundary.",
             }
         )
         return SteerReceipt(run_id=run_id, pending=pending)
@@ -182,11 +185,11 @@ class RunCoordinator:
                     "run_id": run_id,
                     "approval_id": approval.approval_id,
                     "kind": approval.kind,
-                    "message": "当前任务已取消，待确认操作已过期。",
+                    "message": "The current run was cancelled and the pending approval expired.",
                 }
             )
 
-        message = "当前任务已取消。"
+        message = "The current run was cancelled."
         self.trace.record(
             "run.cancelled",
             session_id=session.session_id,
@@ -215,7 +218,7 @@ class RunCoordinator:
                     workspace=session.workspace,
                     data={"run_id": queued.run_id},
                 )
-                await session.events.put({"type": "run.started", "message": "开始执行当前任务。"})
+                await session.events.put({"type": "run.started", "message": "Started the current run."})
                 await self.agent_loop.run(session, queued.request)
             finally:
                 expired_steers = session.drain_steers()
@@ -242,9 +245,9 @@ class RunCoordinator:
                 "status": "queued" if was_running else "accepted",
                 "queue_position": queue_position,
                 "message": (
-                    "任务已排队，等待当前会话中的上一条任务完成。"
+                    "The run is queued until the previous run in this session finishes."
                     if was_running
-                    else "任务已接收，准备开始执行。"
+                    else "The run was accepted and is ready to start."
                 ),
             }
         )
@@ -395,11 +398,11 @@ class ExecutionApplicationService:
     async def execute(self, request: Any) -> dict[str, Any]:
         root = Path(request.workspace).expanduser().resolve()
         if not root.is_dir():
-            raise InvalidRequest("workspace 不存在或不是目录")
+            raise InvalidRequest("workspace does not exist or is not a directory")
         command = self.workspace.project_command(root, request.action)
         if not command:
             raise InvalidRequest(
-                f"未能自动探测 {request.action} 命令，请在 .aicode/config.json 的 commands.{request.action} 中配置"
+                f"Could not auto-detect the {request.action} command. Configure commands.{request.action} in .aicode/config.json."
             )
         try:
             execution_request = ExecutionRequest(

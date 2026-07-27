@@ -18,7 +18,6 @@ from app.models.provider import ProviderError
 from app.models.router import ModelRouter
 from app.config.settings import Settings
 from app.sessions.store import COMPACTION_SCHEMA_VERSION, SessionStore
-from tests.fakes import FakeProvider, text_turn
 
 
 class FailingSummaryProvider:
@@ -36,15 +35,15 @@ class FailingSummaryProvider:
 @pytest.fixture
 def session(tmp_path):
     store = SessionStore(path=tmp_path / "s.sqlite")
-    return store.create(workspace=str(tmp_path), language="zh-CN"), store
+    return store.create(workspace=str(tmp_path), language="en-US"), store
 
 
 def test_load_history_converts_legacy(session, tmp_path):
     sess, store = session
-    store.append_message(sess, {"message": "修个 bug", "mode": "default", "workspace": str(tmp_path), "language": "zh-CN"})
-    store.append_message(sess, {"role": "assistant", "content": "好的"})
+    store.append_message(sess, {"message": "Fix a bug", "mode": "default", "workspace": str(tmp_path), "language": "en-US"})
+    store.append_message(sess, {"role": "assistant", "content": "Okay"})
     history = load_history(sess)
-    assert history[0] == {"role": "user", "content": "修个 bug"}
+    assert history[0] == {"role": "user", "content": "Fix a bug"}
     assert history[1]["role"] == "assistant"
 
 
@@ -62,7 +61,7 @@ def test_truncate_tool_output_layers():
     long_text = "x" * 20_000
     truncated = truncate_tool_output("bash", long_text)
     assert len(truncated) < 9_000
-    assert "已截断" in truncated
+    assert "output truncated" in truncated
     assert truncate_tool_output("read_file", long_text) == long_text
 
 
@@ -79,8 +78,8 @@ async def test_compact_replaces_old_tool_messages(session):
     assert before > HISTORY_TOKEN_BUDGET
     compacted = await compact_if_needed(history, runtime, sess)
     assert estimate_tokens(compacted) < before
-    assert "[工具输出已压缩" in compacted[2]["content"]  # 最老的 tool 消息被压缩
-    assert compacted[-1]["content"] == big  # 最近消息保留
+    assert "[tool output compacted" in compacted[2]["content"]  # The oldest tool message is compacted.
+    assert compacted[-1]["content"] == big  # The most recent message is preserved.
 
 
 @pytest.mark.asyncio
@@ -95,7 +94,7 @@ async def test_compact_noop_under_budget(session):
 async def test_persistent_compaction_is_reused_after_restart(tmp_path):
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(path=db_path)
-    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    sess = store.create(workspace=str(tmp_path), language="en-US")
     for index in range(10):
         store.append_message(sess, {"role": "user", "content": f"goal-{index} " + "x" * 30_000})
 
@@ -109,7 +108,7 @@ async def test_persistent_compaction_is_reused_after_restart(tmp_path):
         max_tokens=8_192,
     )
 
-    assert projected[0]["content"].startswith("[持久化历史摘要")
+    assert projected[0]["content"].startswith("[persistent history summary")
     assert len(sess.compactions) == 1
     original_count = len(sess.messages)
     sess.append_compaction(
@@ -133,7 +132,7 @@ async def test_persistent_compaction_is_reused_after_restart(tmp_path):
 @pytest.mark.asyncio
 async def test_compaction_boundary_keeps_tool_call_and_result_together(tmp_path):
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    sess = store.create(workspace=str(tmp_path), language="en-US")
     for index in range(8):
         store.append_message(
             sess,
@@ -177,7 +176,7 @@ async def test_compaction_boundary_keeps_tool_call_and_result_together(tmp_path)
 @pytest.mark.asyncio
 async def test_unfinished_tool_call_is_not_compacted(tmp_path):
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    sess = store.create(workspace=str(tmp_path), language="en-US")
     store.append_message(
         sess,
         {
@@ -206,7 +205,7 @@ async def test_unfinished_tool_call_is_not_compacted(tmp_path):
 async def test_consecutive_compactions_advance_projection(tmp_path):
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(path=db_path)
-    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    sess = store.create(workspace=str(tmp_path), language="en-US")
     runtime = AgentRuntime(model_router=None, audit=None)
     for index in range(10):
         store.append_message(sess, {"role": "user", "content": f"first-{index} " + "a" * 30_000})
@@ -235,7 +234,7 @@ async def test_consecutive_compactions_advance_projection(tmp_path):
 @pytest.mark.asyncio
 async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tmp_path):
     store = SessionStore(path=tmp_path / "sessions.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    sess = store.create(workspace=str(tmp_path), language="en-US")
     for index in range(8):
         store.append_message(sess, {"role": "user", "content": f"goal-{index}"})
     original = list(sess.messages)
@@ -253,7 +252,7 @@ async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tm
     )
 
     assert sess.messages == original
-    assert projected[0]["content"].startswith("[持久化历史摘要")
+    assert projected[0]["content"].startswith("[persistent history summary")
     assert sess.compactions[-1].provider == "builtin"
     event = [item for item in sess.events.events_after(0) if item["type"] == "context.budget"][-1]
     assert event["summary_mode"] == "fallback"
@@ -263,7 +262,7 @@ async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tm
 @pytest.mark.asyncio
 async def test_manual_context_service_persists_compaction(tmp_path):
     store = SessionStore(path=tmp_path / "manual.sqlite")
-    sess = store.create(workspace=str(tmp_path), language="zh-CN")
+    sess = store.create(workspace=str(tmp_path), language="en-US")
     for index in range(5):
         store.append_message(sess, {"role": "user", "content": f"constraint-{index}"})
     trace = AuditLogger(path=tmp_path / "audit.jsonl")

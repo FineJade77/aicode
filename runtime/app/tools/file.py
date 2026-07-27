@@ -25,13 +25,13 @@ class ListFilesTool:
         limit = int(args.get("limit", 80))
 
         if not root.exists():
-            return ToolResult(success=False, error=f"路径不存在: {root}")
+            return ToolResult(success=False, error=f"path does not exist: {root}")
         if not root.is_dir():
-            return ToolResult(success=False, error=f"不是目录: {root}")
+            return ToolResult(success=False, error=f"path is not a directory: {root}")
 
         files: list[str] = []
         walk(root, workspace_root, workspace_name, files, max_depth=max_depth, limit=limit, protected_paths=context.protected_paths)
-        text = "\n".join(f"- {item}" for item in files) if files else "未发现文件"
+        text = "\n".join(f"- {item}" for item in files) if files else "No files found"
         return ToolResult(success=True, text=text, data={"files": files, "workspace": workspace_name or "main"})
 
 

@@ -18,15 +18,15 @@ def make_router(turns) -> tuple[ModelRouter, FakeProvider]:
 
 @pytest.mark.asyncio
 async def test_stream_complete_aggregates_and_calls_delta():
-    router, fake = make_router([tool_turn("bash", {"command": "ls"}, text="先看目录")])
+    router, fake = make_router([tool_turn("bash", {"command": "ls"}, text="Inspect the directory first")])
     deltas = []
 
     async def on_delta(text):
         deltas.append(text)
 
     result = await router.stream_complete(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], on_text_delta=on_delta)
-    assert result.text == "先看目录"
-    assert deltas == ["先看目录"]
+    assert result.text == "Inspect the directory first"
+    assert deltas == ["Inspect the directory first"]
     assert result.tool_calls[0].name == "bash"
     assert result.input_tokens == 10
     assert fake.calls[0].model == Settings().models.main

@@ -16,13 +16,13 @@ def test_replace_generates_diff_and_applies(tmp_path):
 
 def test_replace_requires_unique_match(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\nx = 1\n", encoding="utf-8")
-    with pytest.raises(EditError, match="唯一"):
+    with pytest.raises(EditError, match="not unique"):
         build_edit_proposal(tmp_path, {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}, [])
 
 
 def test_replace_missing_old_text(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
-    with pytest.raises(EditError, match="未找到"):
+    with pytest.raises(EditError, match="not found"):
         build_edit_proposal(tmp_path, {"path": "a.py", "old_text": "not there", "new_text": "y"}, [])
 
 
@@ -52,7 +52,7 @@ def test_stale_detection(tmp_path):
     target = tmp_path / "a.py"
     target.write_text("x = 1\n", encoding="utf-8")
     proposal = build_edit_proposal(tmp_path, {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}, [])
-    target.write_text("x = 999\n", encoding="utf-8")  # 外部修改
+    target.write_text("x = 999\n", encoding="utf-8")  # External modification.
     with pytest.raises(EditStaleError):
         apply_edit(tmp_path, proposal)
 
@@ -65,7 +65,7 @@ def test_protected_path_rejected(tmp_path):
 def test_runtime_secret_value_cannot_be_written(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
 
-    with pytest.raises(EditError, match="敏感环境变量"):
+    with pytest.raises(EditError, match="sensitive Runtime environment"):
         build_edit_proposal(
             tmp_path,
             {"path": "config.py", "new_text": 'KEY = "provider-secret-value"\n'},
@@ -77,7 +77,7 @@ def test_stale_detection_create_collision(tmp_path):
     proposal = build_edit_proposal(tmp_path, {"path": "new/b.py", "new_text": "print(1)\n"}, [])
     target = tmp_path / "new" / "b.py"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("externally created\n", encoding="utf-8")  # 外部并发创建
+    target.write_text("externally created\n", encoding="utf-8")  # Concurrent external creation.
     with pytest.raises(EditStaleError):
         apply_edit(tmp_path, proposal)
     assert target.read_text(encoding="utf-8") == "externally created\n"
@@ -87,7 +87,7 @@ def test_stale_detection_external_delete(tmp_path):
     target = tmp_path / "a.py"
     target.write_text("x = 1\n", encoding="utf-8")
     proposal = build_edit_proposal(tmp_path, {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}, [])
-    target.unlink()  # 外部删除
+    target.unlink()  # External deletion.
     with pytest.raises(EditStaleError):
         apply_edit(tmp_path, proposal)
     assert not target.exists()

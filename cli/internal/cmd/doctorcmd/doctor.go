@@ -28,7 +28,7 @@ const (
 	StatusError = "error"
 )
 
-var ErrChecksFailed = errors.New("doctor 检查发现错误，请按提示修复")
+var ErrChecksFailed = errors.New("doctor found errors; follow the remediation guidance")
 
 type Check struct {
 	Name        string         `json:"name"`
@@ -85,7 +85,7 @@ func parseArgs(args []string) (bool, error) {
 	jsonOutput := false
 	for _, arg := range args {
 		if arg != "--json" {
-			return false, fmt.Errorf("用法: aicode doctor [--json]")
+			return false, fmt.Errorf("usage: aicode doctor [--json]")
 		}
 		jsonOutput = true
 	}
@@ -142,15 +142,15 @@ func checkInstallation(state runtimeState) Check {
 		return Check{
 			Name:        "installation",
 			Status:      StatusError,
-			Summary:     "无法解析 Runtime 安装",
+			Summary:     "Could not resolve the Runtime installation",
 			Details:     map[string]any{"error": state.installErr.Error()},
-			Remediation: "运行 `make install`，或为源码开发设置有效的 AICODE_RUNTIME_DIR。",
+			Remediation: "Run `make install`, or set a valid AICODE_RUNTIME_DIR for source development.",
 		}
 	}
 	return Check{
 		Name:    "installation",
 		Status:  StatusOK,
-		Summary: "Runtime 安装布局可用",
+		Summary: "Runtime installation layout is valid",
 		Details: map[string]any{
 			"python":      state.installation.Python,
 			"runtime_dir": state.installation.RuntimeDir,
@@ -167,9 +167,9 @@ func checkVersions(state runtimeState, cliVersion string) Check {
 		return Check{
 			Name:        "version",
 			Status:      StatusError,
-			Summary:     "无法验证 CLI/Runtime 版本",
+			Summary:     "Could not verify CLI and Runtime versions",
 			Details:     details,
-			Remediation: "先修复 Runtime 安装，再重新运行 `aicode doctor`。",
+			Remediation: "Repair the Runtime installation, then run `aicode doctor` again.",
 		}
 	}
 
@@ -181,14 +181,14 @@ func checkVersions(state runtimeState, cliVersion string) Check {
 	}
 
 	if runtimeVersion != "" && daemonVersion != "" && runtimeVersion != daemonVersion {
-		return versionMismatch(details, "已安装 Runtime 与运行中 daemon 版本不一致")
+		return versionMismatch(details, "Installed Runtime and running daemon versions do not match")
 	}
 	if cliVersion != "dev" {
 		if runtimeVersion != "" && cliVersion != runtimeVersion {
-			return versionMismatch(details, "CLI 与已安装 Runtime 版本不一致")
+			return versionMismatch(details, "CLI and installed Runtime versions do not match")
 		}
 		if daemonVersion != "" && cliVersion != daemonVersion {
-			return versionMismatch(details, "CLI 与运行中 daemon 版本不一致")
+			return versionMismatch(details, "CLI and running daemon versions do not match")
 		}
 	}
 
@@ -196,24 +196,24 @@ func checkVersions(state runtimeState, cliVersion string) Check {
 		return Check{
 			Name:        "version",
 			Status:      StatusWarn,
-			Summary:     "CLI 是未注入版本号的开发构建",
+			Summary:     "CLI is a development build without an injected version",
 			Details:     details,
-			Remediation: "使用 `make build` 或 `make install` 生成带版本号的 CLI。",
+			Remediation: "Use `make build` or `make install` to produce a versioned CLI.",
 		}
 	}
 	if runtimeVersion == "" {
 		return Check{
 			Name:        "version",
 			Status:      StatusWarn,
-			Summary:     "Runtime 未声明版本，无法完成一致性检查",
+			Summary:     "Runtime does not declare a version, so consistency cannot be checked",
 			Details:     details,
-			Remediation: "设置 AICODE_RUNTIME_VERSION，或使用版本化安装布局。",
+			Remediation: "Set AICODE_RUNTIME_VERSION or use the versioned installation layout.",
 		}
 	}
 	return Check{
 		Name:    "version",
 		Status:  StatusOK,
-		Summary: "CLI 与 Runtime 版本一致",
+		Summary: "CLI and Runtime versions match",
 		Details: details,
 	}
 }
@@ -224,7 +224,7 @@ func versionMismatch(details map[string]any, summary string) Check {
 		Status:      StatusError,
 		Summary:     summary,
 		Details:     details,
-		Remediation: "重新运行 `make install`，然后执行 `aicode daemon stop && aicode daemon start`。",
+		Remediation: "Run `make install` again, then run `aicode daemon stop && aicode daemon start`.",
 	}
 }
 
@@ -233,8 +233,8 @@ func checkPython(state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "python",
 			Status:      StatusError,
-			Summary:     "Runtime Python 不可验证",
-			Remediation: "先修复 Runtime 安装。",
+			Summary:     "Runtime Python could not be verified",
+			Remediation: "Repair the Runtime installation first.",
 		}
 	}
 
@@ -255,9 +255,9 @@ func checkPython(state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "python",
 			Status:      StatusError,
-			Summary:     "Runtime Python 或依赖不可用",
+			Summary:     "Runtime Python or its dependencies are unavailable",
 			Details:     details,
-			Remediation: "重新运行 `make install` 以重建 venv 和锁定依赖。",
+			Remediation: "Run `make install` again to rebuild the virtual environment and locked dependencies.",
 		}
 	}
 	pythonVersion := firstLine(output)
@@ -265,15 +265,15 @@ func checkPython(state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "python",
 			Status:      StatusError,
-			Summary:     "Runtime 需要 Python 3.11 或更高版本",
+			Summary:     "Runtime requires Python 3.11 or later",
 			Details:     details,
-			Remediation: "安装 Python 3.11+，并通过 `make install INSTALL_PYTHON=python3.11` 重装。",
+			Remediation: "Install Python 3.11+ and reinstall with `make install INSTALL_PYTHON=python3.11`.",
 		}
 	}
 	return Check{
 		Name:    "python",
 		Status:  StatusOK,
-		Summary: "Python 版本和 Runtime 依赖可用",
+		Summary: "Python version and Runtime dependencies are available",
 		Details: details,
 	}
 }
@@ -289,18 +289,18 @@ func checkPort(cfg config.Config, state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "port",
 			Status:      StatusError,
-			Summary:     "runtime.url 无效",
+			Summary:     "runtime.url is invalid",
 			Details:     details,
-			Remediation: "使用 `aicode config set runtime.url http://127.0.0.1:8765` 修复 URL。",
+			Remediation: "Set a valid URL with `aicode config set runtime.url http://127.0.0.1:8765`.",
 		}
 	}
 	if cfg.Runtime.Port < 1 || cfg.Runtime.Port > 65535 {
 		return Check{
 			Name:        "port",
 			Status:      StatusError,
-			Summary:     "runtime.port 超出有效范围",
+			Summary:     "runtime.port is outside the valid range",
 			Details:     details,
-			Remediation: "将 runtime.port 设置为 1-65535 之间的端口。",
+			Remediation: "Set runtime.port to a value between 1 and 65535.",
 		}
 	}
 	if cfg.Runtime.Port != urlPort {
@@ -308,9 +308,9 @@ func checkPort(cfg config.Config, state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "port",
 			Status:      StatusError,
-			Summary:     "runtime.url 与 runtime.port 不一致",
+			Summary:     "runtime.url and runtime.port do not match",
 			Details:     details,
-			Remediation: "将 runtime.url 中的端口与 runtime.port 设置为相同值。",
+			Remediation: "Set the port in runtime.url and runtime.port to the same value.",
 		}
 	}
 
@@ -324,15 +324,15 @@ func checkPort(cfg config.Config, state runtimeState, deps dependencies) Check {
 			return Check{
 				Name:        "port",
 				Status:      StatusError,
-				Summary:     "daemon 响应异常",
+				Summary:     "Daemon response is invalid",
 				Details:     details,
-				Remediation: "运行 `aicode daemon stop && aicode daemon start`，并检查 runtime.log。",
+				Remediation: "Run `aicode daemon stop && aicode daemon start`, then inspect runtime.log.",
 			}
 		}
 		return Check{
 			Name:    "port",
 			Status:  StatusOK,
-			Summary: "Runtime daemon 正在监听且健康",
+			Summary: "Runtime daemon is listening and healthy",
 			Details: details,
 		}
 	}
@@ -342,9 +342,9 @@ func checkPort(cfg config.Config, state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "port",
 			Status:      StatusWarn,
-			Summary:     "远程 Runtime 不可达，未检查本地端口",
+			Summary:     "Remote Runtime is unreachable; local port was not checked",
 			Details:     details,
-			Remediation: "确认远程 Runtime 地址、网络和 daemon 状态。",
+			Remediation: "Verify the remote Runtime address, network, and daemon status.",
 		}
 	}
 
@@ -355,9 +355,9 @@ func checkPort(cfg config.Config, state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "port",
 			Status:      StatusError,
-			Summary:     "端口已被占用，但目标不是健康的 aicode Runtime",
+			Summary:     "Port is occupied, but the target is not a healthy aicode Runtime",
 			Details:     details,
-			Remediation: "释放该端口，或同时修改 runtime.url 与 runtime.port。",
+			Remediation: "Release the port or update both runtime.url and runtime.port.",
 		}
 	}
 	details["address"] = address
@@ -366,17 +366,17 @@ func checkPort(cfg config.Config, state runtimeState, deps dependencies) Check {
 		return Check{
 			Name:        "port",
 			Status:      StatusWarn,
-			Summary:     "Runtime daemon 未运行，无法确认端口是否可用",
+			Summary:     "Runtime daemon is not running and port availability could not be determined",
 			Details:     details,
-			Remediation: "检查本机网络权限和端口配置，然后运行 `aicode daemon start`。",
+			Remediation: "Check local network permissions and port configuration, then run `aicode daemon start`.",
 		}
 	}
 	return Check{
 		Name:        "port",
 		Status:      StatusWarn,
-		Summary:     "Runtime daemon 未运行，配置端口当前可用",
+		Summary:     "Runtime daemon is not running and the configured port is available",
 		Details:     details,
-		Remediation: "运行 `aicode daemon start`；普通 agent 命令也会自动启动 daemon。",
+		Remediation: "Run `aicode daemon start`; normal agent commands also start the daemon automatically.",
 	}
 }
 
@@ -405,9 +405,9 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 			return Check{
 				Name:        "provider",
 				Status:      StatusError,
-				Summary:     "provider auth_mode 不受支持",
+				Summary:     "Provider auth_mode is unsupported",
 				Details:     details,
-				Remediation: "将 provider.openai_compatible.auth_mode 设置为 required、optional 或 none。",
+				Remediation: "Set provider.openai_compatible.auth_mode to required, optional, or none.",
 			}
 		}
 		if cfg.OpenAICompatible.ProfileSchemaVersion != 1 ||
@@ -422,9 +422,9 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 			return Check{
 				Name:        "provider",
 				Status:      StatusError,
-				Summary:     "Provider Profile capability 配置无效",
+				Summary:     "Provider Profile capability configuration is invalid",
 				Details:     details,
-				Remediation: "使用 schema version 1、正数 context/max output（max output 小于 context）和 chars tokenizer。",
+				Remediation: "Use schema version 1, positive context and max output values with max output below context, and the chars tokenizer.",
 			}
 		}
 	case "anthropic":
@@ -434,9 +434,9 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 		return Check{
 			Name:        "provider",
 			Status:      StatusError,
-			Summary:     "provider.type 不受支持",
+			Summary:     "provider.type is unsupported",
 			Details:     details,
-			Remediation: "将 provider.type 设置为 openai_compatible 或 anthropic。",
+			Remediation: "Set provider.type to openai_compatible or anthropic.",
 		}
 	}
 
@@ -449,18 +449,18 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 		return Check{
 			Name:        "provider",
 			Status:      StatusError,
-			Summary:     "provider base URL 无效",
+			Summary:     "Provider base URL is invalid",
 			Details:     details,
-			Remediation: "通过 `aicode config set` 配置有效的 http/https provider base URL。",
+			Remediation: "Use `aicode config set` to configure a valid HTTP or HTTPS provider base URL.",
 		}
 	}
 	if authMode == "required" && apiKeyEnv == "" {
 		return Check{
 			Name:        "provider",
 			Status:      StatusError,
-			Summary:     "provider 的 API key 环境变量名为空",
+			Summary:     "Provider API key environment-variable name is empty",
 			Details:     details,
-			Remediation: "设置对应 provider 的 api_key_env 配置。",
+			Remediation: "Set api_key_env for the selected provider.",
 		}
 	}
 
@@ -476,7 +476,7 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 		return Check{
 			Name:    "provider",
 			Status:  StatusOK,
-			Summary: "no-auth 本地 Provider Profile 已就绪",
+			Summary: "No-auth local Provider Profile is ready",
 			Details: details,
 		}
 	}
@@ -485,7 +485,7 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 		return Check{
 			Name:    "provider",
 			Status:  StatusOK,
-			Summary: "provider 配置和 API key 已就绪",
+			Summary: "Provider configuration and API key are ready",
 			Details: details,
 		}
 	}
@@ -493,16 +493,16 @@ func checkProvider(cfg config.Config, deps dependencies) Check {
 		return Check{
 			Name:    "provider",
 			Status:  StatusOK,
-			Summary: "optional-auth Provider Profile 已就绪（当前未发送 API key）",
+			Summary: "Optional-auth Provider Profile is ready (no API key will be sent)",
 			Details: details,
 		}
 	}
 	return Check{
 		Name:        "provider",
 		Status:      StatusWarn,
-		Summary:     "provider API key 尚未配置",
+		Summary:     "Provider API key is not configured",
 		Details:     details,
-		Remediation: fmt.Sprintf("导出 %s 后重试；doctor 不会发送外部请求。", apiKeyEnv),
+		Remediation: fmt.Sprintf("Export %s and retry; doctor does not send external requests.", apiKeyEnv),
 	}
 }
 
@@ -512,8 +512,8 @@ func checkDocker(deps dependencies) Check {
 		return Check{
 			Name:        "docker",
 			Status:      StatusWarn,
-			Summary:     "未找到 Docker CLI（仅 sandbox 功能需要）",
-			Remediation: "如需 `--sandbox docker`，请安装并启动 Docker。",
+			Summary:     "Docker CLI was not found (required only for sandbox features)",
+			Remediation: "Install and start Docker to use `--sandbox docker`.",
 		}
 	}
 	details := map[string]any{"executable": path}
@@ -525,16 +525,16 @@ func checkDocker(deps dependencies) Check {
 		return Check{
 			Name:        "docker",
 			Status:      StatusWarn,
-			Summary:     "Docker CLI 已安装，但 daemon 不可用",
+			Summary:     "Docker CLI is installed, but the daemon is unavailable",
 			Details:     details,
-			Remediation: "启动 Docker daemon；不使用 sandbox 时可忽略此项。",
+			Remediation: "Start the Docker daemon; ignore this check if you do not use the sandbox.",
 		}
 	}
 	details["server_version"] = firstLine(output)
 	return Check{
 		Name:    "docker",
 		Status:  StatusOK,
-		Summary: "Docker daemon 可用",
+		Summary: "Docker daemon is available",
 		Details: details,
 	}
 }
@@ -545,11 +545,11 @@ func runtimeAddress(rawURL string) (*url.URL, string, int, error) {
 		return nil, "", 0, err
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, "", 0, fmt.Errorf("scheme 必须是 http 或 https")
+		return nil, "", 0, fmt.Errorf("scheme must be http or https")
 	}
 	host := parsed.Hostname()
 	if host == "" {
-		return nil, "", 0, fmt.Errorf("缺少 host")
+		return nil, "", 0, fmt.Errorf("host is missing")
 	}
 	port := 80
 	if parsed.Scheme == "https" {
@@ -558,7 +558,7 @@ func runtimeAddress(rawURL string) (*url.URL, string, int, error) {
 	if rawPort := parsed.Port(); rawPort != "" {
 		port, err = strconv.Atoi(rawPort)
 		if err != nil || port < 1 || port > 65535 {
-			return nil, "", 0, fmt.Errorf("端口无效")
+			return nil, "", 0, fmt.Errorf("invalid port")
 		}
 	}
 	return parsed, net.JoinHostPort(host, strconv.Itoa(port)), port, nil
@@ -570,10 +570,10 @@ func validateProviderURL(rawURL string) error {
 		return err
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("scheme 必须是 http 或 https")
+		return fmt.Errorf("scheme must be http or https")
 	}
 	if parsed.Hostname() == "" {
-		return fmt.Errorf("缺少 host")
+		return fmt.Errorf("host is missing")
 	}
 	return nil
 }
@@ -653,7 +653,7 @@ func renderJSON(writer io.Writer, report Report) error {
 }
 
 func renderHuman(writer io.Writer, report Report) error {
-	if _, err := fmt.Fprintf(writer, "aicode doctor\n状态: %s\nCLI: %s\n\n", report.Status, report.CLIVersion); err != nil {
+	if _, err := fmt.Fprintf(writer, "aicode doctor\nStatus: %s\nCLI: %s\n\n", report.Status, report.CLIVersion); err != nil {
 		return err
 	}
 	for _, check := range report.Checks {
@@ -671,7 +671,7 @@ func renderHuman(writer io.Writer, report Report) error {
 			}
 		}
 		if check.Remediation != "" {
-			if _, err := fmt.Fprintf(writer, "  修复: %s\n", check.Remediation); err != nil {
+			if _, err := fmt.Fprintf(writer, "  Fix: %s\n", check.Remediation); err != nil {
 				return err
 			}
 		}

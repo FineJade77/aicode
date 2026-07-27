@@ -7,6 +7,7 @@ from app.core.session import AgentSession
 
 
 APPLICATION_CONTRACT_VERSION = "1.0"
+DEFAULT_LANGUAGE = "en-US"
 
 RunAdmissionStatus = Literal["accepted", "queued"]
 RunControlStatus = Literal["cancelled", "idle"]
@@ -36,8 +37,12 @@ class TurnRequest:
     language: str
     model: str | None = None
 
-    def bind(self, *, workspace: str, language: str) -> TurnRequest:
-        return replace(self, workspace=workspace, language=language)
+    def __post_init__(self) -> None:
+        # `language` remains in v1 for wire compatibility. The runtime is English-only.
+        object.__setattr__(self, "language", DEFAULT_LANGUAGE)
+
+    def bind(self, *, workspace: str) -> TurnRequest:
+        return replace(self, workspace=workspace, language=DEFAULT_LANGUAGE)
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -157,7 +162,7 @@ class SessionSnapshot:
         return cls(
             session_id=str(value.get("session_id") or ""),
             workspace=str(value.get("workspace") or ""),
-            language=str(value.get("language") or ""),
+            language=DEFAULT_LANGUAGE,
             created_at=str(value.get("created_at") or ""),
             updated_at=str(value.get("updated_at") or ""),
             messages=tuple(dict(item) for item in messages or () if isinstance(item, Mapping)),

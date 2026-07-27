@@ -12,7 +12,6 @@ from app.project.config import WorkspaceRef, default_protected_paths
 class ToolContext:
     workspace: Path
     mode: str = "default"
-    language: str = "zh-CN"
     protected_paths: list[str] = field(default_factory=default_protected_paths)
     workspace_refs: list[WorkspaceRef] = field(default_factory=list)
     review_disabled_rules: list[str] = field(default_factory=list)
@@ -59,7 +58,7 @@ def resolve_workspace_path(workspace: Path, raw_path: str | None = None) -> Path
     try:
         candidate.relative_to(workspace)
     except ValueError as exc:
-        raise ToolError("路径越过 workspace 边界") from exc
+        raise ToolError("path escapes the workspace boundary") from exc
     return candidate
 
 
@@ -80,13 +79,13 @@ def resolve_tool_workspace(context: ToolContext, raw_workspace: Any = None) -> t
         if ref.name != name:
             continue
         if ref.mode != "read_only":
-            raise ToolError(f"workspace 仅支持 read_only 模式: {name}")
+            raise ToolError(f"workspace supports only read_only mode: {name}")
         root = Path(ref.path).expanduser()
         if not root.is_absolute():
             root = context.workspace / root
         return root.resolve(), name
 
-    raise ToolError(f"未知 workspace: {name}")
+    raise ToolError(f"unknown workspace: {name}")
 
 
 def scoped_display_path(workspace_name: str, workspace: Path, path: Path) -> str:
@@ -99,7 +98,7 @@ def scoped_display_path(workspace_name: str, workspace: Path, path: Path) -> str
 def reject_protected_path(workspace: Path, path: Path, protected_paths: list[str]) -> None:
     rel = display_path(workspace, path)
     if is_protected_path(rel, protected_paths):
-        raise ToolError(f"受保护路径不可访问: {rel}")
+        raise ToolError(f"protected path is not accessible: {rel}")
 
 
 def display_path(workspace: Path, path: Path) -> str:

@@ -45,9 +45,9 @@ class HostExecutionBackend:
         started = time.perf_counter()
         workspace = request.workspace.expanduser().resolve()
         if not workspace.is_dir():
-            return self._failure(request, started, f"workspace 不存在或不是目录: {workspace}")
+            return self._failure(request, started, f"workspace does not exist or is not a directory: {workspace}")
         if request.allowed_roots and not any(_is_within(workspace, root) for root in request.allowed_roots):
-            return self._failure(request, started, "workspace 不在 allowed_roots 内")
+            return self._failure(request, started, "workspace is outside allowed_roots")
 
         env = build_subprocess_environment(request.env_allowlist, workspace=workspace)
 
@@ -89,7 +89,7 @@ class HostExecutionBackend:
                     status=ExecutionStatus.TIMED_OUT,
                     exit_code=process.returncode if process.returncode is not None else -1,
                     stdout=decode_output(stdout),
-                    stderr=decode_output(stderr) or f"命令超时: {request.limits.timeout_seconds:g}s",
+                    stderr=decode_output(stderr) or f"command timed out: {request.limits.timeout_seconds:g}s",
                     duration_ms=_elapsed_ms(started),
                     timed_out=True,
                 )

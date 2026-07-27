@@ -341,12 +341,12 @@ class SessionStore:
         self._event_writes_failed = 0
 
     def _touch(self, session: Session) -> None:
-        """把 session 标记为最近使用，并在超出缓存上限时驱逐最久未用的可驱逐 session。
+        """Mark a session as recently used and evict the oldest eligible session when over capacity.
 
-        驱逐只丢弃内存中的 Session 对象（SessionEvents 缓冲、待决 approval 的
-        asyncio.Event、agent_queue）；SQLite 里的 session/message/event 行不受影响。
-        再次 get() 会从数据库重新构建一个新的 Session 对象，行为等同于 daemon 重启后
-        首次访问这个 session——已有的读路径本就支持这种情况。
+        Eviction discards only the in-memory Session object, including its SessionEvents buffer,
+        pending approval asyncio.Event objects, and agent_queue. SQLite session, message, and event
+        rows remain intact. A later get() rebuilds a fresh Session from the database, just as it
+        would on the first access after a daemon restart.
         """
         self._sessions.pop(session.session_id, None)
         self._sessions[session.session_id] = session
@@ -630,7 +630,7 @@ class SessionStore:
             self._write_queue.put_nowait((session_id, dict(event)))
             self._event_writes_enqueued += 1
         except asyncio.QueueFull:
-            # 事件落盘是尽力而为：队列打满时丢弃这条写入，不阻塞 agent loop。
+            # Event persistence is best-effort; drop writes when full instead of blocking the agent loop.
             self._event_writes_dropped += 1
 
     def _ensure_writer(self) -> None:
@@ -648,7 +648,7 @@ class SessionStore:
                 await asyncio.to_thread(self._write_event_sync, session_id, event)
                 self._event_writes_written += 1
             except Exception:
-                # 审计/回放数据丢失不应中断 agent loop；单条写入失败不影响后续事件。
+                # Missing audit/replay data must not interrupt the loop; one failed write does not block later events.
                 self._event_writes_failed += 1
             finally:
                 queue.task_done()
@@ -677,10 +677,10 @@ class SessionStore:
         )
 
     async def flush(self) -> None:
-        """等待后台写入队列中的所有事件被处理完（成功或失败）。
+        """Wait until every queued event has been processed, whether successfully or not.
 
-        测试用它来确定性地等待异步落盘完成；FastAPI 的 lifespan shutdown 钩子
-        用它在进程退出前排空队列，避免丢失刚发生但还没来得及落盘的事件。
+        Tests use this to wait deterministically for asynchronous persistence. FastAPI's lifespan
+        shutdown hook drains the queue before exit so newly emitted events are not lost.
         """
         if self._write_queue is not None:
             await self._write_queue.join()
@@ -792,7 +792,7 @@ class SessionStore:
             approval_id = str(approval.get("approval_id") or "")
             kind = str(approval.get("kind") or "tool")
             tool_call_id = str(approval.get("tool_call_id") or "")
-            message = "待确认操作已因 daemon 重启或会话恢复而过期，已按拒绝处理。"
+            message = "The pending approval expired after daemon restart or session recovery and was treated as denied."
             expired: dict[str, Any] = {
                 "type": "approval.expired",
                 "approval_id": approval_id,

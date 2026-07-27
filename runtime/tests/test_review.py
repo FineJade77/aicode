@@ -19,8 +19,8 @@ def test_review_detects_secrets_without_echoing_value() -> None:
     data = review_report_data(report)
 
     assert data["summary"]["by_severity"]["high"] == 2
-    assert "受保护或敏感路径发生变更" in text
-    assert "新增行包含疑似密钥" in text
+    assert "Protected or sensitive path changed" in text
+    assert "Added line may contain a secret" in text
     assert secret_value not in text
     assert secret_value not in str(data)
 
@@ -112,7 +112,7 @@ def test_review_formats_clean_diff() -> None:
     assert report.added_lines == 1
     assert report.removed_lines == 0
     assert not report.findings
-    assert "未发现确定性风险" in text
+    assert "No deterministic risks found" in text
 
 
 def test_review_scans_untracked_files(tmp_path: Path) -> None:
@@ -178,6 +178,6 @@ def test_review_rules_data_reports_unknown_disabled_rules() -> None:
         {
             "type": "unknown_disabled_rule",
             "rule": "old_rule",
-            "message": "disabledRules 包含未知规则 old_rule，该配置不会生效。",
+            "message": "disabledRules contains unknown rule old_rule; this entry has no effect.",
         }
     ]

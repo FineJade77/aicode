@@ -36,7 +36,7 @@ func TestRendererUsesCurrentTokenBudgetFields(t *testing.T) {
 	event := fixtureEvent(t, fixture.Events, "context.budget")
 	output := captureRenderEvent(event)
 
-	assertContains(t, output, "上下文预算: history 100 -> 50 tokens")
+	assertContains(t, output, "Context budget: history 100 -> 50 tokens")
 }
 
 func TestRendererIgnoresUnknownFieldsOnKnownEvents(t *testing.T) {

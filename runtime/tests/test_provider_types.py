@@ -1,5 +1,5 @@
 from app.config.settings import Settings
-from app.models.provider import CompletionRequest, CompletionResult, StreamEvent, ToolCallRequest
+from app.models.provider import CompletionRequest, StreamEvent, ToolCallRequest
 
 
 def test_completion_request_defaults():

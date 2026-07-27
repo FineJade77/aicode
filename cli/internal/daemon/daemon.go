@@ -50,8 +50,8 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-// Token 返回当前持久化的 Runtime 认证 token；找不到或读取失败时返回空字符串，
-// 与"未配置认证"视为同一种情况——真正的拒绝逻辑在 Runtime 侧强制执行。
+// Token returns the persisted Runtime authentication token. A missing or
+// unreadable token is treated as unconfigured; Runtime enforces rejection.
 func Token() string {
 	home, err := config.Home()
 	if err != nil {
@@ -104,10 +104,10 @@ func Start(cfg config.Config) error {
 
 	token, err := generateToken()
 	if err != nil {
-		return fmt.Errorf("生成认证 token 失败: %w", err)
+		return fmt.Errorf("failed to generate authentication token: %w", err)
 	}
 	if err := os.WriteFile(tokenPath(home), []byte(token), 0o600); err != nil {
-		return fmt.Errorf("写入认证 token 失败: %w", err)
+		return fmt.Errorf("failed to write authentication token: %w", err)
 	}
 
 	logFile, err := os.OpenFile(filepath.Join(home, "runtime.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -136,7 +136,7 @@ func Start(cfg config.Config) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 Runtime 失败: %w", err)
+		return fmt.Errorf("failed to start Runtime: %w", err)
 	}
 
 	pidPath := filepath.Join(home, "runtime.pid")
@@ -232,7 +232,7 @@ func WaitUntilReady(baseURL string, timeout time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("Runtime daemon 启动超时，请查看日志")
+	return fmt.Errorf("Runtime daemon startup timed out; inspect the log")
 }
 
 func RuntimeDir() (string, error) {
@@ -269,7 +269,7 @@ func ResolveRuntime() (RuntimeInstallation, error) {
 		if _, statErr := os.Stat(manifestPath); statErr == nil {
 			return runtimeInstallationFromManifest(manifestPath)
 		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return RuntimeInstallation{}, fmt.Errorf("检查安装 manifest 失败: %w", statErr)
+			return RuntimeInstallation{}, fmt.Errorf("failed to inspect installation manifest: %w", statErr)
 		}
 	}
 
@@ -318,7 +318,7 @@ func sourceRuntimeFrom(start string) (string, error) {
 		cwd = parent
 	}
 
-	return "", fmt.Errorf("未找到 runtime/app/server/main.py，可设置 AICODE_RUNTIME_DIR")
+	return "", fmt.Errorf("runtime/app/server/main.py was not found; set AICODE_RUNTIME_DIR if needed")
 }
 
 func runtimeInstallationFromManifest(path string) (RuntimeInstallation, error) {
@@ -328,21 +328,21 @@ func runtimeInstallationFromManifest(path string) (RuntimeInstallation, error) {
 	}
 	content, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return RuntimeInstallation{}, fmt.Errorf("读取安装 manifest 失败: %w", err)
+		return RuntimeInstallation{}, fmt.Errorf("failed to read installation manifest: %w", err)
 	}
 	var manifest installManifest
 	if err := json.Unmarshal(content, &manifest); err != nil {
-		return RuntimeInstallation{}, fmt.Errorf("解析安装 manifest 失败: %w", err)
+		return RuntimeInstallation{}, fmt.Errorf("failed to parse installation manifest: %w", err)
 	}
 	if manifest.SchemaVersion != installManifestSchemaVersion {
 		return RuntimeInstallation{}, fmt.Errorf(
-			"不支持的安装 manifest schema_version %d，当前支持 %d",
+			"unsupported installation manifest schema_version %d; supported version is %d",
 			manifest.SchemaVersion,
 			installManifestSchemaVersion,
 		)
 	}
 	if strings.TrimSpace(manifest.Version) == "" {
-		return RuntimeInstallation{}, fmt.Errorf("安装 manifest 缺少 version")
+		return RuntimeInstallation{}, fmt.Errorf("installation manifest is missing version")
 	}
 
 	root := filepath.Dir(manifestPath)
@@ -359,10 +359,10 @@ func runtimeInstallationFromManifest(path string) (RuntimeInstallation, error) {
 	}
 	info, err := os.Stat(python)
 	if err != nil {
-		return RuntimeInstallation{}, fmt.Errorf("安装 manifest 的 Python 不可用: %w", err)
+		return RuntimeInstallation{}, fmt.Errorf("Python from the installation manifest is unavailable: %w", err)
 	}
 	if info.IsDir() {
-		return RuntimeInstallation{}, fmt.Errorf("安装 manifest 的 python 指向目录: %s", python)
+		return RuntimeInstallation{}, fmt.Errorf("python in the installation manifest points to a directory: %s", python)
 	}
 	return RuntimeInstallation{
 		RuntimeDir: runtimeDir,
@@ -383,18 +383,18 @@ func manifestPathForExecutable(executable string) string {
 
 func resolveManifestPath(root string, value string, field string) (string, error) {
 	if strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("安装 manifest 缺少 %s", field)
+		return "", fmt.Errorf("installation manifest is missing %s", field)
 	}
 	if filepath.IsAbs(value) {
-		return "", fmt.Errorf("安装 manifest 的 %s 必须是相对路径", field)
+		return "", fmt.Errorf("%s in the installation manifest must be a relative path", field)
 	}
 	resolved := filepath.Join(root, filepath.Clean(value))
 	relative, err := filepath.Rel(root, resolved)
 	if err != nil {
-		return "", fmt.Errorf("解析安装 manifest 的 %s 失败: %w", field, err)
+		return "", fmt.Errorf("failed to resolve %s from the installation manifest: %w", field, err)
 	}
 	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("安装 manifest 的 %s 不能逃逸安装目录", field)
+		return "", fmt.Errorf("%s in the installation manifest must not escape the installation directory", field)
 	}
 	return resolved, nil
 }
@@ -403,10 +403,10 @@ func validateRuntimeDir(runtimeDir string) error {
 	entrypoint := filepath.Join(runtimeDir, "app", "server", "main.py")
 	info, err := os.Stat(entrypoint)
 	if err != nil {
-		return fmt.Errorf("Runtime entrypoint 不可用 %s: %w", entrypoint, err)
+		return fmt.Errorf("Runtime entrypoint is unavailable at %s: %w", entrypoint, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("Runtime entrypoint 不是文件: %s", entrypoint)
+		return fmt.Errorf("Runtime entrypoint is not a file: %s", entrypoint)
 	}
 	return nil
 }

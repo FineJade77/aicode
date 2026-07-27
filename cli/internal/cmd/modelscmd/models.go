@@ -19,7 +19,7 @@ func Run(cfg config.Config, args []string) error {
 	if len(args) == 1 && args[0] == "--json" {
 		jsonOutput = true
 	} else if len(args) != 0 {
-		return fmt.Errorf("用法: aicode models [--json] | aicode models probe [--no-tools] [--model <name>] [--json]")
+		return fmt.Errorf("usage: aicode models [--json] | aicode models probe [--no-tools] [--model <name>] [--json]")
 	}
 
 	value, err := runtimeio.FetchJSON(cfg, "/v1/models/routes")
@@ -55,7 +55,7 @@ func runProbe(cfg config.Config, args []string) error {
 		renderer.PrintModelProbe(value)
 	}
 	if root, ok := value.(map[string]any); ok && root["status"] == "error" {
-		return fmt.Errorf("Provider Profile probe 失败")
+		return fmt.Errorf("Provider Profile probe failed")
 	}
 	return nil
 }
@@ -77,11 +77,11 @@ func parseProbeArgs(args []string) (probeOptions, error) {
 		case "--model":
 			index++
 			if index >= len(args) || args[index] == "" {
-				return options, fmt.Errorf("--model 需要模型名称")
+				return options, fmt.Errorf("--model requires a model name")
 			}
 			options.model = args[index]
 		default:
-			return options, fmt.Errorf("用法: aicode models probe [--no-tools] [--model <name>] [--json]")
+			return options, fmt.Errorf("usage: aicode models probe [--no-tools] [--model <name>] [--json]")
 		}
 	}
 	return options, nil

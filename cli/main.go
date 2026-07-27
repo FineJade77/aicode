@@ -23,7 +23,7 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -70,18 +70,18 @@ func run(args []string) error {
 	case "cancel":
 		return cancelcmd.Run(cfg, args[1:])
 	case "review":
-		return agentrun.Run(cfg, "review", "请审查当前代码变更。")
+		return agentrun.Run(cfg, "review", "Review the current code changes.")
 	case "diff":
-		return agentrun.Run(cfg, "diff", "请查看当前 git diff 并总结变更。")
+		return agentrun.Run(cfg, "diff", "Inspect the current git diff and summarize the changes.")
 	case "test":
-		return agentrun.Run(cfg, "test", "请自动发现并运行当前项目的低风险测试命令。")
+		return agentrun.Run(cfg, "test", "Discover and run this project's low-risk test command.")
 	case "commit-message":
 		return commitmsgcmd.Run(cfg)
 	case "explain":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: aicode explain <file-or-symbol>")
+			return fmt.Errorf("usage: aicode explain <file-or-symbol>")
 		}
-		return agentrun.Run(cfg, "explain", "请解释 "+strings.Join(args[1:], " "))
+		return agentrun.Run(cfg, "explain", "Explain "+strings.Join(args[1:], " "))
 	case "chat":
 		if len(args) < 2 {
 			return replcmd.Run(cfg)
@@ -95,13 +95,13 @@ func run(args []string) error {
 }
 
 func printHelp() {
-	fmt.Println(`aicode - 本地优先的 CLI Coding Agent
+	fmt.Println(`aicode - Local-first CLI coding agent
 
-用法:
-  aicode "修复这个测试失败"
+Usage:
+  aicode "Fix this failing test"
   aicode chat
   aicode repl
-  aicode chat "解释当前目录"
+  aicode chat "Explain the current directory"
   aicode review
   aicode review-rules
   aicode explain src/foo.ts
@@ -113,8 +113,8 @@ func printHelp() {
   aicode --sandbox docker lint
   aicode sessions
   aicode resume --last
-  aicode resume --last "继续刚才的任务"
-  aicode resume <session_id> "继续这个会话"
+  aicode resume --last "Continue the previous task"
+  aicode resume <session_id> "Continue this session"
   aicode cancel --last
   aicode cancel <session_id>
   aicode usage [--json]
@@ -129,7 +129,6 @@ func printHelp() {
   aicode config list
   aicode config docs
   aicode config get models.reviewer
-  aicode config set ui.language en-US
   aicode config set models.reviewer gpt-5
   aicode config set models.main gpt-5
   aicode config set provider.type anthropic
@@ -168,7 +167,7 @@ func parseGlobalArgs(args []string) (globalOptions, []string, error) {
 		switch args[0] {
 		case "--sandbox":
 			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
-				return options, nil, fmt.Errorf("用法: aicode --sandbox docker <test|build|lint>")
+				return options, nil, fmt.Errorf("usage: aicode --sandbox docker <test|build|lint>")
 			}
 			options.Sandbox = args[1]
 			args = args[2:]

@@ -31,7 +31,7 @@ func Run(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	return agentrun.Run(cfg, "commit_message", commitMessagePrompt(cfg.UI.Language, diffContext))
+	return agentrun.Run(cfg, "commit_message", commitMessagePrompt(diffContext))
 }
 
 func collectCommitDiffContext(workspacePath string) (commitDiffContext, error) {
@@ -57,7 +57,7 @@ func collectCommitDiffContext(workspacePath string) (commitDiffContext, error) {
 		statArgs = []string{"diff", "--stat", "--no-ext-diff"}
 	}
 	if strings.TrimSpace(diff) == "" {
-		return commitDiffContext{}, fmt.Errorf("当前没有 staged 或工作区 tracked diff，无法生成提交信息")
+		return commitDiffContext{}, fmt.Errorf("no staged or working-tree tracked diff is available for a commit message")
 	}
 	stat, err := gitOutput(workspacePath, statArgs...)
 	if err != nil {
@@ -97,9 +97,8 @@ func truncateCommitDiff(diff string, limit int) (string, bool) {
 	return string(runes[:limit]) + "\n\n[diff truncated: omitted remaining content]\n", true
 }
 
-func commitMessagePrompt(language string, diffContext commitDiffContext) string {
-	if strings.HasPrefix(language, "en") {
-		return fmt.Sprintf(`Generate a git commit message from the following diff.
+func commitMessagePrompt(diffContext commitDiffContext) string {
+	return fmt.Sprintf(`Generate a git commit message from the following diff.
 
 Requirements:
 - Output only the commit message, with no explanation or surrounding Markdown.
@@ -119,28 +118,6 @@ Diff stat:
 
 Diff:
 %s`, diffContext.Source, diffContext.Truncated, emptyFallback(diffContext.Status, "(empty)"), emptyFallback(diffContext.Stat, "(empty)"), diffContext.Diff)
-	}
-
-	return fmt.Sprintf(`请根据下面的 git diff 生成提交信息。
-
-要求：
-- 只输出提交信息本身，不要解释，不要包 Markdown。
-- 优先使用 Conventional Commits 风格：feat/fix/docs/refactor/test/chore。
-- 第一行不超过 72 个字符。
-- 只有在有帮助时，空一行后追加 2-4 条简洁要点。
-- 只能基于提供的 status/diff 判断。
-
-Diff 来源：%s
-Diff 是否截断：%v
-
-Git status:
-%s
-
-Diff stat:
-%s
-
-Diff:
-%s`, diffContext.Source, diffContext.Truncated, emptyFallback(diffContext.Status, "（空）"), emptyFallback(diffContext.Stat, "（空）"), diffContext.Diff)
 }
 
 func emptyFallback(value string, fallback string) string {

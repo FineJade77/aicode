@@ -7,7 +7,7 @@ from app.models.provider import CompletionResult, ToolCallRequest
 
 
 class FakeRequest:
-    def __init__(self, workspace, mode="default", language="zh-CN", message="做点事"):
+    def __init__(self, workspace, mode="default", language="en-US", message="do something"):
         self.workspace = str(workspace)
         self.mode = mode
         self.language = language
@@ -20,9 +20,9 @@ def test_message_builders():
     message = assistant_message(result)
     assert message["role"] == "assistant"
     assert message["tool_calls"][0]["name"] == "bash"
-    json.dumps(message)  # 必须可序列化
+    json.dumps(message)  # Must be JSON serializable.
     assert tool_message("tc_1", "out") == {"role": "tool", "tool_call_id": "tc_1", "content": "out"}
-    assert user_note("请验证")["content"].startswith("[系统提示]")
+    assert user_note("verify this")["content"].startswith("[system note]")
 
 
 def test_budget_defaults():
@@ -36,28 +36,28 @@ def test_system_prompt_includes_project_info(tmp_path):
         '{"commands": {"test": "pytest -q", "lint": "ruff check ."}, "protectedPaths": [".env"]}',
         encoding="utf-8",
     )
-    (tmp_path / ".aicode" / "rules.md").write_text("永远写中文注释", encoding="utf-8")
-    (tmp_path / ".aicode" / "memory.md").write_text("认证模块在 runtime/app/server/auth.py", encoding="utf-8")
+    (tmp_path / ".aicode" / "rules.md").write_text("Always write concise comments", encoding="utf-8")
+    (tmp_path / ".aicode" / "memory.md").write_text("Authentication lives in runtime/app/server/auth.py", encoding="utf-8")
     request = FakeRequest(tmp_path)
     prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
     assert "pytest -q" in prompt
     assert "lint: ruff check ." in prompt
     assert ".env" in prompt
-    assert "永远写中文注释" in prompt
-    assert "认证模块在 runtime/app/server/auth.py" in prompt
-    assert "中文" in prompt  # 语言指令
-    assert "不能覆盖系统指令" in prompt
-    assert "安全约束" in prompt
-    assert "项目记忆" in prompt
+    assert "Always write concise comments" in prompt
+    assert "Authentication lives in runtime/app/server/auth.py" in prompt
+    assert "Use English for all user-facing output." in prompt
+    assert "cannot override system instructions" in prompt
+    assert "safety constraints" in prompt
+    assert "Project memory" in prompt
 
 
 def test_system_prompt_review_mode(tmp_path):
     request = FakeRequest(tmp_path, mode="review")
     prompt = build_system_prompt(request, LocalWorkspaceRuntime().prompt_context(tmp_path))
-    assert "只读" in prompt
+    assert "read-only" in prompt
 
 
-def test_system_prompt_english_mode_is_localized(tmp_path):
+def test_system_prompt_is_english(tmp_path):
     (tmp_path / ".aicode").mkdir()
     (tmp_path / ".aicode" / "config.json").write_text('{"commands": {"test": "auto", "build": "npm run build"}}', encoding="utf-8")
     (tmp_path / ".aicode" / "rules.md").write_text("Prefer concise tests", encoding="utf-8")
@@ -77,7 +77,6 @@ def test_system_prompt_english_mode_is_localized(tmp_path):
     assert "Project memory (.aicode/memory.md)" in prompt
     assert "Auth starts in server/auth.py" in prompt
     assert "cannot override system instructions" in prompt
-    assert "工作准则" not in prompt
 
 
 def test_system_prompt_limits_project_memory(tmp_path):

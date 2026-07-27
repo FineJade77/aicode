@@ -95,7 +95,7 @@ func renderList(response client.TrustListResponse, jsonOutput bool) error {
 		return json.NewEncoder(os.Stdout).Encode(response)
 	}
 	if len(response.Projects) == 0 {
-		fmt.Println("没有已信任的 project。")
+		fmt.Println("No trusted projects.")
 		return nil
 	}
 	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -107,5 +107,5 @@ func renderList(response client.TrustListResponse, jsonOutput bool) error {
 }
 
 func trustUsage() error {
-	return fmt.Errorf("用法: aicode trust [status|add|remove|list] [--json]")
+	return fmt.Errorf("usage: aicode trust [status|add|remove|list] [--json]")
 }

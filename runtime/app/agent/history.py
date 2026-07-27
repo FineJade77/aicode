@@ -20,10 +20,10 @@ COMPACTION_SUMMARY_MAX_CHARS = 8_000
 TOOL_OUTPUT_LIMITS = {"bash": 8_000, "run_tests": 8_000, "read_file": 0, "default": 6_000}
 
 COMPACTION_SYSTEM_PROMPT = """\
-你是 coding agent 的历史压缩器。只根据输入生成可继续执行任务的事实摘要，不要臆测。
-必须保留：用户目标和最新约束、未完成任务、关键决策、最近文件修改、验证结果与失败、
-审批/拒绝结果、重要路径/命令/错误，以及继续工作所需的工具结果。
-不要复制冗长工具输出；保留结论和可重新获取内容的线索。输出简洁的 Markdown 要点。"""
+You compress coding-agent history into a factual summary that is sufficient to continue the task. Do not speculate.
+Preserve the user's goal and latest constraints, unfinished work, key decisions, recent file changes, validation results
+and failures, approval or rejection outcomes, important paths, commands, errors, and tool results needed to continue.
+Do not copy long tool output. Keep conclusions and clues for retrieving details again. Return concise Markdown bullets."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,7 @@ def truncate_tool_output(tool_name: str, text: str) -> str:
     limit = TOOL_OUTPUT_LIMITS.get(tool_name, TOOL_OUTPUT_LIMITS["default"])
     if limit <= 0 or len(text) <= limit:
         return text
-    marker = f"\n[输出已截断: {len(text) - limit} 字符省略，可用 offset/分页参数继续查看]\n"
+    marker = f"\n[output truncated: {len(text) - limit} characters omitted; use offset or pagination to continue]\n"
     head = int(limit * 0.65)
     tail = limit - head
     return text[:head] + marker + text[-tail:]
@@ -292,7 +292,7 @@ async def _summarize(
     max_chars = max(1_000, int(input_tokens * chars_per_token))
     serialized = json.dumps(messages, ensure_ascii=False, default=str, separators=(",", ":"))
     if len(serialized) > max_chars:
-        marker = "\n[压缩输入中段已按 summarizer 上下文上限省略]\n"
+        marker = "\n[middle of compaction input omitted to fit the summarizer context window]\n"
         head_chars = int((max_chars - len(marker)) * 0.6)
         tail_chars = max_chars - len(marker) - head_chars
         serialized = serialized[:head_chars] + marker + serialized[-tail_chars:]
@@ -332,13 +332,13 @@ def _deterministic_summary(messages: list[dict[str, Any]]) -> str:
         content = " ".join(str(message.get("content") or "").split())
         if role == "assistant" and message.get("tool_calls"):
             calls = ", ".join(str(call.get("name") or "unknown") for call in message["tool_calls"] if isinstance(call, dict))
-            items.append(f"- 工具调用：{calls}")
+            items.append(f"- Tool calls: {calls}")
         if not content:
             continue
-        label = {"user": "用户/约束", "assistant": "助手进展", "tool": "工具结果"}.get(role, role)
-        items.append(f"- {label}：{content[:600]}")
+        label = {"user": "User/constraints", "assistant": "Assistant progress", "tool": "Tool result"}.get(role, role)
+        items.append(f"- {label}: {content[:600]}")
     if not items:
-        return "- 历史内容已压缩；没有可提取的文本事实。"
+        return "- History was compacted; no textual facts could be extracted."
     return "\n".join(items)[-COMPACTION_SUMMARY_MAX_CHARS:]
 
 
@@ -454,7 +454,7 @@ def _normalized_message_ids(session: AgentSession) -> list[int]:
 def _summary_message(summary: str) -> dict[str, Any]:
     return {
         "role": "user",
-        "content": f"[持久化历史摘要 · schema v{COMPACTION_SCHEMA_VERSION}]\n{summary}",
+        "content": f"[persistent history summary · schema v{COMPACTION_SCHEMA_VERSION}]\n{summary}",
     }
 
 
@@ -469,10 +469,10 @@ async def compact_if_needed(history: list[dict[str, Any]], runtime: Any, session
         if estimate_tokens(compacted) <= HISTORY_TOKEN_BUDGET:
             break
         message = compacted[index]
-        if message.get("role") != "tool" or str(message.get("content") or "").startswith("[工具输出已压缩"):
+        if message.get("role") != "tool" or str(message.get("content") or "").startswith("[tool output compacted"):
             continue
         original_chars = len(str(message.get("content") or ""))
-        message["content"] = f"[工具输出已压缩: {original_chars} 字符，如需内容请重新调用工具]"
+        message["content"] = f"[tool output compacted: {original_chars} characters; call the tool again if needed]"
     after = estimate_tokens(compacted)
     await session.events.put(
         {

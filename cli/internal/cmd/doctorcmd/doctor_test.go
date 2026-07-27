@@ -66,7 +66,7 @@ func TestBuildReportDetectsVersionMismatchAndOccupiedPort(t *testing.T) {
 		t.Fatalf("version status = %q", got)
 	}
 	port := findCheck(t, report, "port")
-	if port.Status != StatusError || !strings.Contains(port.Summary, "端口已被占用") {
+	if port.Status != StatusError || !strings.Contains(port.Summary, "Port is occupied") {
 		t.Fatalf("port check = %#v", port)
 	}
 }
@@ -113,7 +113,7 @@ func TestProviderCheckAcceptsNoAuthLocalProfileWithoutFakeKey(t *testing.T) {
 	if check.Status != StatusOK || check.Details["configured"] != true {
 		t.Fatalf("provider check = %#v", check)
 	}
-	if !strings.Contains(check.Summary, "no-auth") {
+	if !strings.Contains(check.Summary, "No-auth") {
 		t.Fatalf("summary = %q", check.Summary)
 	}
 }
@@ -151,7 +151,7 @@ func TestBuildReportRejectsOldPythonAndMismatchedRuntimePort(t *testing.T) {
 		t.Fatalf("python status = %q", got)
 	}
 	port := findCheck(t, report, "port")
-	if port.Status != StatusError || !strings.Contains(port.Summary, "不一致") {
+	if port.Status != StatusError || !strings.Contains(port.Summary, "do not match") {
 		t.Fatalf("port check = %#v", port)
 	}
 }

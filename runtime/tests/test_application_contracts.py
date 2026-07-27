@@ -25,7 +25,7 @@ async def test_session_service_exposes_snapshot_and_binds_turn_contract(tmp_path
     sessions = InMemorySessionRepository()
     service = SessionService(sessions, trace, LocalWorkspaceRuntime())
 
-    created = await service.create(str(tmp_path), "zh-CN")
+    created = await service.create(str(tmp_path), "en-US")
     turn = TurnRequest(
         message="inspect",
         mode="chat",
@@ -47,7 +47,7 @@ async def test_session_service_exposes_snapshot_and_binds_turn_contract(tmp_path
 async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> None:
     trace = AuditLogger(path=tmp_path / "audit.jsonl")
     sessions = InMemorySessionRepository()
-    session = sessions.create(str(tmp_path), "zh-CN")
+    session = sessions.create(str(tmp_path), "en-US")
 
     class ImmediateLoop:
         async def run(self, target_session, _turn: TurnRequest) -> None:
@@ -64,7 +64,7 @@ async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> No
             message="inspect",
             mode="chat",
             workspace=str(tmp_path),
-            language="zh-CN",
+            language="en-US",
         ),
     )
     assert session.agent_runner_task is not None
@@ -81,7 +81,7 @@ async def test_run_coordinator_returns_named_run_contracts(tmp_path: Path) -> No
 async def test_context_service_returns_compaction_contract_for_in_memory_adapter(tmp_path: Path) -> None:
     trace = AuditLogger(path=tmp_path / "audit.jsonl")
     sessions = InMemorySessionRepository()
-    session = sessions.create(str(tmp_path), "zh-CN")
+    session = sessions.create(str(tmp_path), "en-US")
     for index in range(5):
         session.append_message({"role": "user", "content": f"constraint-{index}"})
     service = ContextService(AgentRuntime(model_router=None, audit=trace), trace)

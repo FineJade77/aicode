@@ -86,7 +86,7 @@ class AnthropicProvider:
             "stream": True,
         }
         if request.tools:
-            payload["tools"] = request.tools  # canonical schema 与 Anthropic 格式一致
+            payload["tools"] = request.tools  # The canonical schema matches Anthropic's format.
         headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "Content-Type": "application/json"}
         url = self.settings.base_url.rstrip("/") + "/v1/messages"
 

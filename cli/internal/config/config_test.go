@@ -12,10 +12,7 @@ func TestLoadReadsModelAndProviderConfig(t *testing.T) {
 	t.Setenv("AICODE_HOME", home)
 	clearConfigEnv(t)
 
-	content := `[ui]
-language = "en-US"
-
-[runtime]
+	content := `[runtime]
 url = "http://127.0.0.1:9999"
 port = 9999
 
@@ -58,9 +55,6 @@ output_per_1m = 10
 		t.Fatal(err)
 	}
 
-	if cfg.UI.Language != "en-US" {
-		t.Fatalf("language = %q", cfg.UI.Language)
-	}
 	if cfg.Runtime.URL != "http://127.0.0.1:9999" || cfg.Runtime.Port != 9999 {
 		t.Fatalf("runtime = %#v", cfg.Runtime)
 	}
@@ -375,6 +369,11 @@ func TestEntriesAndGetValueIncludePricing(t *testing.T) {
 	if _, ok := cfg.GetValue("models.coder"); ok {
 		t.Fatal("legacy models.coder should not appear in config entries")
 	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Key, "language") {
+			t.Fatalf("language setting should not appear in config entries: %s", entry.Key)
+		}
+	}
 }
 
 func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
@@ -407,6 +406,14 @@ func TestKeyDocsIncludeCoreAndPricingKeys(t *testing.T) {
 	}
 	if _, ok := findDoc(docs, "models.coder"); ok {
 		t.Fatal("legacy models.coder should not appear in docs")
+	}
+	for _, doc := range docs {
+		if strings.Contains(doc.Key, "language") {
+			t.Fatalf("language setting should not appear in config docs: %s", doc.Key)
+		}
+	}
+	if strings.Contains(DefaultContent(), "language") {
+		t.Fatalf("default config should not contain a language setting:\n%s", DefaultContent())
 	}
 }
 
@@ -452,7 +459,6 @@ func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"AICODE_RUNTIME_URL",
-		"AICODE_DEFAULT_LANGUAGE",
 		"AICODE_MODEL_DEFAULT",
 		"AICODE_MODEL_MAIN",
 		"AICODE_MODEL_PLANNER",

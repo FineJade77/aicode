@@ -150,7 +150,7 @@ func TestSetTestCommandRejectsEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "不能为空") {
+	if !strings.Contains(err.Error(), "must not be empty") {
 		t.Fatalf("error = %v", err)
 	}
 }

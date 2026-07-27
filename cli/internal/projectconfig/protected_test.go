@@ -88,7 +88,7 @@ func TestRemoveProtectedPathRejectsMandatoryPattern(t *testing.T) {
 		t.Fatal("mandatory protected path must remain")
 	}
 	assertStringSet(t, values, DefaultProtectedPaths())
-	if !strings.Contains(err.Error(), "不可移除") {
+	if !strings.Contains(err.Error(), "cannot be removed") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -130,7 +130,7 @@ func TestAddProtectedPathRejectsEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "不能为空") {
+	if !strings.Contains(err.Error(), "must not be empty") {
 		t.Fatalf("error = %v", err)
 	}
 }

@@ -17,10 +17,6 @@ class ProjectPromptContext:
 
 
 class LocalWorkspaceRuntime:
-    def effective_language(self, workspace: str, requested_language: str) -> str:
-        project_language = load_project_config(Path(workspace)).default_language
-        return project_language or requested_language or "zh-CN"
-
     def same_workspace(self, left: str, right: str) -> bool:
         if left == right:
             return True

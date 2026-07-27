@@ -63,7 +63,6 @@ class ContextSettings(BaseModel):
 
 class Settings(BaseModel):
     app_name: str = "aicode-runtime"
-    default_language: str = "zh-CN"
     version: str = "0.1.0"
     models: ModelSettings = ModelSettings()
     openai_compatible: OpenAICompatibleSettings = OpenAICompatibleSettings()
@@ -76,7 +75,6 @@ class Settings(BaseModel):
     def from_env(cls) -> "Settings":
         return cls(
             app_name=os.getenv("AICODE_RUNTIME_NAME", "aicode-runtime"),
-            default_language=os.getenv("AICODE_DEFAULT_LANGUAGE", "zh-CN"),
             version=os.getenv("AICODE_RUNTIME_VERSION", "0.1.0"),
             models=ModelSettings(
                 main=os.getenv("AICODE_MODEL_MAIN", os.getenv("AICODE_MODEL_CODER", "gpt-5")),

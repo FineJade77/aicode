@@ -13,19 +13,19 @@
       "run_id": "run_fixture",
       "status": "accepted",
       "queue_position": 1,
-      "message": "任务已接收。"
+      "message": "Run accepted."
     },
     {
       "event_id": 3,
       "type": "run.started",
       "run_id": "run_fixture",
-      "message": "开始执行当前任务。"
+      "message": "Started the current run."
     },
     {
       "event_id": 4,
       "type": "assistant.delta",
       "run_id": "run_fixture",
-      "text": "正在检查"
+      "text": "Inspecting"
     },
     {
       "event_id": 5,
@@ -60,7 +60,7 @@
       "run_id": "run_fixture",
       "tool": "bash",
       "tool_call_id": "tool_denied",
-      "error": "策略拒绝",
+      "error": "denied by policy",
       "risk_level": "high"
     },
     {
@@ -69,7 +69,7 @@
       "run_id": "run_fixture",
       "tool": "bash",
       "tool_call_id": "tool_rejected",
-      "error": "用户拒绝",
+      "error": "rejected by user",
       "risk_level": "medium"
     },
     {
@@ -78,7 +78,7 @@
       "run_id": "run_fixture",
       "tool": "bash",
       "tool_call_id": "tool_error",
-      "error": "命令失败",
+      "error": "command failed",
       "duration_ms": 20,
       "exit_code": 1,
       "timed_out": false
@@ -91,7 +91,7 @@
       "kind": "tool",
       "tool": "bash",
       "tool_call_id": "tool_approval",
-      "message": "等待用户确认"
+      "message": "waiting for user approval"
     },
     {
       "event_id": 11,
@@ -100,7 +100,7 @@
       "approval_id": "appr_fixture",
       "kind": "tool",
       "tool_call_id": "tool_approval",
-      "message": "确认已过期"
+      "message": "approval expired"
     },
     {
       "event_id": 12,
@@ -151,7 +151,7 @@
       "type": "run.cancelled",
       "run_id": "run_fixture",
       "status": "cancelled",
-      "message": "当前任务已取消。"
+      "message": "The current run was cancelled."
     },
     {
       "event_id": 18,
@@ -166,7 +166,7 @@
       "run_id": "run_fixture",
       "status": "queued",
       "pending": 1,
-      "message": "steer 指令已排队。"
+      "message": "Steering guidance queued."
     },
     {
       "event_id": 20,
@@ -174,7 +174,7 @@
       "run_id": "run_fixture",
       "count": 1,
       "skipped_tool_calls": 0,
-      "message": "已应用 steer 指令。"
+      "message": "Steering guidance applied."
     },
     {
       "event_id": 21,

@@ -12,7 +12,7 @@ def detect_test_command(workspace: Path) -> str | None:
 
 def detect_project_command(workspace: Path, action: str) -> str | None:
     if action not in {"test", "build", "lint"}:
-        raise ValueError(f"不支持的 project command action: {action}")
+        raise ValueError(f"unsupported project command action: {action}")
 
     configured = configured_project_command(workspace, action)
     if configured:

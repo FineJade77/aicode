@@ -45,5 +45,5 @@ func usagePath(args []string) (string, bool, error) {
 	if len(filtered) == 2 && filtered[0] == "--session" {
 		return "/v1/usage/sessions/" + filtered[1], jsonOutput, nil
 	}
-	return "", false, fmt.Errorf("用法: aicode usage [--today|--session <session_id>] [--json]")
+	return "", false, fmt.Errorf("usage: aicode usage [--today|--session <session_id>] [--json]")
 }

@@ -4,9 +4,9 @@
   "suite": "smoke",
   "description": "Fix a single-file arithmetic bug, run verification, and preserve the verification result.",
   "fixture": "single_file_fix",
-  "user_request": "修复 calc.add 的错误，并运行测试验证。",
+  "user_request": "Fix the bug in calc.add and run tests to verify the change.",
   "mode": "default",
-  "language": "zh-CN",
+  "language": "en-US",
   "tags": ["edit", "verification"],
   "trust": "trusted",
   "approval_policy": {
@@ -30,7 +30,7 @@
   "model_script": [
     {
       "purpose": "main",
-      "text": "先读取实现。",
+      "text": "Read the implementation first.",
       "tool_calls": [
         {
           "id": "read_calc",
@@ -55,7 +55,7 @@
     },
     {
       "purpose": "main",
-      "text": "运行测试。",
+      "text": "Run the tests.",
       "tool_calls": [
         {
           "id": "verify_calc",
@@ -66,11 +66,11 @@
     },
     {
       "purpose": "main",
-      "text": "修复已完成，测试通过。"
+      "text": "The fix is complete and the tests pass."
     },
     {
       "purpose": "main",
-      "text": "验证完成：add 的正数和负数测试均通过。"
+      "text": "Verification complete: the positive and negative add tests both pass."
     }
   ],
   "checks": {
@@ -97,7 +97,7 @@
       "execution.finished",
       "session.final"
     ],
-    "final_contains": ["验证完成"],
+    "final_contains": ["Verification complete"],
     "minimum_compactions": 0,
     "maximum_agent_executions": 1,
     "expected_approvals": {"edit": "accept"}

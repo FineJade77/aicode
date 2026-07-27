@@ -17,7 +17,3 @@ def truncate_for_model(text: str, limit: int = 12_000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...[TRUNCATED]"
-
-
-def localized(language: str, zh: str, en: str) -> str:
-    return en if language.startswith("en") else zh

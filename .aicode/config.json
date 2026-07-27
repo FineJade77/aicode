@@ -1,6 +1,5 @@
 {
   "projectName": "aicode",
-  "defaultLanguage": "zh-CN",
   "commands": {
     "test": "auto",
     "lint": "auto",
