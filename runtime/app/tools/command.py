@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -73,6 +73,8 @@ async def run_shell_command(
     stderr_to_stdout: bool = False,
     execution: ExecutionService | None = None,
     metadata: dict[str, Any] | None = None,
+    backend: str = "host",
+    limits: ResourceLimits | None = None,
 ) -> CommandResult:
     request = _request(
         cwd=cwd,
@@ -81,6 +83,8 @@ async def run_shell_command(
         merge_stderr=stderr_to_stdout,
         execution=execution,
         metadata=metadata,
+        backend=backend,
+        limits=limits,
     )
     result = await (execution or ExecutionService()).execute(request)
     return _command_result([command], result)
@@ -95,23 +99,34 @@ def _request(
     merge_stderr: bool = False,
     execution: ExecutionService | None = None,
     metadata: dict[str, Any] | None = None,
+    backend: str = "host",
+    limits: ResourceLimits | None = None,
 ) -> ExecutionRequest:
     del execution
     metadata = metadata or {}
+    root = cwd.expanduser().resolve()
+    sandboxed = backend == "docker"
     return ExecutionRequest(
         workspace=cwd,
         argv=argv,
         shell_command=shell_command,
+        backend=backend,
         merge_stderr=merge_stderr,
         action=str(metadata.get("action") or ""),
         mode=str(metadata.get("mode") or "default"),
         session_id=str(metadata.get("session_id") or ""),
         run_id=str(metadata.get("run_id") or ""),
         tool_call_id=str(metadata.get("tool_call_id") or ""),
-        allowed_roots=(cwd.expanduser().resolve(),),
+        allowed_roots=(root,),
+        # The sandbox needs the workspace writable so the Agent can create files
+        # and run builds; the host backend has no mount concept and keeps ().
+        writable_paths=(root,) if sandboxed else (),
         masked_paths=tuple(str(value) for value in metadata.get("masked_paths") or ()),
         trust_level=str(metadata.get("trust_level") or "unspecified"),
-        limits=ResourceLimits(timeout_seconds=timeout),
+        network="none" if sandboxed else "inherit",
+        # `timeout` stays authoritative; callers supply `limits` only to add
+        # cpu/memory/pid caps, so a mismatch can never silently extend a run.
+        limits=replace(limits, timeout_seconds=timeout) if limits is not None else ResourceLimits(timeout_seconds=timeout),
     )
 
 

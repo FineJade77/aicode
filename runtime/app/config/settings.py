@@ -51,6 +51,18 @@ class PricingSettings(BaseModel):
     model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
 
 
+class ExecutionSettings(BaseModel):
+    """Where Agent-issued shell commands run.
+
+    `auto` keeps trusted workspaces on the host (fast, full toolchain) and pushes
+    untrusted workspaces into the Docker sandbox. `host` restores the pre-sandbox
+    behaviour for machines without Docker; `docker` is the strictest setting and
+    sandboxes every Agent command regardless of trust.
+    """
+
+    agent_bash_backend: Literal["auto", "host", "docker"] = "auto"
+
+
 class ContextSettings(BaseModel):
     default_context_window: int = 32_768
     default_max_output_tokens: int = 8_192
@@ -70,6 +82,7 @@ class Settings(BaseModel):
     anthropic: AnthropicSettings = AnthropicSettings()
     pricing: PricingSettings = PricingSettings()
     context: ContextSettings = ContextSettings()
+    execution: ExecutionSettings = ExecutionSettings()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -114,7 +127,15 @@ class Settings(BaseModel):
                 model_context_windows=_parse_positive_int_map(os.getenv("AICODE_MODEL_CONTEXT_WINDOWS_JSON")),
                 model_max_output_tokens=_parse_positive_int_map(os.getenv("AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON")),
             ),
+            execution=ExecutionSettings(
+                agent_bash_backend=_agent_bash_backend_env(),
+            ),
         )
+
+
+def _agent_bash_backend_env() -> str:
+    value = os.getenv("AICODE_AGENT_BASH_BACKEND", "auto").strip().casefold()
+    return value if value in {"auto", "host", "docker"} else "auto"
 
 
 def _parse_positive_int_map(raw: str | None) -> dict[str, int]:

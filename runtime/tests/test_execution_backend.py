@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.audit.logger import AuditLogger
-from app.execution.docker import DockerExecutionBackend
+from app.execution.docker import DockerExecutionBackend, missing_image_hint
 from app.execution.host import build_subprocess_environment, isolated_execution_home
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus, ResourceLimits
 from app.execution.service import ExecutionService
@@ -96,6 +97,8 @@ async def test_docker_backend_builds_read_only_isolated_request(tmp_path: Path) 
     argv = list(host.request.argv or ())
     joined = " ".join(argv)
     assert argv[:3] == ["docker", "run", "--rm"]
+    # Implicit image pulls would turn one tool call into a silent long download.
+    assert "--pull=never" in argv
     assert "--network none" in joined
     assert "--cpus 1.5" in joined
     assert "--memory 768m" in joined
@@ -105,6 +108,60 @@ async def test_docker_backend_builds_read_only_isolated_request(tmp_path: Path) 
     assert argv[-3:] == ["sh", "-lc", "go test ./..."]
     assert "PATH" in (host.request.env_allowlist or ())
     assert "OPENAI_API_KEY" not in (host.request.env_allowlist or ())
+
+
+@pytest.mark.asyncio
+async def test_docker_backend_mounts_workspace_writable_for_agent_commands(tmp_path: Path) -> None:
+    """Agent shell commands need to create files and run builds, so the sandbox
+    mounts the workspace read-write and drops privileges to the host uid/gid."""
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    host = CapturingHost()
+    backend = DockerExecutionBackend(host)  # type: ignore[arg-type]
+    request = ExecutionRequest(
+        execution_id="exec_docker_agent",
+        workspace=tmp_path,
+        backend="docker",
+        shell_command="mkdir -p build",
+        action="agent.bash",
+        network="none",
+        writable_paths=(tmp_path,),
+        masked_paths=(".env*",),
+        limits=ResourceLimits(timeout_seconds=60),
+    )
+
+    result = await backend.execute(request)
+
+    assert result.status == ExecutionStatus.SUCCEEDED
+    assert host.request is not None
+    joined = " ".join(host.request.argv or ())
+    assert f"type=bind,src={tmp_path.resolve()},dst=/workspace " in joined + " "
+    assert f"type=bind,src={tmp_path.resolve()},dst=/workspace,readonly" not in joined
+    assert f"--user {os.getuid()}:{os.getgid()}" in joined
+    # Network isolation and .env masking must survive the writable mount.
+    assert "--network none" in joined
+    assert "dst=/workspace/.env,readonly" in joined
+
+
+@pytest.mark.asyncio
+async def test_docker_backend_rejects_writable_paths_outside_workspace(tmp_path: Path) -> None:
+    """Only the workspace may be writable; any other host path would put an
+    unvetted directory inside a container running model-chosen commands."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    backend = DockerExecutionBackend(CapturingHost())  # type: ignore[arg-type]
+    request = ExecutionRequest(
+        execution_id="exec_docker_escape",
+        workspace=workspace,
+        backend="docker",
+        shell_command="ls",
+        network="none",
+        writable_paths=(outside,),
+    )
+
+    with pytest.raises(ValueError, match="writable path"):
+        await backend.execute(request)
 
 
 class CapturingHost:
@@ -219,3 +276,12 @@ def test_isolated_execution_home_is_private_and_scoped_per_workspace(
     assert first_home.parent == second_home.parent
     assert first_home.stat().st_mode & 0o777 == 0o700
     assert second_home.stat().st_mode & 0o777 == 0o700
+
+
+def test_missing_image_hint_maps_docker_error_to_action() -> None:
+    hint = missing_image_hint("pytest -q", "Unable to find image 'python:3.12-slim' locally")
+    assert "docker pull python:3.12-slim" in hint
+
+
+def test_missing_image_hint_ignores_unrelated_failures() -> None:
+    assert missing_image_hint("ls", "ls: cannot access 'x': No such file or directory") == ""

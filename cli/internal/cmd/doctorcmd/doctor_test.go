@@ -243,3 +243,35 @@ func findCheck(t *testing.T, report Report, name string) Check {
 	t.Fatalf("check %q not found", name)
 	return Check{}
 }
+
+func TestDoctorWarnsWhenSandboxImageIsMissing(t *testing.T) {
+	deps := healthyDependencies()
+	deps.runCommand = func(_ context.Context, name string, args ...string) (string, error) {
+		if name == "/venv/bin/python" {
+			return "3.11.9", nil
+		}
+		if len(args) > 0 && args[0] == "image" {
+			return "", errors.New("Error: No such image: ubuntu:24.04")
+		}
+		return "27.1.0", nil
+	}
+
+	report := buildReport(config.Default(), deps)
+	check := findCheck(t, report, "docker")
+
+	if check.Status != StatusWarn {
+		t.Fatalf("expected warn when the sandbox image is missing, got %q", check.Status)
+	}
+	if !strings.Contains(check.Remediation, "docker pull ubuntu:24.04") {
+		t.Fatalf("remediation must tell the user to pull the image, got %q", check.Remediation)
+	}
+}
+
+func TestDoctorReportsOKWhenSandboxImageIsPresent(t *testing.T) {
+	report := buildReport(config.Default(), healthyDependencies())
+	check := findCheck(t, report, "docker")
+
+	if check.Status != StatusOK {
+		t.Fatalf("expected ok when daemon and image are available, got %q", check.Status)
+	}
+}

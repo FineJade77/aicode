@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -14,6 +15,34 @@ MEMORY_PATTERN = re.compile(r"^[1-9][0-9]*(?:[kKmMgG])?$")
 CPU_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
 
 
+MISSING_IMAGE_MARKERS = ("unable to find image", "no such image", "image not known", "pull access denied")
+
+
+def docker_available() -> bool:
+    """Whether the Docker CLI can be located on PATH.
+
+    Callers use this to fail loudly *before* dispatching a command that was
+    routed to the sandbox. Silently falling back to host execution would turn a
+    security boundary into a placebo, so a missing Docker CLI must surface as an
+    error the user can act on.
+    """
+    return bool(shutil.which("docker"))
+
+
+def missing_image_hint(command: str, output: str) -> str:
+    """Turn Docker's "image not present" failure into an actionable instruction.
+
+    Returns an empty string when the failure was not about a missing image.
+    """
+    if not any(marker in output.casefold() for marker in MISSING_IMAGE_MARKERS):
+        return ""
+    image = docker_image(command)
+    return (
+        f"The sandbox image {image!r} is not present locally and aicode does not pull images "
+        f"implicitly. Run `docker pull {image}` once, then retry."
+    )
+
+
 class DockerExecutionBackend:
     def __init__(self, host: HostExecutionBackend) -> None:
         self.host = host
@@ -23,10 +52,14 @@ class DockerExecutionBackend:
             raise ValueError("Docker backend requires shell_command")
         if request.network != "none":
             raise ValueError("Docker backend currently supports only network=none")
-        if request.writable_paths:
-            raise ValueError("Docker backend currently supports only a read-only workspace")
 
         workspace = request.workspace.expanduser().resolve()
+        # The only path a caller may ask to be writable is the workspace itself.
+        # Anything else would put a host directory the policy layer never vetted
+        # inside a container that runs model-chosen commands.
+        for candidate in request.writable_paths:
+            if candidate.expanduser().resolve() != workspace:
+                raise ValueError("Docker backend only supports the workspace as a writable path")
         with tempfile.TemporaryDirectory(prefix="aicode-sandbox-mask-") as temp_dir:
             mask_source = Path(temp_dir) / "empty"
             mask_source.write_bytes(b"")
@@ -63,10 +96,16 @@ def _docker_args(request: ExecutionRequest, workspace: Path, masks: list[tuple[P
     if not MEMORY_PATTERN.fullmatch(memory):
         raise ValueError("Docker memory limit is invalid")
 
+    writable = any(candidate.expanduser().resolve() == workspace for candidate in request.writable_paths)
+
     args = [
         "docker",
         "run",
         "--rm",
+        # Never pull implicitly. A missing image would otherwise turn a single
+        # tool call into a multi-minute, feedback-free image download; failing
+        # immediately lets the caller surface an actionable "docker pull" hint.
+        "--pull=never",
         "--network",
         "none",
         "--cpus",
@@ -76,9 +115,15 @@ def _docker_args(request: ExecutionRequest, workspace: Path, masks: list[tuple[P
         "--pids-limit",
         str(pids),
     ]
+    if writable:
+        # Without this the container writes as root and leaves root-owned files
+        # in the user's workspace on Linux. Docker Desktop remaps ownership on
+        # macOS, but matching the host uid/gid is correct on both.
+        args.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
     for key, value in _sandbox_environment().items():
         args.extend(["--env", f"{key}={value}"])
-    args.extend(["--mount", f"type=bind,src={workspace},dst=/workspace,readonly"])
+    mount = f"type=bind,src={workspace},dst=/workspace"
+    args.extend(["--mount", mount if writable else f"{mount},readonly"])
     for source, target in masks:
         args.extend(["--mount", f"type=bind,src={source},dst={target},readonly"])
     args.extend(

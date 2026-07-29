@@ -76,3 +76,19 @@ def write_project_config(tmp_path: Path, data: dict) -> None:
     config_dir = tmp_path / ".aicode"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_parse_project_config_reads_agent_bash_backend() -> None:
+    config = parse_project_config({"execution": {"agentBashBackend": "docker"}})
+    assert config.execution.agent_bash_backend == "docker"
+
+
+def test_parse_project_config_defaults_agent_bash_backend_to_inherit() -> None:
+    assert parse_project_config({}).execution.agent_bash_backend == ""
+
+
+def test_parse_project_config_ignores_unknown_agent_bash_backend() -> None:
+    """A typo must fall back to "inherit the Runtime setting", never to a
+    permissive default that would silently weaken the sandbox."""
+    config = parse_project_config({"execution": {"agentBashBackend": "hostt"}})
+    assert config.execution.agent_bash_backend == ""

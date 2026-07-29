@@ -60,6 +60,11 @@ class EvalChecks(BaseModel):
     final_contains: list[str] = Field(default_factory=list)
     minimum_compactions: int = Field(default=0, ge=0)
     maximum_agent_executions: int | None = Field(default=None, ge=0)
+    # Execution backends that must never appear in the audit trail for this task.
+    # Asserting "no host execution" is stable whether or not the grading machine
+    # has Docker: with Docker the command is sandboxed, without it the command is
+    # refused, and only a regression to host fallback produces a host execution.
+    forbidden_execution_backends: list[str] = Field(default_factory=list)
     expected_approvals: dict[Literal["edit", "tool"], Literal["accept", "reject"]] = Field(default_factory=dict)
 
 

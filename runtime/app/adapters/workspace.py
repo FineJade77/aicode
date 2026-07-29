@@ -3,9 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.config.settings import settings
 from app.project.config import ProjectConfig, load_project_config
 from app.project.detect import detect_project_command, detect_test_command
+from app.tools.registry import resolve_bash_backend
 from app.tools.review import review_rules_data
+
+BASH_ENVIRONMENT_DESCRIPTIONS = {
+    "host": "commands run directly on the host with the full local toolchain and network access",
+    "docker": (
+        "commands run inside a Docker sandbox: no network access, only the workspace is mounted "
+        "(writable), and .env files are masked. Package installs that need the network will fail"
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +24,7 @@ class ProjectPromptContext:
     test_command: str
     rules_text: str
     memory_text: str
+    bash_environment: str = BASH_ENVIRONMENT_DESCRIPTIONS["host"]
 
 
 class LocalWorkspaceRuntime:
@@ -25,15 +36,20 @@ class LocalWorkspaceRuntime:
         except OSError:
             return False
 
-    def prompt_context(self, workspace: Path) -> ProjectPromptContext:
+    def prompt_context(self, workspace: Path, *, trust_level: str = "trusted") -> ProjectPromptContext:
         config = load_project_config(workspace)
         configured = config.commands.get("test")
         test_command = configured if configured and configured != "auto" else (detect_test_command(workspace) or "")
+        backend = resolve_bash_backend(
+            config.execution.agent_bash_backend or settings.execution.agent_bash_backend,
+            trust_level,
+        )
         return ProjectPromptContext(
             config=config,
             test_command=test_command,
             rules_text=self._context_file(workspace, "rules.md"),
             memory_text=self._context_file(workspace, "memory.md"),
+            bash_environment=BASH_ENVIRONMENT_DESCRIPTIONS[backend],
         )
 
     def project_command(self, workspace: Path, action: str) -> str | None:

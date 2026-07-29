@@ -531,12 +531,47 @@ func checkDocker(deps dependencies) Check {
 		}
 	}
 	details["server_version"] = firstLine(output)
+
+	// aicode never pulls sandbox images implicitly, so a missing image only
+	// surfaces mid-task as a failed tool call. Report it at setup time instead.
+	missing := missingSandboxImages(deps, path)
+	if len(missing) > 0 {
+		details["missing_images"] = missing
+		return Check{
+			Name:    "docker",
+			Status:  StatusWarn,
+			Summary: "Docker daemon is available, but sandbox images are missing",
+			Details: details,
+			Remediation: fmt.Sprintf(
+				"Run `docker pull %s`; aicode does not pull images implicitly, so sandboxed commands fail until it is present.",
+				strings.Join(missing, "` and `docker pull "),
+			),
+		}
+	}
 	return Check{
 		Name:    "docker",
 		Status:  StatusOK,
 		Summary: "Docker daemon is available",
 		Details: details,
 	}
+}
+
+// sandboxImages mirrors docker_image() in runtime/app/execution/docker.py. Only
+// the default image is required; language-specific images are pulled on demand
+// by the user when they first sandbox that toolchain.
+var sandboxImages = []string{"ubuntu:24.04"}
+
+func missingSandboxImages(deps dependencies, dockerPath string) []string {
+	var missing []string
+	for _, image := range sandboxImages {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, err := deps.runCommand(ctx, dockerPath, "image", "inspect", image)
+		cancel()
+		if err != nil {
+			missing = append(missing, image)
+		}
+	}
+	return missing
 }
 
 func runtimeAddress(rawURL string) (*url.URL, string, int, error) {

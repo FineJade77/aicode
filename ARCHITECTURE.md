@@ -424,22 +424,27 @@ Usage 记录按模型、session 和时间聚合 token 与成本估算。成本�
 
 ## 17. Docker Sandbox
 
-Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留客户端入口。当前支持：
+Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留客户端入口。当前有两个入口：
+
+**显式命令**（workspace 只读挂载）：
 
 - `aicode --sandbox docker test`
 - `aicode --sandbox docker build`
 - `aicode --sandbox docker lint`
 
+**Agent `bash` 工具**（workspace 可写挂载）：由 `execution.agent_bash_backend` 与 workspace trust level 共同决定，见 18.1。
+
 安全默认值：
 
-- workspace 只读挂载。
+- 显式命令 workspace 只读挂载；Agent bash 需要创建文件和跑构建，因此 workspace 可写挂载，并以宿主 uid/gid 运行，避免在用户仓库里留下 root 拥有的文件。
 - 默认禁网。
 - 不传 `.env`。
 - 只允许少量缓存相关环境变量。
 - 设置 CPU、内存、进程数等资源限制。
 - 使用与 Agent Host 命令一致的 execution 终态、取消和 audit 格式。
+- `--pull=never`：绝不隐式拉取镜像。镜像缺失会立即失败并提示 `docker pull`，而不是把一次工具调用变成数分钟无反馈的下载。`aicode doctor` 会在安装期就报告缺失的沙箱镜像。
 
-它适合在隔离环境中验证命令是否能通过，但不是完整的远程执行平台。当前还没有实现可配置写入挂载、完整 artifact 回收或复杂服务编排。
+它适合在隔离环境中验证命令是否能通过，但不是完整的远程执行平台。当前还没有实现 artifact 回收或复杂服务编排。
 
 ## 18. Security Model
 
@@ -455,7 +460,27 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 - 风险 bash 命令必须可审计、可拒绝。
 - Runtime token 只用于本机 CLI 与 daemon 通信，不是公网认证方案。
 
-这套模型的目标是降低本地 Agent 的误操作风险，而不是提供强沙箱级隔离。强隔离任务应优先使用 Docker Sandbox 或未来更完整的 sandbox 后端。
+Policy 层负责 **UX 分级**（这条命令要不要问用户），执行后端负责 **隔离边界**。两者是纵深防御关系，policy 不是唯一防线。
+
+### 18.1 Agent 命令的执行边界
+
+Agent `bash` 的落点由 `execution.agent_bash_backend` 与 workspace trust level 共同决定：
+
+| 配置 | trusted workspace | 其它（untrusted / unspecified） |
+| --- | --- | --- |
+| `auto`（默认） | host | docker |
+| `host` | host | host |
+| `docker` | docker | docker |
+
+- Runtime 级：环境变量 `AICODE_AGENT_BASH_BACKEND`。
+- 项目级：`.aicode/config.json` 的 `execution.agentBashBackend`；取值非法时回落到"继承 Runtime 设置"，而不是回落到宽松默认——配置里的拼写错误绝不能悄悄削弱沙箱。
+- system prompt 会声明当前的执行环境（是否禁网），使模型不会围绕它并不具备的能力做计划。
+
+**不做静默降级**：当命令被路由到 docker 但 Docker CLI 不可用时，`bash` 直接失败并提示用户启动 Docker、执行 `aicode trust add`，或显式改配置为 `host`。回退到宿主机执行会把一个安全边界变成安慰剂，因此这条路径由 `test_bash_fails_loudly_when_sandbox_is_unavailable` 与评测任务 `untrusted_bash_sandboxed` 双重锁定。
+
+评测任务断言的不变量是"untrusted workspace 永不产生 host backend 的 execution"——这个断言在有无 Docker 的机器上都成立：有 Docker 则走沙箱，无 Docker 则被拒绝，只有回退到 host 的回归才会让它失败。
+
+这套模型的目标是降低本地 Agent 的误操作风险。Agent 命令在 untrusted workspace 下已进入容器隔离；trusted workspace 是用户显式授予的信任，仍在宿主机执行。
 
 ## 19. Agent Eval And Trace
 

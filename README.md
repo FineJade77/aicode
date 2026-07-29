@@ -274,7 +274,7 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 
 ## Project Trust 与本地执行安全
 
-workspace 默认是 `untrusted`。`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令不会直接自动落到 Host；用户需要逐次批准，或显式改用 Docker sandbox。确认仓库可信后可执行：
+workspace 默认是 `untrusted`。untrusted workspace 里 Agent 的 **每一条 `bash` 命令都会被路由进 Docker 沙箱**（禁网、workspace 可写挂载、`.env*` 遮蔽、资源受限），而不是在宿主机执行；`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令还需要逐次批准。确认仓库可信后可执行：
 
 ```bash
 aicode trust status
@@ -284,6 +284,28 @@ aicode trust remove
 ```
 
 Trust 不写入仓库，也不能通过 `.aicode/config.json`、rules 或 memory 自行提升。记录默认位于 `~/.aicode/trust.json`（设置 `AICODE_HOME` 时为 `$AICODE_HOME/trust.json`），绑定 canonical workspace 路径和可选的 credential-free Git remote；remote 变化后状态自动回到 `untrusted`。文件使用 `0600` 权限和原子替换。
+
+### Agent bash 的执行后端
+
+| `execution.agent_bash_backend` | trusted workspace | 其它 |
+| --- | --- | --- |
+| `auto`（默认） | host | docker |
+| `host` | host | host |
+| `docker` | docker | docker |
+
+```bash
+export AICODE_AGENT_BASH_BACKEND="auto"   # auto | host | docker
+```
+
+项目级覆盖写在 `.aicode/config.json`：
+
+```json
+{ "execution": { "agentBashBackend": "docker" } }
+```
+
+取值非法时回落到"继承 Runtime 设置"，而不是回落到宽松默认。
+
+命令被路由到 docker 但 Docker 不可用时，`bash` 会**直接失败并说明如何处理**，不会静默回退到宿主机执行——回退会让这个安全边界失去意义。同理，沙箱不会隐式拉取镜像：镜像缺失立即失败并提示 `docker pull`，`aicode doctor` 也会提前报告缺失的镜像。
 
 Host shell 同时经过命令风险与路径风险检查：
 
@@ -551,7 +573,7 @@ aicode review-rules
 
 ## Docker sandbox
 
-Docker sandbox 通过本地 Runtime 的统一 ExecutionBackend 执行；CLI 只负责提交、展示结果和中断时取消。支持：
+Docker sandbox 通过本地 Runtime 的统一 ExecutionBackend 执行；CLI 只负责提交、展示结果和中断时取消。两个入口：显式的 `--sandbox docker` 命令，以及 untrusted workspace 下 Agent 的 `bash` 工具（见 [Agent bash 的执行后端](#agent-bash-的执行后端)）。
 
 ```bash
 aicode --sandbox docker test
@@ -561,7 +583,8 @@ aicode --sandbox docker lint
 
 默认行为：
 
-- workspace 只读挂载到 `/workspace`
+- 显式命令 workspace 只读挂载到 `/workspace`；Agent bash 需要建文件和跑构建，因此可写挂载并以宿主 uid/gid 运行，不会留下 root 拥有的文件
+- `--pull=never`：绝不隐式拉取镜像，缺失即失败并提示 `docker pull`
 - `--network none`
 - 不传 `.env*`
 - 用空文件遮蔽仓库根目录 `.env*`

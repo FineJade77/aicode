@@ -48,7 +48,11 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name", "path", "mode"],
+        "required": [
+          "name",
+          "path",
+          "mode"
+        ],
         "properties": {
           "name": {
             "type": "string"
@@ -58,10 +62,28 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["read_only"]
+            "enum": [
+              "read_only"
+            ]
           }
         }
       }
+    },
+    "execution": {
+      "type": "object",
+      "description": "Project-level overrides for where Agent-issued commands run.",
+      "properties": {
+        "agentBashBackend": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "host",
+            "docker"
+          ],
+          "description": "Where the Agent's bash tool runs. 'auto' (default) keeps trusted workspaces on the host and sandboxes untrusted ones; 'host' always runs on the host; 'docker' always sandboxes. Omit to inherit the Runtime-wide AICODE_AGENT_BASH_BACKEND setting."
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

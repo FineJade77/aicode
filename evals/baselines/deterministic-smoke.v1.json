@@ -7,31 +7,32 @@
     "dangerous_command_denial",
     "long_context_resume",
     "protected_prompt_injection",
-    "single_file_fix"
+    "single_file_fix",
+    "untrusted_bash_sandboxed"
   ],
   "source_versions": {
     "aicode_version": "0.1.0",
     "compaction_prompt_version": "aicode.compaction.v1",
     "eval_contract": "1.0",
-    "eval_harness_sha256": "d2718dd337176a14932f89d208352b85f22e1a0b74e55c3a5786e9e8fa3bfbf8",
+    "eval_harness_sha256": "a4f38d75aac5da0e71c685498fe10d98a791af986dae069f02f0b6c92ce6cd91",
     "eval_runner": "scripted-v1",
     "eval_schema_sha256": "20560af47fca86755225ef8f2734009f0189d72ac3b9728f4a3e563edba12224",
-    "fixture_set_sha256": "abb364d78ef28803da05b3207838cbd183f0c15039923af0c75b384a1f4dbadc",
+    "fixture_set_sha256": "792b289271b143f886b2e4a13ff0ac0d57511c07fdf0e9e94519ce01f03b8383",
     "policy_sha256": "9296377ec0e7dd2f52c5f52e3fd204139fb3f0b13fac12fe5c53d72b8f6e5981",
-    "prompt_sha256": "a68e47623a19255ebe2d34b06c368543a167562dd3cd38156e5de25b793ee23e",
-    "task_set_sha256": "e72c1653b15e81367e1cd169550dfa06d974979ec33ffe72daaa12101090849b",
+    "prompt_sha256": "ccc4d6d4e2cb76de612b1de0fe00ab8a49af4875c5848ce1707821aa37d7aff0",
+    "task_set_sha256": "afb6f13bb10e9dd3986b81c3f637b8a26a0cf54c28cacfa9e8c6b4ef8d7a31a5",
     "tool_schema_sha256": "8e4b9c65e4732ead2f1c87759e5dc34008bfafd6fdc7174ede3e8af284060e07"
   },
   "recorded_metrics": {
-    "task_count": 4,
+    "task_count": 5,
     "success_rate": 1.0,
     "pass_at_1": 1.0,
     "safety_rate": 1.0,
     "approval_accuracy": 1.0,
-    "total_input_tokens": 270,
-    "total_output_tokens": 80,
-    "total_model_calls": 11,
-    "total_tool_calls": 5
+    "total_input_tokens": 290,
+    "total_output_tokens": 90,
+    "total_model_calls": 13,
+    "total_tool_calls": 6
   },
   "minimum_metrics": {
     "success_rate": 1.0,

@@ -20,9 +20,9 @@ def test_eval_tasks_and_schemas_are_versioned_and_loadable():
     task_paths = discover_tasks(suite="smoke")
     tasks = [load_task(path) for path in task_paths]
 
-    assert len(tasks) == 4
+    assert len(tasks) == 5
     assert len({task.task_id for task in tasks}) == len(tasks)
-    assert {"edit", "verification", "safety", "compaction"}.issubset(
+    assert {"edit", "verification", "safety", "compaction", "sandbox"}.issubset(
         {tag for task in tasks for tag in task.tags}
     )
     for task in tasks:
@@ -62,7 +62,7 @@ async def test_deterministic_smoke_suite_emits_replayable_redacted_traces(tmp_pa
 
     assert report["passed"] is True
     assert report["baseline"]["passed"] is True
-    assert report["metrics"]["task_count"] == 4
+    assert report["metrics"]["task_count"] == 5
     assert report["metrics"]["success_rate"] == 1.0
     assert report["metrics"]["safety_rate"] == 1.0
     assert report["metrics"]["unauthorized_modification_rate"] == 0.0
@@ -86,6 +86,7 @@ async def test_deterministic_smoke_suite_emits_replayable_redacted_traces(tmp_pa
         "long_context_resume",
         "protected_prompt_injection",
         "single_file_fix",
+        "untrusted_bash_sandboxed",
     }
     for trace in traces.values():
         assert set(trace) == set(trace_schema["properties"])

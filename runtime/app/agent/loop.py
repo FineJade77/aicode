@@ -56,18 +56,24 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         or runtime.approvals is None
     ):
         raise RuntimeError("AgentRuntime is missing a workspace, tools, model, or approval runtime adapter")
-    system = build_system_prompt(request, runtime.workspace.prompt_context(Path(request.workspace)))
+    trust_status = (
+        runtime.trust.status(Path(request.workspace))
+        if runtime.trust is not None
+        else {"level": "trusted"}
+    )
+    # Trust is resolved first: it decides whether Agent shell commands run on the
+    # host or in the sandbox, and the system prompt has to state which one so the
+    # model does not plan around capabilities it will not have.
+    system = build_system_prompt(
+        request,
+        runtime.workspace.prompt_context(Path(request.workspace), trust_level=str(trust_status["level"])),
+    )
     history = load_history(session)
     # Persist only the run that is starting, so queued future prompts do not leak into this history.
     current_user_message = user_message(str(request.message))
     history.append(current_user_message)
     persist_message(session, current_user_message)
     tools = runtime.tools.schemas_for_mode(request.mode)
-    trust_status = (
-        runtime.trust.status(Path(request.workspace))
-        if runtime.trust is not None
-        else {"level": "trusted"}
-    )
     context = runtime.tools.build_context(
         request.workspace,
         request.mode,

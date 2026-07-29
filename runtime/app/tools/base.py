@@ -22,6 +22,8 @@ class ToolContext:
     run_id: str = ""
     tool_call_id: str = ""
     trust_level: str = "trusted"
+    # "auto" | "host" | "docker" — resolved against trust_level at call time.
+    bash_backend: str = "auto"
 
 
 @dataclass(slots=True)

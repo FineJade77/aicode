@@ -20,6 +20,17 @@ class ReviewConfig:
     max_findings: int = 50
 
 
+@dataclass(slots=True)
+class ExecutionConfig:
+    """Project-level override for where Agent shell commands run.
+
+    An empty string means "inherit the Runtime-wide setting"; a project may only
+    pick one of the known backends, never invent a new one.
+    """
+
+    agent_bash_backend: str = ""
+
+
 def mandatory_protected_paths() -> list[str]:
     return [
         ".env",
@@ -70,6 +81,7 @@ class ProjectConfig:
     protected_paths: list[str] = field(default_factory=default_protected_paths)
     workspaces: list[WorkspaceRef] = field(default_factory=list)
     review: ReviewConfig = field(default_factory=ReviewConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
 
 
 def load_project_config(workspace: Path) -> ProjectConfig:
@@ -90,6 +102,7 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
     protected_paths = raw.get("protectedPaths")
     workspaces = raw.get("workspaces")
     review = raw.get("review")
+    execution = raw.get("execution")
 
     return ProjectConfig(
         project_name=as_optional_str(raw.get("projectName")),
@@ -97,7 +110,17 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
         protected_paths=effective_protected_paths(protected_paths),
         workspaces=parse_workspaces(workspaces),
         review=parse_review_config(review),
+        execution=parse_execution_config(execution),
     )
+
+
+def parse_execution_config(raw: Any) -> ExecutionConfig:
+    if not isinstance(raw, dict):
+        return ExecutionConfig()
+    backend = str(raw.get("agentBashBackend") or "").strip().casefold()
+    # An unknown value falls back to "inherit" rather than to a permissive
+    # default: a typo in project config must never silently weaken the sandbox.
+    return ExecutionConfig(agent_bash_backend=backend if backend in {"auto", "host", "docker"} else "")
 
 
 def parse_workspaces(raw: Any) -> list[WorkspaceRef]:

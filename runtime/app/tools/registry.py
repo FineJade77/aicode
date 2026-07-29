@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import time
@@ -7,6 +8,9 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
+from app.config.settings import settings
+from app.execution.docker import docker_available, missing_image_hint
+from app.execution.models import ResourceLimits
 from app.project.config import load_project_config
 from app.security.secrets import redact_known_environment_secrets
 from app.tools.base import (
@@ -166,7 +170,44 @@ def build_tool_context(
         session_id=session_id,
         run_id=run_id,
         trust_level=trust_level,
+        bash_backend=project_config.execution.agent_bash_backend or settings.execution.agent_bash_backend,
     )
+
+
+def resolve_bash_backend(configured: str, trust_level: str) -> str:
+    """Map the configured policy plus workspace trust onto a concrete backend.
+
+    `auto` is the default: a workspace the user explicitly trusted runs on the
+    host with the full local toolchain, while anything else is pushed into the
+    Docker sandbox. `host` and `docker` are escape hatches that ignore trust.
+    """
+    if configured == "host":
+        return "host"
+    if configured == "docker":
+        return "docker"
+    return "host" if trust_level == "trusted" else "docker"
+
+
+def sandbox_resource_limits(timeout: float) -> ResourceLimits:
+    """Resource caps for sandboxed Agent commands.
+
+    Mirrors the knobs `ExecutionApplicationService` already uses for
+    test/build/lint so both sandbox entry points stay capped the same way.
+    """
+    return ResourceLimits(
+        timeout_seconds=timeout,
+        cpus=os.getenv("AICODE_SANDBOX_CPUS", "2"),
+        memory=os.getenv("AICODE_SANDBOX_MEMORY", "2g"),
+        pids_limit=_sandbox_pids_limit(),
+    )
+
+
+def _sandbox_pids_limit() -> int:
+    try:
+        value = int(os.getenv("AICODE_SANDBOX_PIDS_LIMIT", "256"))
+    except ValueError:
+        return 256
+    return value if 1 <= value <= 65535 else 256
 
 
 def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
@@ -410,12 +451,29 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
     if not command:
         raise ToolError("command must not be empty")
     timeout = max(1, min(int(arguments.get("timeout") or DEFAULT_BASH_TIMEOUT), MAX_BASH_TIMEOUT))
+    backend = resolve_bash_backend(context.bash_backend, context.trust_level)
+    if backend == "docker" and not docker_available():
+        # Deliberately no fallback to host execution. Routing an untrusted
+        # workspace's command to the host because the sandbox is missing would
+        # silently remove the boundary the routing exists to enforce.
+        return ToolResult(
+            success=False,
+            error=(
+                "This command was routed to the Docker sandbox, but the Docker CLI is not available. "
+                "Start Docker, or run `aicode trust add` to mark this workspace as trusted, "
+                "or set execution.agentBashBackend to \"host\" to accept host execution."
+            ),
+            risk_level="high",
+            data={"backend": "docker", "status": "unavailable", "trust_level": context.trust_level},
+        )
     result = await run_shell_command(
         command,
         cwd=context.workspace,
         timeout=timeout,
         stderr_to_stdout=True,
         execution=context.execution,
+        backend=backend,
+        limits=sandbox_resource_limits(timeout) if backend == "docker" else None,
         metadata={
             "action": "agent.bash",
             "mode": context.mode,
@@ -440,6 +498,10 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
             risk_level="medium",
             data=data,
         )
+    if backend == "docker" and result.returncode != 0:
+        hint = missing_image_hint(command, result.combined_output)
+        if hint:
+            return ToolResult(success=False, error=hint, risk_level="medium", data={**data, "status": "image_missing"})
     text = f"exit={result.returncode}\n{result.stdout}".rstrip()
     return ToolResult(
         success=result.returncode == 0,

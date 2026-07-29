@@ -31,6 +31,7 @@ def build_system_prompt(request: Any, project: Any) -> str:
         "- After applying changes, run relevant tests. If tool output is truncated, continue reading with offset.",
         "- When the task is complete or no work remains, answer directly; do not keep calling tools.",
         f"Workspace: {request.workspace}",
+        f"Shell execution: {project.bash_environment}",
         f"Test command: {test_command or 'not detected; discover it if needed'}",
         f"Protected paths (do not read or write): {', '.join(config.protected_paths)}",
         f"Additional read-only workspaces: {workspaces}",
