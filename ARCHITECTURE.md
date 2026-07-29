@@ -478,6 +478,7 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 - 项目规则不能覆盖系统安全策略。
 - 风险 bash 命令必须可审计、可拒绝。
 - Runtime token 只用于本机 CLI 与 daemon 通信，不是公网认证方案。
+- 认证 fail-closed：未配置 token 时拒绝请求，而不是放行。放行意味着本机任何进程都能伪造 approval，替用户批准编辑或高风险命令。无认证访问需通过 `AICODE_ALLOW_ANONYMOUS=1` 显式选择；该开关只在未配置 token 时生效，不能用来绕过已配置的 token。
 
 Policy 层负责 **UX 分级**（这条命令要不要问用户），执行后端负责 **隔离边界**。两者是纵深防御关系，policy 不是唯一防线。
 

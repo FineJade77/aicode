@@ -236,13 +236,24 @@ export AICODE_RUNTIME_DIR="/path/to/aicode/runtime"
 export AICODE_RUNTIME_PYTHON="python3"
 ```
 
-手动启动时默认没有 `AICODE_RUNTIME_TOKEN`，API 不启用认证，便于本地调试。通过 `aicode daemon start` 启动时，CLI 会生成：
+通过 `aicode daemon start` 启动时，CLI 会生成：
 
 ```text
 ~/.aicode/runtime.token
 ```
 
-之后 CLI 请求会携带 `Authorization: Bearer <token>`。如果遇到 `401 Unauthorized`，通常是旧 daemon 或手动 uvicorn 仍占用 `8765`，先停止 daemon 并确认端口空闲：
+之后 CLI 请求会携带 `Authorization: Bearer <token>`。
+
+**认证是 fail-closed 的**：没有配置 `AICODE_RUNTIME_TOKEN` 时，API 不是"关闭认证"，而是**拒绝所有请求**（`/v1/daemon/status` 除外）。未配置即全放行意味着本机任何进程都能伪造 approval——替用户批准一次编辑或一条高风险命令。手动跑 uvicorn 调试时需要显式选择其一：
+
+```bash
+export AICODE_RUNTIME_TOKEN="$(cat ~/.aicode/runtime.token)"   # 推荐
+export AICODE_ALLOW_ANONYMOUS=1                                 # 显式接受无认证
+```
+
+配置了 token 时 `AICODE_ALLOW_ANONYMOUS` 无效——它是"未配置 token"的选择项，不是绕过 token 的后门。
+
+如果遇到 `401 Unauthorized`，先看响应 `detail`：提到 `AICODE_RUNTIME_TOKEN` 说明 Runtime 侧没有配置 token；否则通常是旧 daemon 或手动 uvicorn 仍占用 `8765`，先停止 daemon 并确认端口空闲：
 
 ```bash
 aicode daemon stop
