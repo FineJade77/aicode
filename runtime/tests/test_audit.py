@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -42,18 +43,23 @@ async def test_audit_logger_flushes_async_writes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_audit_logger_counts_individual_write_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_audit_logger_retries_a_transient_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single transient error must not cost an audit record.
+
+    The audit trail is evidence: losing a line to one flaky write makes "no
+    record of a dangerous command" indistinguishable from "no dangerous command".
+    """
     logger = AuditLogger(tmp_path / "audit.jsonl")
-    original_write = logger._write_event_sync
-    call_count = {"value": 0}
+    original_open = logger._open_handle
+    calls = {"value": 0}
 
-    def flaky_write(event: dict) -> None:
-        call_count["value"] += 1
-        if call_count["value"] == 1:
-            raise RuntimeError("simulated disk error")
-        original_write(event)
+    def flaky_open():
+        calls["value"] += 1
+        if calls["value"] == 1:
+            raise OSError("simulated transient disk error")
+        return original_open()
 
-    monkeypatch.setattr(logger, "_write_event_sync", flaky_write)
+    monkeypatch.setattr(logger, "_open_handle", flaky_open)
 
     logger.record("one")
     logger.record("two")
@@ -61,9 +67,80 @@ async def test_audit_logger_counts_individual_write_failures(tmp_path: Path, mon
     status = logger.status()
 
     assert status["enqueued"] == 2
-    assert status["written"] == 1
-    assert status["failed"] == 1
+    assert status["written"] == 2
+    assert status["failed"] == 0
+    assert status["healthy"] is True
     await logger.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audit_logger_survives_and_reports_a_persistent_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A broken audit path must be visible, and must not take the daemon down."""
+    logger = AuditLogger(tmp_path / "audit.jsonl")
+    monkeypatch.setattr(logger, "_open_handle", _always_fail)
+
+    logger.record("one")
+    logger.record("two")
+    await logger.flush()
+    status = logger.status()
+
+    assert status["failed"] == 2
+    assert status["healthy"] is False
+    assert "simulated permanent disk error" in status["last_error"]
+    assert status["writer_running"] is True, "the writer must survive a failing audit path"
+    # Reported once on stderr rather than per event, so a broken path is noticed
+    # without flooding the daemon output.
+    assert capsys.readouterr().err.count("audit log write failed") == 1
+    await logger.aclose()
+
+
+def _always_fail():
+    raise OSError("simulated permanent disk error")
+
+
+@pytest.mark.asyncio
+async def test_audit_logger_writes_inline_instead_of_dropping_when_queue_is_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Queue overflow must degrade to a blocking write, never to a dropped record."""
+    logger = AuditLogger(tmp_path / "audit.jsonl")
+    logger.record("prime-the-writer")
+    assert logger._write_queue is not None
+    monkeypatch.setattr(logger._write_queue, "put_nowait", _raise_queue_full)
+
+    logger.record("overflowed")
+    await logger.flush()
+    status = logger.status()
+
+    assert status["inline"] == 1
+    assert status["failed"] == 0
+    events = [json.loads(line) for line in logger.path.read_text(encoding="utf-8").splitlines()]
+    assert "overflowed" in [event["event_type"] for event in events]
+    await logger.aclose()
+
+
+def _raise_queue_full(_event):
+    raise asyncio.QueueFull
+
+
+@pytest.mark.asyncio
+async def test_audit_logger_rotates_by_size_and_keeps_backups(tmp_path: Path) -> None:
+    """A long-running daemon cannot append to one file forever."""
+    logger = AuditLogger(tmp_path / "audit.jsonl", max_bytes=400, backup_count=2)
+
+    for index in range(40):
+        logger.record(f"event.{index}", data={"index": index})
+    await logger.flush()
+    await logger.aclose()
+
+    assert logger.path.is_file()
+    assert logger.path.with_name("audit.jsonl.1").is_file()
+    assert logger.path.with_name("audit.jsonl.2").is_file()
+    # backup_count=2 caps the retained history; no third backup accumulates.
+    assert not logger.path.with_name("audit.jsonl.3").exists()
+    assert logger.path.stat().st_size <= 400 * 2
 
 
 @pytest.mark.asyncio

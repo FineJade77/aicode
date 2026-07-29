@@ -272,6 +272,15 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 
 审计日志会记录 session、tool call、approval、edit、usage、final、error、execution 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；Host/Docker execution 都记录 command hash 而不是原始命令。
 
+审计日志是安全证据链，因此**队列满时不丢弃事件**，而是降级为同步写入——丢一条记录会让"没有危险命令的记录"和"没有发生危险命令"变得不可区分。写入失败会重试，持续失败时在 stderr 报告一次并通过 `aicode daemon status` 的 `audit_writer.healthy` 暴露。
+
+日志按大小轮转，不会无限增长：
+
+```bash
+export AICODE_AUDIT_MAX_BYTES="67108864"   # 默认 64MB，0 表示不轮转
+export AICODE_AUDIT_BACKUP_COUNT="5"       # 保留 audit.jsonl.1 ~ .5
+```
+
 ## Project Trust 与本地执行安全
 
 workspace 默认是 `untrusted`。untrusted workspace 里 Agent 的 **每一条 `bash` 命令都会被路由进 Docker 沙箱**（禁网、workspace 可写挂载、`.env*` 遮蔽、资源受限），而不是在宿主机执行；`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令还需要逐次批准。确认仓库可信后可执行：

@@ -418,6 +418,17 @@ compaction 在每次模型调用前按该路由的 capability 主动发生。摘
 
 敏感字段会尽量脱敏，例如 API key、token、authorization header 和常见 secret 环境变量；已知 Runtime secret 也会从 neutral fields、tool output 和 SSE 中替换。写入 patch 时，审计记录使用 `patch_hash` 等摘要信息辅助追踪，避免不必要地扩散完整敏感内容。
 
+### 15.1 审计不丢失、不无限增长
+
+审计日志是安全证据链，因此它和普通日志有两条不同的要求：
+
+- **不静默丢弃。** 写入队列满时不丢弃事件，而是降级为当前线程内同步写入。队列深度 5000，打满意味着 writer 已经跟不上，属于病态情况；此时一次阻塞的 append 好过证据链上出现一个没人知道的空洞——否则"没有危险命令的记录"和"没有发生危险命令"就变得不可区分。
+- **不无限增长。** 按大小轮转（默认 64MB × 5 个备份），可用 `AICODE_AUDIT_MAX_BYTES` / `AICODE_AUDIT_BACKUP_COUNT` 调整。
+
+写入失败会重试一次；持续失败时计数、记录 `last_error`、在 stderr 上报告一次（而不是每条事件都刷屏），并通过 `status()` 的 `healthy` 字段暴露给 `aicode daemon status`。写入路径**绝不向调用方抛异常**——异常逃逸会杀掉 writer task 或中断一次 agent turn。
+
+对比：session **event** 持久化仍是 best-effort，队列满时允许丢弃。两者的差别是有意的——event 只影响 resume 时的回放展示，真正的 agent 历史由 messages 表独立、可靠地持久化。
+
 Usage 记录按模型、session 和时间聚合 token 与成本估算。成本来自本地 `pricing` 配置，适合做近似统计，不等同于 provider 账单。
 
 ## 16. Multi-Workspace
