@@ -178,6 +178,17 @@
     },
     {
       "event_id": 21,
+      "type": "run.budget.exceeded",
+      "run_id": "run_fixture",
+      "reason": "cost",
+      "total_tokens": 1200,
+      "total_cost": 5.0,
+      "model_calls": 7,
+      "limit": 5.0,
+      "message": "The cost budget for this turn is exhausted; wrapping up without further tool calls."
+    },
+    {
+      "event_id": 22,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

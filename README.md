@@ -285,6 +285,19 @@ aicode trust remove
 
 Trust 不写入仓库，也不能通过 `.aicode/config.json`、rules 或 memory 自行提升。记录默认位于 `~/.aicode/trust.json`（设置 `AICODE_HOME` 时为 `$AICODE_HOME/trust.json`），绑定 canonical workspace 路径和可选的 credential-free Git remote；remote 变化后状态自动回到 `untrusted`。文件使用 `0600` 权限和原子替换。
 
+### 单轮预算闸门
+
+`max_steps` 单独不足以约束花费：一个陷入工具循环的模型能在 40 步内消耗大量 token，而且每一步都会重发整段历史。Runtime 因此对单轮累计用量设硬闸门：
+
+```bash
+export AICODE_BUDGET_MAX_TOTAL_TOKENS="1000000"   # 0 表示关闭
+export AICODE_BUDGET_MAX_TOTAL_COST="5.0"         # 0 表示关闭
+```
+
+触发后 Runtime 发出 `run.budget.exceeded`，然后走与步数上限相同的收尾路径——追加一条 note、以无工具的方式再请求一次模型——**因此用户拿到的始终是一份总结，而不是被截断的对话**。收尾这次调用不再计入闸门，不会递归。
+
+预算**只能在 Runtime 级配置，不能通过 `.aicode/config.json` 覆盖**：被检查的仓库能自行抬高的花费上限不是上限。这与 Project Trust 不允许 workspace 自我提权是同一条原则。
+
 ### Agent bash 的执行后端
 
 | `execution.agent_bash_backend` | trusted workspace | 其它 |

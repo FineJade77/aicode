@@ -4,7 +4,9 @@
   "x-aicode-contract-version": "2.0",
   "title": "aicode Runtime Event",
   "type": "object",
-  "required": ["type"],
+  "required": [
+    "type"
+  ],
   "properties": {
     "type": {
       "type": "string",
@@ -16,6 +18,7 @@
         "run.steer.queued",
         "run.steer.applied",
         "run.cancelled",
+        "run.budget.exceeded",
         "assistant.delta",
         "tool.started",
         "tool.output",

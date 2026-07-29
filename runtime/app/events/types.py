@@ -12,6 +12,7 @@ EVENT_TYPES = frozenset(
         "run.steer.queued",
         "run.steer.applied",
         "run.cancelled",
+        "run.budget.exceeded",
         "assistant.delta",
         "tool.started",
         "tool.output",

@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.history import ContextManager, load_history, persist_message, truncate_tool_output
-from app.agent.prompts import BUDGET_NOTE, VERIFY_NOTE, build_system_prompt
-from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
+from app.agent.prompts import VERIFY_NOTE, budget_note, build_system_prompt
+from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRuntime
 from app.core.hashing import stable_hash
 from app.core.session import AgentSession
@@ -84,7 +84,8 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
     )
     purpose = "reviewer" if request.mode == "review" else "main"
     model = str(getattr(request, "model", "") or "").strip() or None
-    budget = TurnBudget()
+    budget = turn_budget(runtime)
+    ledger = TurnLedger()
     applied_edits = 0
     verify_note_sent = False
     result: CompletionResult | None = None
@@ -93,6 +94,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         session.mark_agent_progress("model.stream")
         await session.events.put({"type": "assistant.delta", "text": text})
 
+    budget_reason: str | None = None
     for _step in range(budget.max_steps):
         if await apply_pending_steers(session, request, runtime, history):
             history = load_history(session)
@@ -107,6 +109,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
             on_text_delta=on_delta,
             max_tokens=budget.max_tokens_per_call,
         )
+        ledger.add(result)
         await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
         history.append(message)
@@ -115,6 +118,11 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         if await apply_pending_steers(session, request, runtime, history, result.tool_calls):
             history = load_history(session)
             continue
+
+        budget_reason = ledger.exceeded(budget)
+        if budget_reason is not None:
+            await emit_budget_exceeded(session, runtime, budget, ledger, budget_reason)
+            break
 
         if not result.tool_calls:
             if applied_edits > 0 and not verify_note_sent:
@@ -135,7 +143,15 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
             persist_message(session, reply)
 
     else:
-        note = user_note(BUDGET_NOTE)
+        budget_reason = "steps"
+        await emit_budget_exceeded(session, runtime, budget, ledger, budget_reason)
+
+    if budget_reason is not None:
+        # One shared wind-down for every exhausted budget dimension, so the user
+        # always receives a summary rather than a truncated transcript. This call
+        # is outside the loop and its usage is never re-gated, which is what stops
+        # the wind-down from recursing into another budget stop.
+        note = user_note(budget_note(budget_reason))
         history.append(note)
         persist_message(session, note)
         session.mark_agent_progress("model.request")
@@ -149,6 +165,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
             on_text_delta=on_delta,
             max_tokens=budget.max_tokens_per_call,
         )
+        ledger.add(result)
         await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
         history.append(message)
@@ -608,6 +625,52 @@ async def request_approval(
         session,
         kind=kind,
         payload=payload,
+    )
+
+
+def turn_budget(runtime: AgentRuntime) -> TurnBudget:
+    """Resolve the per-turn budget from Runtime settings.
+
+    Deliberately *not* overridable from `.aicode/config.json`: a spend limit that
+    the inspected repository can raise is not a limit. This mirrors how Project
+    Trust refuses to let a workspace grant itself trust.
+    """
+    settings = getattr(getattr(runtime.model_runtime, "settings", None), "budget", None)
+    if settings is None:
+        return TurnBudget()
+    return TurnBudget(
+        max_total_tokens=settings.max_total_tokens,
+        max_total_cost=settings.max_total_cost,
+    )
+
+
+async def emit_budget_exceeded(
+    session: AgentSession,
+    runtime: AgentRuntime,
+    budget: TurnBudget,
+    ledger: TurnLedger,
+    reason: str,
+) -> None:
+    payload = {
+        "reason": reason,
+        "total_tokens": ledger.total_tokens,
+        "total_cost": round(ledger.total_cost, 8),
+        "model_calls": ledger.model_calls,
+        "limit": budget.max_steps if reason == "steps" else ledger.limit_for(budget, reason),
+    }
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "run.budget.exceeded",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"run_id": session.current_run_id, **payload},
+        )
+    await session.events.put(
+        {
+            "type": "run.budget.exceeded",
+            "message": f"The {reason} budget for this turn is exhausted; wrapping up without further tool calls.",
+            **payload,
+        }
     )
 
 

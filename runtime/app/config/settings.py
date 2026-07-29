@@ -51,6 +51,17 @@ class PricingSettings(BaseModel):
     model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
 
 
+class BudgetSettings(BaseModel):
+    """Cumulative per-turn spend caps.
+
+    Runtime-level only, never project-overridable: a limit the inspected
+    repository can raise is not a limit. Set either value to 0 to disable it.
+    """
+
+    max_total_tokens: int = Field(default=1_000_000, ge=0)
+    max_total_cost: float = Field(default=5.0, ge=0)
+
+
 class ExecutionSettings(BaseModel):
     """Where Agent-issued shell commands run.
 
@@ -83,6 +94,7 @@ class Settings(BaseModel):
     pricing: PricingSettings = PricingSettings()
     context: ContextSettings = ContextSettings()
     execution: ExecutionSettings = ExecutionSettings()
+    budget: BudgetSettings = BudgetSettings()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -130,7 +142,19 @@ class Settings(BaseModel):
             execution=ExecutionSettings(
                 agent_bash_backend=_agent_bash_backend_env(),
             ),
+            budget=BudgetSettings(
+                max_total_tokens=_non_negative_int_env("AICODE_BUDGET_MAX_TOTAL_TOKENS", 1_000_000),
+                max_total_cost=_non_negative_float_env("AICODE_BUDGET_MAX_TOTAL_COST", 5.0),
+            ),
         )
+
+
+def _non_negative_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
 
 
 def _agent_bash_backend_env() -> str:

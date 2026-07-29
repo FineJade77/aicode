@@ -4,6 +4,15 @@ from typing import Any
 
 VERIFY_NOTE = "Edits applied. Run relevant tests to verify; keep fixing on failure, stop and report after 3 consecutive failed attempts."
 BUDGET_NOTE = "Step limit reached. Stop calling tools now and summarize what is done and what remains."
+BUDGET_NOTES = {
+    "steps": BUDGET_NOTE,
+    "tokens": "Token budget for this turn is exhausted. Stop calling tools now and summarize what is done and what remains.",
+    "cost": "Cost budget for this turn is exhausted. Stop calling tools now and summarize what is done and what remains.",
+}
+
+
+def budget_note(reason: str) -> str:
+    return BUDGET_NOTES.get(reason, BUDGET_NOTE)
 
 MODE_INSTRUCTIONS = {
     "review": "Review mode: you only have read-only tools. Do not write files or take actions beyond review suggestions. Review the current git diff (use review_diff for deterministic findings) and return structured findings.",

@@ -19,7 +19,7 @@
     "eval_schema_sha256": "20560af47fca86755225ef8f2734009f0189d72ac3b9728f4a3e563edba12224",
     "fixture_set_sha256": "792b289271b143f886b2e4a13ff0ac0d57511c07fdf0e9e94519ce01f03b8383",
     "policy_sha256": "9296377ec0e7dd2f52c5f52e3fd204139fb3f0b13fac12fe5c53d72b8f6e5981",
-    "prompt_sha256": "ccc4d6d4e2cb76de612b1de0fe00ab8a49af4875c5848ce1707821aa37d7aff0",
+    "prompt_sha256": "a5f5ba32f99c11f38c8dd4d797c03d63e4d7351c64656a93cea0db53f3843932",
     "task_set_sha256": "afb6f13bb10e9dd3986b81c3f637b8a26a0cf54c28cacfa9e8c6b4ef8d7a31a5",
     "tool_schema_sha256": "8e4b9c65e4732ead2f1c87759e5dc34008bfafd6fdc7174ede3e8af284060e07"
   },

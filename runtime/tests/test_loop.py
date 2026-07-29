@@ -21,6 +21,7 @@ from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from app.project.trust import TrustStore
 from app.sessions.store import SessionStore
+from app.usage.pricing import ModelPrice
 from tests.fakes import FakeProvider, text_turn, tool_turn
 
 
@@ -472,3 +473,102 @@ async def test_max_steps_forces_summary(tmp_path):
     assert fake.calls[-1].tools == []  # The final call has no tools.
     finals = events_of(session, "final")
     assert finals and "Forced summary" in finals[0]["summary"]
+
+
+def budget_runtime(turns, tmp_path, *, max_total_tokens=0, max_total_cost=0.0):
+    fake = FakeProvider(turns)
+    settings = Settings()
+    settings.budget.max_total_tokens = max_total_tokens
+    settings.budget.max_total_cost = max_total_cost
+    router = ModelRouter(primary=fake, settings=settings)
+    return (
+        AgentRuntime(
+            model_router=router,
+            audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+            policy=PolicyEngine(),
+            tools=DefaultToolRuntime(),
+            workspace=LocalWorkspaceRuntime(),
+            clock=SystemClock(),
+            approvals=SessionApprovalBroker(),
+        ),
+        fake,
+    )
+
+
+@pytest.mark.asyncio
+async def test_token_budget_stops_a_runaway_turn(tmp_path):
+    """A model looping over tool calls must be stopped by the cumulative cap.
+
+    The script would keep calling list_files forever; the token budget has to cut
+    it off and still hand the user a summary.
+    """
+    # Each scripted turn reports 15 tokens, so a 40-token cap trips after the
+    # third call. Turn 4 is the wind-down; the 20 tool turns after it exist to
+    # prove the loop really stopped instead of running to max_steps.
+    turns = [tool_turn("list_files", {"path": "."}, call_id=f"tc_{i}") for i in range(3)]
+    turns.append(text_turn("Stopped early and summarized."))
+    turns.extend(tool_turn("list_files", {"path": "."}, call_id=f"extra_{i}") for i in range(20))
+    runtime, fake = budget_runtime(turns, tmp_path, max_total_tokens=40)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    exceeded = events_of(session, "run.budget.exceeded")
+    assert len(exceeded) == 1
+    assert exceeded[0]["reason"] == "tokens"
+    assert exceeded[0]["total_tokens"] >= 40
+    # The wind-down call must have happened, and it must be tool-free.
+    assert fake.calls[-1].tools == []
+    finals = events_of(session, "final")
+    assert finals and finals[-1]["summary"] == "Stopped early and summarized."
+    assert len(fake.calls) == 4
+    assert len(fake.turns) == 20, "the loop must stop instead of consuming the remaining turns"
+
+
+@pytest.mark.asyncio
+async def test_cost_budget_stops_a_runaway_turn(tmp_path):
+    turns = [tool_turn("list_files", {"path": "."}), text_turn("Wrapped up after the cost cap.")]
+    turns.extend(tool_turn("list_files", {"path": "."}, call_id=f"extra_{i}") for i in range(10))
+    runtime, fake = budget_runtime(turns, tmp_path, max_total_cost=0.0001)
+    session = make_session(tmp_path)
+    # Give the fake model a non-zero price so estimated_cost accumulates.
+    runtime.model_runtime.settings.pricing.model_prices["fake/fake-model"] = ModelPrice(
+        input_per_1m=1000.0, output_per_1m=1000.0
+    )
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    exceeded = events_of(session, "run.budget.exceeded")
+    assert len(exceeded) == 1
+    assert exceeded[0]["reason"] == "cost"
+    assert fake.calls[-1].tools == []
+
+
+@pytest.mark.asyncio
+async def test_budget_wind_down_does_not_recurse(tmp_path):
+    """The wind-down call itself consumes tokens; it must not trip the gate again
+    and start a second wind-down."""
+    turns = [tool_turn("list_files", {"path": "."}), text_turn("Summary after budget stop.")]
+    runtime, fake = budget_runtime(turns, tmp_path, max_total_tokens=1)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert len(events_of(session, "run.budget.exceeded")) == 1
+    assert len(events_of(session, "final")) == 1
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_disabled_budget_leaves_behaviour_unchanged(tmp_path):
+    """0 disables a cap; the turn must complete normally with no budget event."""
+    turns = [text_turn("Done without any budget stop.")]
+    runtime, fake = budget_runtime(turns, tmp_path, max_total_tokens=0, max_total_cost=0.0)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert events_of(session, "run.budget.exceeded") == []
+    assert len(fake.calls) == 1
+    finals = events_of(session, "final")
+    assert finals[-1]["summary"] == "Done without any budget stop."

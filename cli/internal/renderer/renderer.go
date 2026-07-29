@@ -442,6 +442,8 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		if line := contextBudgetLine(event); line != "" {
 			fmt.Fprint(out, line)
 		}
+	case "run.budget.exceeded":
+		fmt.Fprint(out, budgetExceededLine(event))
 	case "tool.denied":
 		fmt.Fprintf(out, "Tool denied by policy: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":
@@ -535,6 +537,23 @@ func contextOutputLine(event map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// budgetExceededLine reports a stopped run prominently: the user is about to get
+// a shorter answer than they asked for, and needs to know it was a spend cap
+// rather than the model deciding the task was finished.
+func budgetExceededLine(event map[string]any) string {
+	reason := stringValue(event["reason"])
+	if reason == "" {
+		reason = "budget"
+	}
+	return fmt.Sprintf(
+		"\nTurn stopped: %s budget exhausted (tokens=%v, cost=%v, limit=%v). Wrapping up without further tool calls.\n",
+		reason,
+		event["total_tokens"],
+		event["total_cost"],
+		event["limit"],
+	)
 }
 
 func contextBudgetLine(event map[string]any) string {

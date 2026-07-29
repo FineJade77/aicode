@@ -213,6 +213,14 @@ emit run.completed or run.failed
 
 当前不会在 provider 未配置时降级到 stub 模型；`auth_mode=required` 且缺少 API key 时会直接报错。
 
+### 5.1 单轮预算
+
+`TurnBudget` 有三个维度：`max_steps`（40）、`max_total_tokens`、`max_total_cost`。后两个由 `TurnLedger` 在每次 model call 后累加，**参与控制流而不只是上报**——`max_steps` 单独无法约束花费，一个循环调用工具的模型能在 40 步内消耗大量 token，且每步都重发整段历史。
+
+三个维度共用同一条收尾路径：发出 `run.budget.exceeded`，追加一条说明 note，以 `tools=[]` 再请求一次模型，然后结束。这样无论哪个预算耗尽，用户拿到的都是一份总结而不是截断的对话。收尾调用位于循环之外且其用量不再过闸，这是防止收尾递归的结构性保证，而不是靠标志位。
+
+预算只从 Runtime settings 读取，**不接受 `.aicode/config.json` 覆盖**：被检查的仓库能自行抬高的花费上限不是上限。这与 Project Trust 不允许 workspace 自我提权同源。
+
 ## 6. Modes
 
 | Mode | 入口 | 工具能力 | 说明 |
