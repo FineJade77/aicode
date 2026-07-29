@@ -406,6 +406,18 @@ Runtime 持久化以下内容：
 
 compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
+### 14.1 SQLite 写入路径
+
+单个 WAL 连接在整个 Runtime 内复用，参数：`journal_mode=WAL`、`synchronous=NORMAL`、`busy_timeout=5000`。
+
+此前每次调用都新开一个 rollback-journal 连接且 `synchronous=FULL`，一条消息写入约 5.2ms，全部发生在事件循环上——而同一个循环正在向 SSE 订阅者推送 `assistant.delta`。改为复用 WAL 连接后降到约 1.1ms（约 4.9x），连接建立开销和每事务 fsync 都被消除。
+
+- WAL 让读不被写阻塞，这对 `list()` 和 resume 在 run 仍在追加消息时读取很重要。
+- `synchronous=NORMAL` 是 WAL 下的标准耐久性取舍：崩溃可能丢失最近若干次提交，但数据库不会损坏。session 是可恢复的本地状态，不是记账系统。
+- 连接同时被事件循环和事件 write-behind 工作线程使用，因此 `check_same_thread=False` 搭配一把覆盖整个事务（而非单条语句）的锁。
+
+剩余的约 1.1ms 未再移到线程池：把 `append_message` 改成异步需要让 `persist_message` 及 `AgentSession` 协议一并异步化，而 1ms 级别的单次阻塞对 SSE 流式输出已不构成可感知影响，收益不足以支撑这个扩散。
+
 ## 15. Audit And Usage
 
 审计日志记录本地敏感操作的结构化事件：

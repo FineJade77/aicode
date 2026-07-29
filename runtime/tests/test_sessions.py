@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -519,3 +520,76 @@ def test_normalize_cache_limit_uses_minimum_one(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setenv("AICODE_SESSION_CACHE_LIMIT", "bad")
     assert normalize_cache_limit() == 200
+
+
+def test_session_store_uses_wal_and_a_bounded_lock_wait(tmp_path: Path) -> None:
+    """WAL lets list()/resume read while a run is still appending messages, and
+    busy_timeout makes a contended write wait instead of failing immediately."""
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    store.create(workspace=str(tmp_path))
+
+    with store._connect() as conn:
+        assert conn.execute("pragma journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("pragma synchronous").fetchone()[0] == 1  # NORMAL
+        assert conn.execute("pragma busy_timeout").fetchone()[0] == 5000
+
+
+def test_session_store_reuses_one_connection(tmp_path: Path) -> None:
+    """Opening a connection per call cost roughly 5x the write itself."""
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    session = store.create(workspace=str(tmp_path))
+
+    with store._connect() as first:
+        pass
+    store.append_message(session, {"role": "user", "content": "hi"})
+    with store._connect() as second:
+        pass
+
+    assert first is second
+
+
+def test_concurrent_writes_and_reads_do_not_lock(tmp_path: Path) -> None:
+    """The shared connection is used from both the event loop and the
+    write-behind worker thread, so contention must be serialized rather than
+    surfacing as `database is locked`."""
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    sessions = [store.create(workspace=str(tmp_path)) for _ in range(4)]
+    errors: list[Exception] = []
+
+    def writer(session) -> None:
+        try:
+            for index in range(25):
+                store.append_message(session, {"role": "user", "content": f"m{index}"})
+        except Exception as exc:  # noqa: BLE001 - recorded and asserted below
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for _ in range(25):
+                store.list()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(session,)) for session in sessions]
+    threads += [threading.Thread(target=reader) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    for session in sessions:
+        assert len(store.get(session.session_id).messages) == 25
+
+
+@pytest.mark.asyncio
+async def test_session_store_aclose_releases_the_connection(tmp_path: Path) -> None:
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    store.create(workspace=str(tmp_path))
+    with store._connect():
+        pass
+    assert store._conn is not None
+
+    await store.aclose()
+
+    assert store._conn is None

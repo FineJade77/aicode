@@ -4,8 +4,9 @@ import asyncio
 import json
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Callable
-from contextlib import suppress
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,6 +332,8 @@ class SessionStore:
         self._sessions: dict[str, Session] = {}
         self._last_session_id: str | None = None
         self._schema_ready = False
+        self._db_lock = threading.RLock()
+        self._conn: sqlite3.Connection | None = None
         self._write_queue: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
         self._writer_task: asyncio.Task[None] | None = None
         self._event_writes_enqueued = 0
@@ -582,10 +585,49 @@ class SessionStore:
             self._remove_language_column(conn)
         self._schema_ready = True
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Yield the shared connection inside a transaction.
+
+        Previously every call opened a fresh connection in rollback-journal mode
+        with `synchronous=FULL`, which cost ~5ms per message write — all of it on
+        the event loop, competing with the SSE stream that is pushing
+        `assistant.delta` to the user at the same time. Reusing one WAL
+        connection removes both the setup cost and the per-transaction fsync.
+
+        The connection is shared across the event loop and the write-behind
+        worker thread, so `check_same_thread=False` is paired with a lock held
+        for the whole transaction rather than just the statement.
+        """
+        with self._db_lock:
+            conn = self._ensure_connection()
+            with conn:
+                yield conn
+
+    def _ensure_connection(self) -> sqlite3.Connection:
+        if self._conn is not None:
+            return self._conn
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # WAL lets readers proceed during a write, which matters because list()
+        # and resume read while a run is still appending messages.
+        conn.execute("pragma journal_mode=WAL")
+        # NORMAL is the standard durability trade under WAL: a crash can lose the
+        # most recent commits, but the database is never corrupted. Sessions are
+        # recoverable local state, not a system of record.
+        conn.execute("pragma synchronous=NORMAL")
+        # Wait rather than fail immediately when another connection holds a lock.
+        conn.execute("pragma busy_timeout=5000")
+        self._conn = conn
         return conn
+
+    def _close_connection(self) -> None:
+        with self._db_lock:
+            if self._conn is not None:
+                with suppress(Exception):
+                    self._conn.close()
+            self._conn = None
 
     def _insert_session(self, session: Session) -> None:
         with self._connect() as conn:
@@ -691,6 +733,7 @@ class SessionStore:
                 await task
         self._writer_task = None
         self._write_queue = None
+        self._close_connection()
 
     def _prune_events(self, conn: sqlite3.Connection, session_id: str) -> None:
         conn.execute(
