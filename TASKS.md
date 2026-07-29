@@ -5,7 +5,7 @@
 来源：
 
 - [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md)（T-001 ~ T-012）
-- [docs/review/2026-07-29-architecture-review.md](docs/review/2026-07-29-architecture-review.md) 与 [docs/plans/2026-07-29-production-agent-hardening.md](docs/plans/2026-07-29-production-agent-hardening.md)（T-013 ~ T-027）
+- [docs/review/2026-07-29-architecture-review.md](docs/review/2026-07-29-architecture-review.md) 与 [docs/plans/2026-07-29-production-agent-hardening.md](docs/plans/2026-07-29-production-agent-hardening.md)（T-013 ~ T-032）
 
 状态：
 
@@ -320,11 +320,15 @@
 
 优先级说明（2026-07-29）：T-013 ~ T-016 的成本闸门、执行边界与真实评测数字优先于本任务。IDE / 脚本嵌入需求出现前不启动。
 
-## M4：成本与执行边界
+## M4：生产就绪第一梯队（正确性与边界）
 
-来源：2026-07-29 架构评审 A1 / A3 / B3 / D1。四项彼此独立可并行；T-016 建议最后做，以便真实评测跑在已装闸门与沙箱的 Runtime 上。实现细节见 [实现计划](docs/plans/2026-07-29-production-agent-hardening.md)。
+来源：2026-07-29 架构评审 A1 / A3 / A5，以及实施期补充发现的 N1 / N4。
 
-### `[ ]` T-013 累计 token / 成本硬闸门
+**优先级调整（2026-07-29）**：目标由"简历项目完备度"改为"生产可用"后，真实模型评测（T-016）与 prompt caching（T-014）从第一梯队降级到 M7；SQLite 写入路径（T-020）与新发现的审计可靠性（T-028）、认证 fail-closed（T-029）升入第一梯队。判据换成：**别人装上能天天用，几周不出事，出事能查，升级不炸。**
+
+本梯队五项已全部完成。实现细节见 [实现计划](docs/plans/2026-07-29-production-agent-hardening.md)。
+
+### `[x]` T-013 累计 token / 成本硬闸门
 
 对应：评审 A3
 
@@ -335,34 +339,19 @@
 - `TurnBudget` 增加 `max_total_tokens` / `max_total_cost`；新增 `TurnLedger` 承载单轮累计用量。
 - `record_usage` 由纯上报改为写入 ledger 并参与控制流。
 - 超限走与 `max_steps` 相同的收尾路径（追加预算 note、以 `tools=[]` 收口），保证用户始终拿到总结而非截断。
-- 收尾调用自身设 `finalizing` 标志，不再二次触发闸门。
-- 新增 `run.budget.exceeded` event（按执行规则 5 三处登记）；新增 `settings.budget` 配置段并写入 `schemas/config.schema.json`。
+- 新增 `run.budget.exceeded` event（按执行规则 5 三处登记）；新增 `settings.budget` 配置段。
 
-验收：
+完成记录（2026-07-29，`711ef06`）：
 
-- token 超限、cost 超限、闸门关闭（值为 0）三条路径均有测试；收尾调用不递归触发。
-- event schema 双向 drift 测试通过；Go renderer 覆盖新事件。
-- `BUDGET_NOTE` 文案改动会改变 `prompt_sha256`，按执行规则 6 重新生成 baseline。
+- `TurnLedger` 累加每次 model call 的 token 与估算成本；`TurnBudget` 增加 `max_total_tokens`（默认 1000000）与 `max_total_cost`（默认 5.0），0 表示关闭。
+- steps / tokens / cost 三个维度共用同一条收尾路径，用户拿到的始终是总结而非截断的对话。
+- **收尾调用位于循环之外且其用量不再过闸**——这是防止收尾递归的结构性保证，而不是原计划里写的 `finalizing` 标志位；由 `test_budget_wind_down_does_not_recurse` 锁定。
+- **偏离原计划**：预算改为 Runtime-level only，**不接受 `.aicode/config.json` 覆盖**。被检查的仓库能自行抬高的花费上限不是上限；这与 Project Trust 不允许 workspace 自我提权同源。原计划写了项目级覆盖，当时没有接上"仓库内容不可信"这条既有安全假设，故未采纳。
+- `run.budget.exceeded` 已在 `EVENT_TYPES`、events schema enum、SSE fixture 三处登记，并补 Go renderer 分支。
+- baseline 重新生成，仅 `prompt_sha256` 变化（新增预算 note 文案），`failed_runs` 0、safety 指标未劣化。
+- 验证：Python 314 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、`git diff --check` 通过。
 
-### `[ ]` T-014 Anthropic prompt caching
-
-对应：评审 B3
-
-依赖：无
-
-范围：
-
-- `system` 由裸字符串改为 block 数组并打 `cache_control` 断点；`tools` 末元素打断点覆盖整个工具块。
-- 由 `settings.anthropic.prompt_caching` 开关控制，关闭时 payload 形状与当前完全一致，保证可回退与 A/B。
-- `TOOL_SCHEMAS` 是模块级共享常量，打断点前必须深拷贝，避免污染 OpenAI-compatible 路径。
-- `Usage` 增加 `cache_creation_input_tokens` / `cache_read_input_tokens`；`estimate_cost` 分档计价，缺省退化为普通 input 计价。
-
-验收：
-
-- payload 形状、深拷贝回归、开关关闭时行为一致、cache token 解析与分档计价均有测试。
-- **交付物包含量化数据**：同一真实 session 连续 5 轮，开启与关闭 caching 的 `input_tokens` 与 `estimated_cost` 对比，写入 README 或评审文档。无此数据不算完成。
-
-### `[ ]` T-015 Agent `bash` 按 trust 级别进入 Docker 沙箱
+### `[x]` T-015 Agent `bash` 按 trust 级别进入 Docker 沙箱
 
 对应：评审 A1（最大安全缺口）
 
@@ -382,34 +371,128 @@
 
 - trusted + `auto` → host；untrusted + `auto` → docker 且 `network="none"`、`writable_paths` 含 workspace、`masked_paths` 含 `.env*`。
 - **Docker 不可用时必须返回明确错误并指引 `aicode trust` 或启动 Docker，不得静默回退 host**——静默回退会把安全边界变成安慰剂。此为本任务核心断言。
-- 新增评测任务 `untrusted_bash_sandboxed`：untrusted workspace 下尝试越权读写，断言审计中 `backend == "docker"`、`network == "none"`，且 workspace 外文件未被修改。
+- 新增评测任务 `untrusted_bash_sandboxed`。
 - 同步 `ARCHITECTURE.md` 安全模型与 Docker Sandbox 两节；按执行规则 6 重新生成 baseline 并确认 `safety_rate` 未下降。
 
-### `[ ]` T-016 真实模型评测套件
+完成记录（2026-07-29，`59f5b4d`）：
 
-对应：评审 D1（单项收益最高）
+- 新增 `execution.agent_bash_backend`（`auto` / `host` / `docker`），Runtime 级 `AICODE_AGENT_BASH_BACKEND` 与项目级 `execution.agentBashBackend` 双入口；项目侧取值非法时回落到"继承 Runtime 设置"而非宽松默认——配置里的拼写错误不能悄悄削弱沙箱。
+- Docker 分支 workspace 可写挂载并以宿主 uid/gid 运行，避免在用户仓库留下 root 拥有的文件；`network=none`、`.env*` 遮蔽、资源限制保持不变。`DockerExecutionBackend` 只接受 workspace 本身作为可写路径，其它路径直接拒绝。
+- **Docker 不可用时直接失败并给出处置方式，不回退宿主机**；由 `test_bash_fails_loudly_when_sandbox_is_unavailable` 与评测任务双重锁定。
+- 评测任务 `untrusted_bash_sandboxed` 断言的不变量改为"untrusted workspace 永不产生 host backend 的 execution"——该不变量在有无 Docker 的机器上都成立（有 Docker 走沙箱，无 Docker 被拒绝），CI 因此稳定。为此给 grader 增加 `forbidden_execution_backends` 检查。
+- **额外修复（计划外）**：沙箱此前会隐式拉取镜像，首次使用时一次工具调用变成数分钟无反馈下载（实测 30s 仍未完成即被评测超时打断）。改为 `--pull=never` + 可操作的 `docker pull` 提示，实测 30391ms → 362ms；`aicode doctor` 增加沙箱镜像检查，把这件事提前到安装期发现。
+- baseline 重新生成，4 处 digest 变化均可归因（prompt / task_set / fixture_set / eval_harness）；`policy_sha256` 与 `tool_schema_sha256` 未变，safety 指标满分。
+- 验证：Python 310 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、`git diff --check` 通过。
 
-依赖：T-008（eval 基线）；建议在 T-013 ~ T-015 之后执行
+### `[x]` T-020 SQLite 复用 WAL 连接
 
-背景：现有 `evals/` 仅有 `ScriptedEvalProvider`，证明的是 Agent Loop 实现正确，不是 Agent 能完成真实任务。
+对应：评审 A5（原属 M5，因属第一梯队正确性问题上移）
+
+依赖：无
+
+完成记录（2026-07-29，`a47aae4`）：
+
+- 此前每次数据库调用都新开一个 rollback-journal 连接且 `synchronous=FULL`，**实测一条消息写入 5.175ms**，全部发生在事件循环上——而同一循环正在向 SSE 推送 `assistant.delta`；一次 20 条消息的 turn 意味着约 100ms 循环阻塞。
+- 改为复用单个连接，`journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=5000`，**实测降到 1.060ms（约 4.9x）**。`_connect()` 改为 contextmanager 以保持所有调用点写法不变；连接同时被事件循环与 write-behind 工作线程使用，因此 `check_same_thread=False` 搭配一把覆盖整个事务的锁。
+- **偏离原计划**：未把 `append_message` 改成 `asyncio.to_thread`。测量后剩余成本约 1.1ms，而改成异步需要让 `persist_message` 与 `AgentSession` 协议一并异步化；1ms 级单次阻塞对 SSE 流式输出已不构成可感知影响，收益不足以支撑这个扩散。理由写入 `ARCHITECTURE.md` 14.1，便于后续复核该判断。
+- 新增 WAL pragma、连接复用、并发写读不出现 `database is locked`、`aclose` 释放连接四项测试。
+- 验证：Python 325 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、clean-home install E2E 通过。
+
+### `[x]` T-028 审计日志不静默丢失并按大小轮转
+
+对应：实施期新发现 N1（评审后补充）
+
+依赖：无
+
+背景：审计日志是安全证据链。此前队列满时静默丢弃事件、写入异常被吞掉，两者只反映在计数器里且无任何告警。丢一条记录会让"没有危险命令的记录"和"没有发生危险命令"变得不可区分。此外 `audit.jsonl` 只追加不轮转，长期运行的 daemon 会无限增长。
+
+完成记录（2026-07-29，`1c9c5b8`）：
+
+- 队列满时降级为同步写入而非丢弃。队列深度 5000，打满意味着 writer 已跟不上，属病态情况；一次阻塞的 append 好过证据链上出现无人知晓的空洞。
+- 写入失败重试一次；持续失败时计数、记录 `last_error`、在 stderr 报告一次（不是每条事件刷屏），并通过 `status().healthy` 暴露给 `aicode daemon status`。写入路径**绝不向调用方抛异常**——异常逃逸会杀掉 writer task 或中断一次 agent turn。
+- 按大小轮转（默认 64MB × 5 备份，`AICODE_AUDIT_MAX_BYTES` / `AICODE_AUDIT_BACKUP_COUNT` 可调），并复用文件句柄，不再每条事件开关文件。
+- session **event** 持久化仍保持 best-effort 可丢弃，这个差别是有意的：event 只影响 resume 时的回放展示，真正的 agent 历史由 messages 表独立可靠持久化。已在 `ARCHITECTURE.md` 15.1 写明取舍差异。
+- 原 `test_audit_logger_counts_individual_write_failures` 断言的是旧的"首次失败即丢弃"契约，已重写为覆盖新契约的两条路径（瞬时失败经重试恢复、持续失败被计数并上报且 writer 存活），另补队列溢出降级与轮转测试。
+- 验证：Python 317 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS。
+
+### `[x]` T-029 Runtime 认证改为 fail-closed
+
+对应：实施期新发现 N4（评审后补充）
+
+依赖：无
+
+背景：`is_authorized` 在未配置 `AICODE_RUNTIME_TOKEN` 时直接返回 `True`。未配置不等于关闭认证——它意味着本机任何进程都能调用 approval endpoint，替用户批准一次编辑或一条高风险命令。正常路径（`aicode daemon start`）总会生成 token，因此这条路径只在手动跑 uvicorn 时暴露，但暴露面是完整 API。
+
+完成记录（2026-07-29，`07fb613`）：
+
+- 未配置 token 时拒绝请求（`/v1/daemon/status` 仍开放），401 的 `detail` 说明如何处理。无认证访问仍可能，但必须通过 `AICODE_ALLOW_ANONYMOUS=1` 显式选择。
+- 该开关只在未配置 token 时生效，**不能用来绕过已配置的 token**，由 `test_configured_token_takes_precedence_over_anonymous_opt_in` 锁定。
+- token 从 import 时捕获改为每请求读取。import 时捕获让模块顺序敏感、无法在不重新 import 的情况下重配，与 T-021 把 composition root 移进 ASGI lifespan 的方向冲突。
+- 测试从 monkeypatch 模块常量改为设置环境变量，走真实配置路径。
+- 验证：Python 321 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS，以及 **clean-home install/doctor/start/status/stop E2E**——这条最关键，它是唯一走真实 daemon token 生成与握手的验证。
+
+## M5：生产就绪第二梯队（稳定与可运维）
+
+来源：2026-07-29 架构评审 C6 / C7 / D4，以及实施期补充发现的 N3 / N5 / N6。第一梯队保证"不出事"，本梯队保证"用久了不退化、出事能查、升级不炸"。
+
+### `[ ]` T-030 会话列表分页与数据保留策略
+
+对应：实施期新发现 N3
+
+背景：`SessionStore.list()` 每次都加载**所有** session 的**所有** messages 与 compactions（`store.py` 的 `list()`），同步执行且无分页。用几周后 `aicode sessions` 会单调变慢。数据库本身也没有任何清理策略，只增不减。
 
 范围：
 
-- **保留 scripted smoke suite 并继续留在 CI**，其零成本、零抖动的回归价值不可替代；live 套件是并行新增的第二条链路，因成本与不确定性不进 PR CI。
-- 新增 `LiveEvalProvider`：包装 `ModelRouter`，对外暴露与 `ScriptedEvalProvider` 相同的 `calls` / `total_tokens` / `total_cost` 接口，使 `run_metrics` 无需分支。
-- `EvalTask` 增加 `provider_mode: scripted | live` 与可选 `live_model`；live 模式跳过脚本相关断言。
-- 任务集 20–30 个，四类分布：单文件缺陷修复 8、跨文件改动 6、边界/新增测试 6、失败后二次修复 4，另复用现有 4 个安全场景。
-- 判定沿用确定性 grader（测试转绿 / 未授权修改 / 危险命令执行），**不引入 LLM-as-judge**。
-- `make eval-live`（默认 `--repetitions 3`），可选接 nightly workflow。
+- `list()` 只查 session 元信息，不加载 messages / compactions；需要详情的调用点显式取。
+- 分页参数（limit / before），CLI 与 HTTP contract 同步。
+- 保留策略：按数量或时间清理旧 session 及其 messages / events / compactions，并提供显式的 `aicode sessions prune`。
+- SQLite `VACUUM` 或 `incremental_vacuum` 的触发时机。
 
-验收（本任务交付物是数字，不是代码）：
+验收：一万条消息规模下 `list()` 耗时与会话数解耦；保留策略有测试覆盖且不会删除仍被引用的 compaction 区间。
 
-- 在 `docs/review/` 产出评测报告：分类别的 pass@1 / pass@3、平均与总成本、平均与 p95 耗时、失败归因分类（定位失败 / 编辑失败 / 验证失败 / 预算耗尽）。
-- 该数字写入 README 顶部。
+### `[ ]` T-031 SQLite schema 迁移 ladder
 
-## M5：可扩展性与工程基线
+对应：实施期新发现 N5
 
-来源：2026-07-29 架构评审 A2 / A4 / A5 / B1 / B2 / C1–C5。
+背景：没有 `PRAGMA user_version`。已经积累了两个 bespoke 修补方法（`_ensure_updated_at_column`、`_remove_language_column`），每次启动都全量跑一遍检查。第三次改 schema 会继续加第三个，且无版本检测、无降级保护。
+
+范围：
+
+- 引入 `user_version` 版本号与有序迁移列表，启动时只跑缺失的迁移。
+- 把现有两个 bespoke 修补收编为 migration 1 / 2。
+- 遇到高于当前代码支持的版本时明确报错，而不是带着未知 schema 继续运行。
+
+验收：旧库升级、全新库初始化、未来版本库拒绝启动三条路径均有测试。
+
+### `[ ]` T-032 approval 超时语义
+
+对应：实施期新发现 N6
+
+背景：`wait_for_approval` 超时 300 秒后返回 `False`，模型收到 `[user rejected this edit]`——与用户真的拒绝不可区分。用户离开五分钟回来，编辑已被"拒绝"，模型可能已改用别的方案。
+
+范围：区分 `rejected` / `timed_out` 两种结果，模型侧文案与事件分别处理；超时时长可配置。
+
+验收：超时与拒绝产生不同的事件与不同的 tool 结果文案，有测试覆盖。
+
+### `[ ]` T-025 OpenTelemetry 导出
+
+对应：评审 D4 | 依赖：T-021（从增效梯队上移：生产可观测性是"出事能查"的硬指标，不是简历装饰）
+
+范围：`TraceSink` 增加 OTLP 实现并与现有 JSONL 并存；span 层级 `run → model.call / tool.call → execution`；沿用 `audit/redaction.py` 脱敏；文档给出接 Jaeger 或 Langfuse 的本地验证步骤。
+
+### `[ ]` T-027 SSE 健壮性与项目包装
+
+对应：评审 C6 / C7 / D6（SSE 挂起属已知可复现缺陷，因此归入稳定性梯队）
+
+范围：
+
+- SSE 按 `run_id` 过滤后若目标 run 已结束需立即返回而非挂起至超时。
+- provider 重试增加抖动并读 `Retry-After`（两个 provider 的固定 `0.5 * 2**attempt`）。
+- 英文 README + 30 秒 asciinema/GIF；README 顶部重排为「是什么 → 架构图 → 三个数字 → 60 秒跑起来」。
+
+## M6：架构清理
+
+来源：2026-07-29 架构评审 A2 / A4 / B1 / B2 / C1–C5。不阻塞生产可用，但决定后续每一项改动的成本。
 
 ### `[ ]` T-017 Tool Registry 重构
 
@@ -463,22 +546,6 @@
 
 验收：并行组耗时接近单个最慢工具而非总和；tool message 顺序与 `tool_calls` 顺序一致，两条断言均有测试。
 
-### `[ ]` T-020 SQLite WAL 与消息写入不阻塞事件循环
-
-对应：评审 A5
-
-依赖：无
-
-背景：`_connect` 每次新建连接且无 WAL / `busy_timeout`；`append_message` 在 Agent Loop 每条消息上同步落盘，与 SSE `assistant.delta` 推送争用同一 event loop。事件写入已有 write-behind 队列，消息路径没有。
-
-范围：
-
-- `PRAGMA journal_mode=WAL`、`busy_timeout=5000`、`synchronous=NORMAL`；复用连接。
-- `append_message` 改为不阻塞 event loop。**`message_id` 必须同步返回**（compaction 的区间标记依赖它），因此优先选用 `asyncio.to_thread` 保持同步语义，而非异步队列 + 内存自增 id。
-- `flush()` / `prepare_stop` / `aclose` 语义覆盖消息路径。
-
-验收：并发写入与并发 `list()` 压力测试不出现 `database is locked`；有消息写入时 `assistant.delta` 推送延迟不劣化。
-
 ### `[ ]` T-021 Composition root 移入 lifespan
 
 对应：评审 A4
@@ -512,9 +579,49 @@
 
 验收：`make lint-python` 进 CI 且通过；上述类型改动后全量测试不改断言即通过。
 
-## M6：评测触发项
+## M7：增效与评测触发项
 
-以下任务**在 T-016 产出真实评测数字之前不启动**，届时按数据决定取舍。此纪律沿用 [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md) 第 536 行：索引、subagent、自动规划框架只由评测结果触发。
+**T-014（prompt caching）与 T-016（真实模型评测）已从第一梯队降级至此**（2026-07-29 目标切换为生产可用）；两者都不阻塞生产可用。T-023 / T-024 / T-026 三项**在 T-016 产出真实评测数字之前不启动**，届时按数据决定取舍。此纪律沿用 [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md) 第 536 行：索引、subagent、自动规划框架只由评测结果触发。
+
+### `[ ]` T-014 Anthropic prompt caching
+
+对应：评审 B3（2026-07-29 由第一梯队降级：属成本增效而非正确性问题，不阻塞生产可用）
+
+依赖：无
+
+范围：
+
+- `system` 由裸字符串改为 block 数组并打 `cache_control` 断点；`tools` 末元素打断点覆盖整个工具块。
+- 由 `settings.anthropic.prompt_caching` 开关控制，关闭时 payload 形状与当前完全一致，保证可回退与 A/B。
+- `TOOL_SCHEMAS` 是模块级共享常量，打断点前必须深拷贝，避免污染 OpenAI-compatible 路径。
+- `Usage` 增加 `cache_creation_input_tokens` / `cache_read_input_tokens`；`estimate_cost` 分档计价，缺省退化为普通 input 计价。
+
+验收：
+
+- payload 形状、深拷贝回归、开关关闭时行为一致、cache token 解析与分档计价均有测试。
+- **交付物包含量化数据**：同一真实 session 连续 5 轮，开启与关闭 caching 的 `input_tokens` 与 `estimated_cost` 对比，写入 README 或评审文档。无此数据不算完成。
+
+### `[ ]` T-016 真实模型评测套件
+
+对应：评审 D1（2026-07-29 由第一梯队降级：价值在于能力证明，不阻塞生产就绪）
+
+依赖：T-008（eval 基线）
+
+背景：现有 `evals/` 仅有 `ScriptedEvalProvider`，证明的是 Agent Loop 实现正确，不是 Agent 能完成真实任务。
+
+范围：
+
+- **保留 scripted smoke suite 并继续留在 CI**，其零成本、零抖动的回归价值不可替代；live 套件是并行新增的第二条链路，因成本与不确定性不进 PR CI。
+- 新增 `LiveEvalProvider`：包装 `ModelRouter`，对外暴露与 `ScriptedEvalProvider` 相同的 `calls` / `total_tokens` / `total_cost` 接口，使 `run_metrics` 无需分支。
+- `EvalTask` 增加 `provider_mode: scripted | live` 与可选 `live_model`；live 模式跳过脚本相关断言。
+- 任务集 20–30 个，四类分布：单文件缺陷修复 8、跨文件改动 6、边界/新增测试 6、失败后二次修复 4，另复用现有 4 个安全场景。
+- 判定沿用确定性 grader（测试转绿 / 未授权修改 / 危险命令执行），**不引入 LLM-as-judge**。
+- `make eval-live`（默认 `--repetitions 3`），可选接 nightly workflow。
+
+验收（本任务交付物是数字，不是代码）：
+
+- 在 `docs/review/` 产出评测报告：分类别的 pass@1 / pass@3、平均与总成本、平均与 p95 耗时、失败归因分类（定位失败 / 编辑失败 / 验证失败 / 预算耗尽）。
+- 该数字写入 README 顶部。
 
 ### `[ ]` T-023 检索式项目记忆
 
@@ -528,27 +635,11 @@
 
 范围：轻量 todo 工具，主要价值是用户可见性而非模型记忆；Go renderer 渲染为进度清单。
 
-### `[ ]` T-025 OpenTelemetry 导出
-
-对应：评审 D4 | 依赖：T-021
-
-范围：`TraceSink` 增加 OTLP 实现并与现有 JSONL 并存；span 层级 `run → model.call / tool.call → execution`；沿用 `audit/redaction.py` 脱敏；文档给出接 Jaeger 或 Langfuse 的本地验证步骤。
-
 ### `[ ]` T-026 模型横向对比与上下文消融
 
 对应：评审 D2 / D3 | 依赖：T-016
 
 范围：同一 live 任务集跑 3 个模型产出成本–成功率曲线；消融 `compact_threshold` 0.8 vs 0.6、有无 `related_files`。指标 `with_compaction_success_rate` / `without_compaction_success_rate` 已实现，只需喂真实数据。结论写入评审文档与 README。
-
-### `[ ]` T-027 SSE 健壮性与项目包装
-
-对应：评审 C6 / C7 / D6
-
-范围：
-
-- SSE 按 `run_id` 过滤后若目标 run 已结束需立即返回而非挂起至超时。
-- provider 重试增加抖动并读 `Retry-After`（两个 provider 的固定 `0.5 * 2**attempt`）。
-- 英文 README + 30 秒 asciinema/GIF；README 顶部重排为「是什么 → 架构图 → 三个数字 → 60 秒跑起来」。
 
 ## 后续候选
 
