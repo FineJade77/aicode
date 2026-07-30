@@ -50,11 +50,11 @@ def build_application_runtime(settings: Settings) -> ApplicationRuntime:
     workspace = LocalWorkspaceRuntime()
     tools = DefaultToolRuntime()
     agent = AgentRuntime(
-        model_router=model,
-        audit=trace,
+        model_runtime=model,
+        trace=trace,
         policy=PolicyEngine(),
         execution=execution,
-        trust_store=trust,
+        trust=trust,
         tools=tools,
         workspace=workspace,
         clock=clock,

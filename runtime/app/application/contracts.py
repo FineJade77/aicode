@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from app.core.session import AgentSession
-
 
 APPLICATION_CONTRACT_VERSION = "2.0"
 

@@ -33,7 +33,6 @@ from app.server.main import (
 from app.sessions.store import SessionEvents
 from app.tools.registry import TOOL_SCHEMAS
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = REPOSITORY_ROOT / "schemas"
 FIXTURE_ROOT = SCHEMA_ROOT / "fixtures"

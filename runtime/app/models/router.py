@@ -25,7 +25,7 @@ class ModelRouter:
     settings: Settings
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> "ModelRouter":
+    def from_settings(cls, settings: Settings) -> ModelRouter:
         if settings.provider.type == "anthropic":
             primary: StreamingModelProvider = AnthropicProvider(settings.anthropic)
         else:

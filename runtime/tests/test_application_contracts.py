@@ -83,7 +83,7 @@ async def test_context_service_returns_compaction_contract_for_in_memory_adapter
     session = sessions.create(str(tmp_path))
     for index in range(5):
         session.append_message({"role": "user", "content": f"constraint-{index}"})
-    service = ContextService(AgentRuntime(model_router=None, audit=trace), trace)
+    service = ContextService(AgentRuntime(model_runtime=None, trace=trace), trace)
 
     result = await service.compact(session)
 

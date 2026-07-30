@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-
 SENSITIVE_ENV_FRAGMENTS = {
     "ACCESS_KEY",
     "API_KEY",

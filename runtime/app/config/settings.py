@@ -30,7 +30,7 @@ class OpenAICompatibleSettings(BaseModel):
     chars_per_token: float = Field(default=3.5, ge=1, le=20)
 
     @model_validator(mode="after")
-    def validate_token_budget(self) -> "OpenAICompatibleSettings":
+    def validate_token_budget(self) -> OpenAICompatibleSettings:
         if self.max_output_tokens >= self.context_window:
             raise ValueError("max_output_tokens must be smaller than context_window")
         return self
@@ -110,7 +110,7 @@ class Settings(BaseModel):
     session_retention: SessionRetentionSettings = SessionRetentionSettings()
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         return cls(
             app_name=os.getenv("AICODE_RUNTIME_NAME", "aicode-runtime"),
             version=os.getenv("AICODE_RUNTIME_VERSION", "0.1.0"),

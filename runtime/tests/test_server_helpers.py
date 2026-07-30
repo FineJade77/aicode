@@ -10,8 +10,8 @@ from app.adapters.tools import DefaultToolRuntime
 from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.types import AgentRuntime
 from app.application.contracts import TurnRequest
-from app.application.services import RunCoordinator
 from app.application.errors import Conflict
+from app.application.services import RunCoordinator
 from app.audit.logger import AuditLogger
 from app.config.settings import Settings
 from app.execution.models import ExecutionResult, ExecutionStatus
@@ -23,23 +23,22 @@ from app.server import main as server
 from app.server.main import (
     CreateSessionRequest,
     MessageRequest,
+    SandboxExecutionRequest,
+    TrustRequest,
     bind_message_request_to_session,
     cancel_execution,
     cancel_run,
     create_session,
     daemon_status,
     execute_sandbox,
+    get_trust,
     model_probe,
     model_routes,
-    review_rules,
-    SandboxExecutionRequest,
-    get_trust,
     remove_project_trust,
+    review_rules,
     trust_project,
-    TrustRequest,
 )
-from app.sessions.store import Session
-from app.sessions.store import SessionStore
+from app.sessions.store import Session, SessionStore
 from tests.fakes import FakeProvider, build_test_runtime, text_turn
 
 
@@ -240,15 +239,15 @@ async def test_queued_run_history_does_not_include_future_message(monkeypatch: p
     runtime = build_test_runtime(tmp_path, sessions=store)
     fake = FakeProvider([text_turn("first done"), text_turn("second done")])
     agent = AgentRuntime(
-        model_router=ModelRouter(primary=fake, settings=Settings()),
-        audit=AuditLogger(path=tmp_path / "agent-audit.jsonl"),
+        model_runtime=ModelRouter(primary=fake, settings=Settings()),
+        trace=AuditLogger(path=tmp_path / "agent-audit.jsonl"),
         policy=PolicyEngine(),
         tools=DefaultToolRuntime(),
         workspace=LocalWorkspaceRuntime(),
         clock=SystemClock(),
         approvals=SessionApprovalBroker(),
     )
-    runtime = build_test_runtime(tmp_path, sessions=store, agent=agent, model=agent.model_router)
+    runtime = build_test_runtime(tmp_path, sessions=store, agent=agent, model=agent.model_runtime)
 
     session = store.create(workspace=str(tmp_path))
     await server.send_message(

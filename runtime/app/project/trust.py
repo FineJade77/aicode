@@ -6,11 +6,10 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
-
 
 TRUST_SCHEMA_VERSION = 1
 
@@ -20,7 +19,7 @@ class TrustStore:
         self.path = path
 
     @classmethod
-    def from_env(cls) -> "TrustStore":
+    def from_env(cls) -> TrustStore:
         explicit = os.getenv("AICODE_TRUST_PATH")
         if explicit:
             return cls(Path(explicit).expanduser())
@@ -49,7 +48,7 @@ class TrustStore:
             "workspace": str(canonical),
             "level": "trusted",
             "git_remote": remote,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         self._write(data)
         return self.status(canonical)

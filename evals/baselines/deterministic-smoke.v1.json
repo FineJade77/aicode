@@ -14,11 +14,11 @@
     "aicode_version": "0.1.0",
     "compaction_prompt_version": "aicode.compaction.v1",
     "eval_contract": "1.0",
-    "eval_harness_sha256": "a4f38d75aac5da0e71c685498fe10d98a791af986dae069f02f0b6c92ce6cd91",
+    "eval_harness_sha256": "3c09e5e873b3aadce17e04e0c01b42b8ac6ea1ba5224afcb316a85c5947c1515",
     "eval_runner": "scripted-v1",
     "eval_schema_sha256": "20560af47fca86755225ef8f2734009f0189d72ac3b9728f4a3e563edba12224",
     "fixture_set_sha256": "792b289271b143f886b2e4a13ff0ac0d57511c07fdf0e9e94519ce01f03b8383",
-    "policy_sha256": "9296377ec0e7dd2f52c5f52e3fd204139fb3f0b13fac12fe5c53d72b8f6e5981",
+    "policy_sha256": "4769a2013b99760a6696c301196313ed9bbab2eeafb6db0c10a5989125215355",
     "prompt_sha256": "a5f5ba32f99c11f38c8dd4d797c03d63e4d7351c64656a93cea0db53f3843932",
     "task_set_sha256": "afb6f13bb10e9dd3986b81c3f637b8a26a0cf54c28cacfa9e8c6b4ef8d7a31a5",
     "tool_schema_sha256": "8e4b9c65e4732ead2f1c87759e5dc34008bfafd6fdc7174ede3e8af284060e07"

@@ -18,8 +18,8 @@ from app.tools.base import (
     ToolContext,
     ToolError,
     ToolResult,
-    is_within_workspace,
     is_protected_path,
+    is_within_workspace,
     reject_protected_path,
     resolve_tool_workspace,
     resolve_workspace_path,
@@ -317,7 +317,7 @@ async def run_search(context: ToolContext, arguments: dict[str, Any]) -> ToolRes
     try:
         pattern = re.compile(query)
     except re.error as exc:
-        raise ToolError(f"invalid regular expression: {exc}")
+        raise ToolError(f"invalid regular expression: {exc}") from exc
 
     if shutil.which("rg"):
         return await _search_with_rg(context, root, workspace_name, query, glob_pattern, limit)

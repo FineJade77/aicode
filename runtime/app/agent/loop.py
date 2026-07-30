@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.agent.history import ContextManager, load_history, persist_message, truncate_tool_output
+from app.agent.history import ContextManager, persist_message, truncate_tool_output
 from app.agent.prompts import VERIFY_NOTE, budget_note, build_system_prompt
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
-from app.agent.types import AgentRuntime
+from app.agent.types import AgentRequest, AgentRuntime
 from app.core.hashing import stable_hash
 from app.core.session import AgentSession, ApprovalDecision
 from app.models.provider import (
@@ -27,11 +27,11 @@ class AgentLoop:
         if self.runtime.context_manager is None:
             self.runtime.context_manager = ContextManager(runtime)
 
-    async def run(self, session: AgentSession, request: Any) -> None:
+    async def run(self, session: AgentSession, request: AgentRequest) -> None:
         await run_turn_safely(session, request, self.runtime)
 
 
-async def run_turn_safely(session: AgentSession, request: Any, runtime: AgentRuntime) -> None:
+async def run_turn_safely(session: AgentSession, request: AgentRequest, runtime: AgentRuntime) -> None:
     try:
         await run_turn(session, request, runtime)
     except Exception as exc:
@@ -47,7 +47,7 @@ async def run_turn_safely(session: AgentSession, request: Any, runtime: AgentRun
         await session.events.put({"type": "final", "summary": message})
 
 
-async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -> None:
+async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentRuntime) -> None:
     policy: PolicyEngine = runtime.policy or PolicyEngine()
     if (
         runtime.workspace is None
@@ -68,11 +68,11 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         request,
         runtime.workspace.prompt_context(Path(request.workspace), trust_level=str(trust_status["level"])),
     )
-    history = load_history(session)
-    # Persist only the run that is starting, so queued future prompts do not leak into this history.
-    current_user_message = user_message(str(request.message))
-    history.append(current_user_message)
-    persist_message(session, current_user_message)
+    # Persist only the run that is starting, so queued future prompts do not leak
+    # into this history. There is no in-memory transcript here on purpose: the
+    # prompt is rebuilt from the session by ContextManager before every model
+    # call, so a second local copy could only drift out of sync.
+    persist_message(session, user_message(str(request.message)))
     tools = runtime.tools.schemas_for_mode(request.mode)
     context = runtime.tools.build_context(
         request.workspace,
@@ -96,10 +96,9 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
 
     budget_reason: str | None = None
     for _step in range(budget.max_steps):
-        if await apply_pending_steers(session, request, runtime, history):
-            history = load_history(session)
+        await apply_pending_steers(session, request, runtime)
         session.mark_agent_progress("model.request")
-        history, result = await complete_with_compaction(
+        _prompt, result = await complete_with_compaction(
             session=session,
             runtime=runtime,
             purpose=purpose,
@@ -112,11 +111,9 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         ledger.add(result)
         await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
-        history.append(message)
         persist_message(session, message)
 
-        if await apply_pending_steers(session, request, runtime, history, result.tool_calls):
-            history = load_history(session)
+        if await apply_pending_steers(session, request, runtime, result.tool_calls):
             continue
 
         budget_reason = ledger.exceeded(budget)
@@ -127,9 +124,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         if not result.tool_calls:
             if applied_edits > 0 and not verify_note_sent:
                 verify_note_sent = True
-                note = user_note(VERIFY_NOTE)
-                history.append(note)
-                persist_message(session, note)
+                persist_message(session, user_note(VERIFY_NOTE))
                 continue
             session.mark_agent_progress("finalizing")
             break
@@ -138,9 +133,7 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
             session.mark_agent_progress(f"tool.{call.name}")
             output, applied = await execute_gated(session, request, call, runtime, policy, context)
             applied_edits += applied
-            reply = tool_message(call.id, output)
-            history.append(reply)
-            persist_message(session, reply)
+            persist_message(session, tool_message(call.id, output))
 
     else:
         budget_reason = "steps"
@@ -151,11 +144,9 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         # always receives a summary rather than a truncated transcript. This call
         # is outside the loop and its usage is never re-gated, which is what stops
         # the wind-down from recursing into another budget stop.
-        note = user_note(budget_note(budget_reason))
-        history.append(note)
-        persist_message(session, note)
+        persist_message(session, user_note(budget_note(budget_reason)))
         session.mark_agent_progress("model.request")
-        history, result = await complete_with_compaction(
+        _prompt, result = await complete_with_compaction(
             session=session,
             runtime=runtime,
             purpose=purpose,
@@ -168,7 +159,6 @@ async def run_turn(session: AgentSession, request: Any, runtime: AgentRuntime) -
         ledger.add(result)
         await record_usage(session, result, purpose, runtime)
         message = assistant_message(result)
-        history.append(message)
         persist_message(session, message)
         session.mark_agent_progress("finalizing")
 
@@ -237,9 +227,8 @@ async def complete_with_compaction(
 
 async def apply_pending_steers(
     session: AgentSession,
-    request: Any,
+    request: AgentRequest,
     runtime: AgentRuntime,
-    history: list[dict[str, Any]],
     pending_tool_calls: list[ToolCallRequest] | tuple[ToolCallRequest, ...] = (),
 ) -> bool:
     """Apply queued user guidance only at an AgentLoop safe boundary."""
@@ -249,9 +238,7 @@ async def apply_pending_steers(
 
     skipped_message = "The user added steering guidance, so this tool call was not executed; re-plan with the new constraint."
     for call in pending_tool_calls:
-        reply = tool_message(call.id, f"[not executed] {skipped_message}")
-        history.append(reply)
-        persist_message(session, reply)
+        persist_message(session, tool_message(call.id, f"[not executed] {skipped_message}"))
         await session.events.put(
             tool_event(
                 "tool.rejected",
@@ -263,11 +250,12 @@ async def apply_pending_steers(
         )
 
     steer_text = "\n".join(f"- {message}" for message in steers)
-    note = user_note(
-        f"The user added steering guidance during this run. Prioritize these latest constraints and adjust the remaining work:\n{steer_text}"
+    persist_message(
+        session,
+        user_note(
+            f"The user added steering guidance during this run. Prioritize these latest constraints and adjust the remaining work:\n{steer_text}"
+        ),
     )
-    history.append(note)
-    persist_message(session, note)
     session.mark_agent_progress("run.steer.applied")
     if runtime.trace is not None:
         runtime.trace.record(
@@ -294,7 +282,7 @@ async def apply_pending_steers(
 
 async def execute_gated(
     session: AgentSession,
-    request: Any,
+    request: AgentRequest,
     call: ToolCallRequest,
     runtime: AgentRuntime,
     policy: PolicyEngine,
@@ -476,7 +464,7 @@ async def execute_gated(
 
 async def execute_edit(
     session: AgentSession,
-    request: Any,
+    request: AgentRequest,
     call: ToolCallRequest,
     runtime: AgentRuntime,
     context: Any,

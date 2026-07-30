@@ -1,4 +1,5 @@
 import json
+
 import pytest
 
 from evals import EVAL_CONTRACT_VERSION, REPORT_SCHEMA_VERSION, TRACE_SCHEMA_VERSION
@@ -10,7 +11,6 @@ from evals.runner.core import (
     initialize_git_repository,
     run_suite,
 )
-
 
 EVAL_ROOT = REPOSITORY_ROOT / "evals"
 SCHEMA_ROOT = REPOSITORY_ROOT / "schemas"

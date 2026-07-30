@@ -60,7 +60,7 @@ def build_test_runtime(
     from pathlib import Path
 
     from app.adapters.approvals import SessionApprovalBroker
-    from app.adapters.system import SystemClock, UuidGenerator
+    from app.adapters.system import SystemClock
     from app.adapters.tools import DefaultToolRuntime
     from app.adapters.usage import JsonlUsageRuntime
     from app.adapters.workspace import LocalWorkspaceRuntime
@@ -88,11 +88,11 @@ def build_test_runtime(
     resolved_tools = tools or DefaultToolRuntime()
 
     resolved_agent = agent or AgentRuntime(
-        model_router=resolved_model,
-        audit=resolved_trace,
+        model_runtime=resolved_model,
+        trace=resolved_trace,
         policy=PolicyEngine(),
         execution=resolved_execution,
-        trust_store=resolved_trust,
+        trust=resolved_trust,
         tools=resolved_tools,
         workspace=resolved_workspace,
         clock=clock,

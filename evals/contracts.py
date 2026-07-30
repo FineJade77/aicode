@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+
 class ToolCallSpec(BaseModel):
     id: str
     name: str
@@ -89,7 +90,7 @@ class EvalTask(BaseModel):
     trace_redactions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_script_budget(self) -> "EvalTask":
+    def validate_script_budget(self) -> EvalTask:
         if len(self.model_script) > self.budgets.max_model_calls:
             raise ValueError("model_script exceeds budgets.max_model_calls")
         return self

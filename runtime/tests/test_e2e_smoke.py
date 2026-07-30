@@ -38,8 +38,8 @@ async def test_full_fix_flow(tmp_path):
     router = ModelRouter(primary=fake, settings=Settings())
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
     runtime = AgentRuntime(
-        model_router=router,
-        audit=audit,
+        model_runtime=router,
+        trace=audit,
         policy=PolicyEngine(),
         tools=DefaultToolRuntime(),
         workspace=LocalWorkspaceRuntime(),

@@ -39,8 +39,8 @@ def make_runtime(turns, tmp_path):
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
     return (
         AgentRuntime(
-            model_router=router,
-            audit=audit,
+            model_runtime=router,
+            trace=audit,
             policy=PolicyEngine(),
             tools=DefaultToolRuntime(),
             workspace=LocalWorkspaceRuntime(),
@@ -122,8 +122,8 @@ async def test_steer_skips_pending_tool_call_at_safe_boundary(tmp_path):
         [tool_turn("bash", {"command": "touch should-not-exist"}), text_turn("Adjusted to the new constraint")]
     )
     runtime = AgentRuntime(
-        model_router=ModelRouter(primary=fake, settings=Settings()),
-        audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+        model_runtime=ModelRouter(primary=fake, settings=Settings()),
+        trace=AuditLogger(path=tmp_path / "audit.jsonl"),
         policy=PolicyEngine(),
         tools=DefaultToolRuntime(),
         workspace=LocalWorkspaceRuntime(),
@@ -149,8 +149,8 @@ async def test_context_overflow_forces_one_compaction_retry(tmp_path):
     provider = OverflowThenTextProvider(failures=1)
     router = ModelRouter(primary=provider, settings=Settings())
     runtime = AgentRuntime(
-        model_router=router,
-        audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+        model_runtime=router,
+        trace=AuditLogger(path=tmp_path / "audit.jsonl"),
         policy=PolicyEngine(),
     )
     store = SessionStore(path=tmp_path / "overflow.sqlite")
@@ -185,8 +185,8 @@ async def test_context_overflow_is_never_retried_more_than_once(tmp_path):
     provider = OverflowThenTextProvider(failures=99)
     router = ModelRouter(primary=provider, settings=Settings())
     runtime = AgentRuntime(
-        model_router=router,
-        audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+        model_runtime=router,
+        trace=AuditLogger(path=tmp_path / "audit.jsonl"),
         policy=PolicyEngine(),
     )
     store = SessionStore(path=tmp_path / "overflow-twice.sqlite")
@@ -240,7 +240,7 @@ async def test_tool_output_exposes_command_observability_fields(tmp_path):
     assert output["exit_code"] == 0
     assert output["data"]["exit_code"] == 0
     assert isinstance(output["duration_ms"], int)
-    await runtime.audit.flush()
+    await runtime.trace.flush()
     records = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
     finished = [record for record in records if record["event_type"] == "tool.finished"]
     assert finished and finished[0]["data"]["tool_call_id"] == "tc_1"
@@ -252,7 +252,7 @@ async def test_untrusted_project_command_requires_approval_in_agent_loop(tmp_pat
         [tool_turn("bash", {"command": "pytest --version"}), text_turn("Not executed")],
         tmp_path,
     )
-    runtime.trust_store = TrustStore(tmp_path.parent / f"{tmp_path.name}-state" / "trust.json")
+    runtime.trust = TrustStore(tmp_path.parent / f"{tmp_path.name}-state" / "trust.json")
     session = make_session(tmp_path)
 
     async def reject_soon():
@@ -369,7 +369,7 @@ async def test_edit_approval_flow_applies_after_accept(tmp_path):
     assert applied_events[0]["tool_call_id"] == "tc_1"
     assert applied_events[0]["patch_hash"] == stable_hash(approvals[0]["diff"])
     assert isinstance(applied_events[0]["duration_ms"], int)
-    await runtime.audit.flush()
+    await runtime.trace.flush()
     records = [json.loads(line) for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
     applied_audit = next(record for record in records if record["event_type"] == "edit.applied")
     assert applied_audit["data"]["patch_hash"] == stable_hash(approvals[0]["diff"])
@@ -483,8 +483,8 @@ def budget_runtime(turns, tmp_path, *, max_total_tokens=0, max_total_cost=0.0):
     router = ModelRouter(primary=fake, settings=settings)
     return (
         AgentRuntime(
-            model_router=router,
-            audit=AuditLogger(path=tmp_path / "audit.jsonl"),
+            model_runtime=router,
+            trace=AuditLogger(path=tmp_path / "audit.jsonl"),
             policy=PolicyEngine(),
             tools=DefaultToolRuntime(),
             workspace=LocalWorkspaceRuntime(),

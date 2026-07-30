@@ -1,16 +1,17 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 
+from app.config.settings import Settings
 from app.models.provider import (
     RETRY_AFTER_CAP_SECONDS,
     RETRY_BASE_DELAY_SECONDS,
     RETRY_MAX_DELAY_SECONDS,
+    CompletionRequest,
+    StreamEvent,
+    ToolCallRequest,
     backoff_delay,
     retry_after_seconds,
 )
-
-from app.config.settings import Settings
-from app.models.provider import CompletionRequest, StreamEvent, ToolCallRequest
 
 
 def test_completion_request_defaults():
@@ -64,7 +65,7 @@ def test_retry_after_seconds_accepts_delay_seconds() -> None:
 
 
 def test_retry_after_seconds_accepts_http_date() -> None:
-    future = datetime.now(timezone.utc) + timedelta(seconds=30)
+    future = datetime.now(UTC) + timedelta(seconds=30)
     value = retry_after_seconds({"retry-after": format_datetime(future, usegmt=True)})
     assert value is not None
     assert 25 <= value <= 31
@@ -74,7 +75,7 @@ def test_retry_after_seconds_is_capped_and_ignores_useless_values() -> None:
     # A multi-minute wait should surface as an error rather than a hung request.
     assert retry_after_seconds({"retry-after": "9999"}) == RETRY_AFTER_CAP_SECONDS
     # Past dates, zero, and unparsable values fall back to jittered backoff.
-    past = datetime.now(timezone.utc) - timedelta(seconds=30)
+    past = datetime.now(UTC) - timedelta(seconds=30)
     assert retry_after_seconds({"retry-after": format_datetime(past, usegmt=True)}) is None
     assert retry_after_seconds({"retry-after": "0"}) is None
     assert retry_after_seconds({"retry-after": "soon"}) is None

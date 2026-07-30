@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
-
 
 COMPACTION_SCHEMA_VERSION = 1
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
@@ -63,7 +62,7 @@ class CompactionEntry:
     before_tokens: int
     after_tokens: int
     context_window: int
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict[str, Any]:
         return {

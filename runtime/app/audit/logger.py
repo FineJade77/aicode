@@ -6,13 +6,12 @@ import os
 import sys
 import threading
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.audit.redaction import redact
 from app.core.hashing import stable_hash as _stable_hash
-
 
 AUDIT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024
@@ -60,7 +59,7 @@ class AuditLogger:
         self._reported_failure = False
 
     @classmethod
-    def from_env(cls) -> "AuditLogger":
+    def from_env(cls) -> AuditLogger:
         explicit = os.getenv("AICODE_AUDIT_PATH")
         if explicit:
             path = Path(explicit)
@@ -82,7 +81,7 @@ class AuditLogger:
         data: dict[str, Any] | None = None,
     ) -> None:
         event = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event_type": event_type,
             "session_id": session_id,
             "workspace": workspace,

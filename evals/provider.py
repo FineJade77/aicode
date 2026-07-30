@@ -10,7 +10,6 @@ from app.models.provider import (
     ToolCallRequest,
     Usage,
 )
-
 from evals.contracts import EvalBudgets, ModelProfile, ScriptedTurn
 
 

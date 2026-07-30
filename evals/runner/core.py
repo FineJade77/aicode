@@ -10,7 +10,7 @@ import time
 from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,6 @@ from app.policy.engine import DENY_EXECUTABLES, PolicyEngine
 from app.project.trust import TrustStore
 from app.sessions.store import SessionStore
 from app.usage.pricing import ModelPrice
-
 from evals import EVAL_CONTRACT_VERSION, REPORT_SCHEMA_VERSION, RUNNER_VERSION, TRACE_SCHEMA_VERSION
 from evals.contracts import EvalTask, load_task, task_digest
 from evals.graders.deterministic import GradeContext, grade_task
@@ -67,7 +66,7 @@ async def run_suite(
     traces_dir = output_dir / "traces"
     traces_dir.mkdir()
     tasks = [(path, load_task(path)) for path in task_paths]
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     results: list[dict[str, Any]] = []
 
     with tempfile.TemporaryDirectory(prefix="aicode-evals-") as temp_name:
@@ -122,7 +121,7 @@ async def run_task(
     output_dir: Path,
     keep_workspace: bool,
 ) -> dict[str, Any]:
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     started = time.perf_counter()
     workspace = run_root / "workspace"
     state = run_root / "state"
@@ -141,11 +140,11 @@ async def run_task(
     settings = build_settings(task)
     router = ModelRouter(primary=provider, settings=settings)
     runtime = AgentRuntime(
-        model_router=router,
-        audit=audit,
+        model_runtime=router,
+        trace=audit,
         policy=PolicyEngine(),
         execution=execution,
-        trust_store=trust_store,
+        trust=trust_store,
         tools=DefaultToolRuntime(),
         workspace=LocalWorkspaceRuntime(),
         clock=SystemClock(),
@@ -232,7 +231,7 @@ async def run_task(
         "run": {
             "run_index": run_index,
             "started_at": started_at.isoformat(),
-            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": datetime.now(UTC).isoformat(),
             "duration_ms": duration_ms,
             "timed_out": timed_out,
             "status": "passed" if grade["passed"] else "failed",
@@ -489,7 +488,7 @@ def build_report(
         "suite": tasks[0].suite if tasks else "",
         "runner": RUNNER_VERSION,
         "started_at": started_at.isoformat(),
-        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
         "repetitions": repetitions,
         "passed": passed,
         "source_versions": versions,

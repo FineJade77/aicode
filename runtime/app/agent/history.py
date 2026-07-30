@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from app.core.session import AgentSession, COMPACTION_SCHEMA_VERSION, CompactionEntry
+from app.core.session import COMPACTION_SCHEMA_VERSION, AgentSession, CompactionEntry
 from app.models.provider import ModelCapability, ProviderError
 from app.security.secrets import redact_known_environment_secrets
 
@@ -256,7 +256,7 @@ async def _persist_compaction(
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         context_window=context_window,
-        created_at=runtime.clock.now() if getattr(runtime, "clock", None) is not None else datetime.now(timezone.utc),
+        created_at=runtime.clock.now() if getattr(runtime, "clock", None) is not None else datetime.now(UTC),
     )
     stored = session.append_compaction(entry)
     await _emit_budget_event(
@@ -456,36 +456,3 @@ def _summary_message(summary: str) -> dict[str, Any]:
         "role": "user",
         "content": f"[persistent history summary · schema v{COMPACTION_SCHEMA_VERSION}]\n{summary}",
     }
-
-
-async def compact_if_needed(history: list[dict[str, Any]], runtime: Any, session: AgentSession) -> list[dict[str, Any]]:
-    """Legacy compatibility wrapper for callers outside the preflight model path."""
-    before = estimate_tokens(history)
-    if before <= HISTORY_TOKEN_BUDGET:
-        return history
-    compacted = [dict(message) for message in history]
-    cutoff = max(0, len(compacted) - KEEP_RECENT_MESSAGES)
-    for index in range(cutoff):
-        if estimate_tokens(compacted) <= HISTORY_TOKEN_BUDGET:
-            break
-        message = compacted[index]
-        if message.get("role") != "tool" or str(message.get("content") or "").startswith("[tool output compacted"):
-            continue
-        original_chars = len(str(message.get("content") or ""))
-        message["content"] = f"[tool output compacted: {original_chars} characters; call the tool again if needed]"
-    after = estimate_tokens(compacted)
-    await session.events.put(
-        {
-            "type": "context.budget",
-            "purpose": "history",
-            "compacted": True,
-            "forced": False,
-            "reason": "legacy",
-            "before_tokens": before,
-            "after_tokens": after,
-            "provider": "unknown",
-            "model": "unknown",
-            "context_window": HISTORY_TOKEN_BUDGET,
-        }
-    )
-    return compacted

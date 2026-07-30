@@ -3,9 +3,6 @@ from dataclasses import replace
 import pytest
 
 from app.agent.history import (
-    HISTORY_TOKEN_BUDGET,
-    compact_if_needed,
-    estimate_tokens,
     latest_valid_compaction,
     load_history,
     prepare_history_for_model,
@@ -14,9 +11,9 @@ from app.agent.history import (
 from app.agent.types import AgentRuntime
 from app.application.services import ContextService
 from app.audit.logger import AuditLogger
+from app.config.settings import Settings
 from app.models.provider import ProviderError
 from app.models.router import ModelRouter
-from app.config.settings import Settings
 from app.sessions.store import COMPACTION_SCHEMA_VERSION, SessionStore
 
 
@@ -66,31 +63,6 @@ def test_truncate_tool_output_layers():
 
 
 @pytest.mark.asyncio
-async def test_compact_replaces_old_tool_messages(session):
-    sess, _store = session
-    runtime = AgentRuntime(model_router=None, audit=None)
-    big = "y" * 40_000
-    history = [{"role": "user", "content": "task"}]
-    for index in range(12):
-        history.append({"role": "assistant", "content": "", "tool_calls": [{"id": f"tc_{index}", "name": "bash", "arguments": {}}]})
-        history.append({"role": "tool", "tool_call_id": f"tc_{index}", "content": big})
-    before = estimate_tokens(history)
-    assert before > HISTORY_TOKEN_BUDGET
-    compacted = await compact_if_needed(history, runtime, sess)
-    assert estimate_tokens(compacted) < before
-    assert "[tool output compacted" in compacted[2]["content"]  # The oldest tool message is compacted.
-    assert compacted[-1]["content"] == big  # The most recent message is preserved.
-
-
-@pytest.mark.asyncio
-async def test_compact_noop_under_budget(session):
-    sess, _store = session
-    runtime = AgentRuntime(model_router=None, audit=None)
-    history = [{"role": "user", "content": "hi"}]
-    assert await compact_if_needed(history, runtime, sess) == history
-
-
-@pytest.mark.asyncio
 async def test_persistent_compaction_is_reused_after_restart(tmp_path):
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(path=db_path)
@@ -98,7 +70,7 @@ async def test_persistent_compaction_is_reused_after_restart(tmp_path):
     for index in range(10):
         store.append_message(sess, {"role": "user", "content": f"goal-{index} " + "x" * 30_000})
 
-    runtime = AgentRuntime(model_router=None, audit=None)
+    runtime = AgentRuntime(model_runtime=None, trace=None)
     projected = await prepare_history_for_model(
         runtime=runtime,
         session=sess,
@@ -148,7 +120,7 @@ async def test_compaction_boundary_keeps_tool_call_and_result_together(tmp_path)
         )
 
     projected = await prepare_history_for_model(
-        runtime=AgentRuntime(model_router=None, audit=None),
+        runtime=AgentRuntime(model_runtime=None, trace=None),
         session=sess,
         purpose="main",
         system="system",
@@ -189,7 +161,7 @@ async def test_unfinished_tool_call_is_not_compacted(tmp_path):
         store.append_message(sess, {"role": "user", "content": f"{index} " + "x" * 30_000})
 
     projected = await prepare_history_for_model(
-        runtime=AgentRuntime(model_router=None, audit=None),
+        runtime=AgentRuntime(model_runtime=None, trace=None),
         session=sess,
         purpose="main",
         system="system",
@@ -206,7 +178,7 @@ async def test_consecutive_compactions_advance_projection(tmp_path):
     db_path = tmp_path / "sessions.sqlite"
     store = SessionStore(path=db_path)
     sess = store.create(workspace=str(tmp_path))
-    runtime = AgentRuntime(model_router=None, audit=None)
+    runtime = AgentRuntime(model_runtime=None, trace=None)
     for index in range(10):
         store.append_message(sess, {"role": "user", "content": f"first-{index} " + "a" * 30_000})
     await prepare_history_for_model(
@@ -239,7 +211,7 @@ async def test_summary_failure_keeps_source_log_and_uses_recoverable_fallback(tm
         store.append_message(sess, {"role": "user", "content": f"goal-{index}"})
     original = list(sess.messages)
     router = ModelRouter(primary=FailingSummaryProvider(), settings=Settings())
-    runtime = AgentRuntime(model_router=router, audit=None)
+    runtime = AgentRuntime(model_runtime=router, trace=None)
 
     projected = await prepare_history_for_model(
         runtime=runtime,
@@ -266,7 +238,7 @@ async def test_manual_context_service_persists_compaction(tmp_path):
     for index in range(5):
         store.append_message(sess, {"role": "user", "content": f"constraint-{index}"})
     trace = AuditLogger(path=tmp_path / "audit.jsonl")
-    service = ContextService(AgentRuntime(model_router=None, audit=trace), trace)
+    service = ContextService(AgentRuntime(model_runtime=None, trace=trace), trace)
 
     result = await service.compact(sess)
 

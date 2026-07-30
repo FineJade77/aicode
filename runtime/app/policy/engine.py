@@ -11,7 +11,6 @@ from typing import Any
 from app.core.paths import is_protected_path
 from app.security.secrets import contains_known_environment_secret
 
-
 READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "related_files", "review_diff"}
 READ_ONLY_MODES = {"review", "commit_message", "explain"}
 

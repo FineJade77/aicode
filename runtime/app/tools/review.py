@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from app.tools.base import ToolContext, ToolResult, is_protected_path, resolve_workspace_path
 from app.tools.command import CommandResult, run_command
-
 
 DEFAULT_MAX_FINDINGS = 50
 DEFAULT_LARGE_DIFF_THRESHOLD = 500

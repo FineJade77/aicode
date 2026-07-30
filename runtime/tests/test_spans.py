@@ -15,7 +15,7 @@ from app.audit.spans import SpanTraceSink
 @dataclass
 class RecordedSpan:
     name: str
-    parent: "RecordedSpan | None"
+    parent: RecordedSpan | None
     attributes: dict[str, Any]
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     ended: bool = False

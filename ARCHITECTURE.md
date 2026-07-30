@@ -138,6 +138,8 @@ handler **直接复用 `ApplicationRuntime.__post_init__` 装配好的 service**
 
 两条架构守卫锁定这一点：`test_importing_the_transport_does_not_build_a_runtime`（import 不得产生任何基础设施副作用，模块全局不得回归）与 `test_two_runtimes_coexist_in_one_process`（同进程两个 Runtime 各自只看到自己的 session）。
 
+依赖规则由 `ruff` + 架构守卫测试双重约束。lint 配置在仓库根的 `ruff.toml`（不在 `runtime/pyproject.toml`：ruff 按文件向上找最近的配置，放在 runtime 下会让 `evals/` 静默沿用默认规则），规则集 `E,F,I,UP,B`，`make lint-python` 已接入 CI。
+
 依赖规则：
 
 - Agent Core 不导入 FastAPI、server、SQLite store、具体工具、project config 或 adapter。
@@ -147,6 +149,8 @@ handler **直接复用 `ApplicationRuntime.__post_init__` 装配好的 service**
 - 导入 `app.agent.loop` 不读取用户配置、不创建数据库、不启动 FastAPI。
 
 Runtime 使用 FastAPI + Uvicorn，持久化默认落在 `.aicode/state/` 下。
+
+`AgentRuntime` 的字段以其满足的 port 命名（`model_runtime` / `trace` / `trust`），此前并存的 `model_router` / `audit` / `trust_store` 别名属性已删除。字段仍是 Optional，因为**两个要求不同的消费者共用这个对象**：`run_turn` 需要完整集合，而 `ContextManager` 只需要 session，`model_runtime` 缺失时降级为确定性摘要——把它们一律改成必填会误述 ContextManager 的契约。`run_turn` 在入口处校验自己需要的部分。
 
 `InMemorySessionRepository` 允许 SDK、测试或嵌入调用不启动 HTTP/SQLite；生产默认使用 `SessionStore` 的 SQLite message/event/compaction 持久化与 AuditLogger JSONL trace。
 
@@ -235,6 +239,12 @@ emit run.completed or run.failed
 - 其他模式使用 `main` 路由。
 
 当前不会在 provider 未配置时降级到 stub 模型；`auth_mode=required` 且缺少 API key 时会直接报错。
+
+### 5.0 单一历史来源
+
+`run_turn` **不维护内存 transcript**。每次模型调用前 `ContextManager` 都会从 session 重建 prompt，因此第二份本地副本只可能与之漂移。
+
+此前 loop 里有一个局部 `history` 列表，每处都成对调用 `history.append(...)` + `persist_message(...)`——但下一轮的返回值会用 `load_history(session)` 整个覆盖它，所以那些 append 对行为零影响。这不是 bug，而是"内存 history 有独立语义"的假象：任何试图只改内存副本而不落库的后续修改都会静默失效。现已删除，session 是唯一来源。
 
 ### 5.1 单轮预算
 

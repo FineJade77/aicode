@@ -8,7 +8,7 @@ import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,6 @@ from app.core.session import COMPACTION_SCHEMA_VERSION as CORE_COMPACTION_SCHEMA
 from app.core.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalDecision, CompactionEntry
 from app.events.types import validate_event
 from app.security.secrets import redact_known_environment_secrets
-
 
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
@@ -36,8 +35,8 @@ def _parsed_timestamp(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
     except (TypeError, ValueError):
-        return datetime.min.replace(tzinfo=timezone.utc)
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        return datetime.min.replace(tzinfo=UTC)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def idle_agent_state() -> dict[str, Any]:
@@ -73,7 +72,7 @@ class PendingApproval:
     approval_id: str
     kind: str
     payload: dict[str, Any]
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     decision_event: asyncio.Event = field(default_factory=asyncio.Event)
     accepted: bool | None = None
     # "accepted" | "rejected" | "timed_out" | "cancelled". Distinguishes an
@@ -245,8 +244,8 @@ class SessionEvents:
 class Session:
     session_id: str
     workspace: str
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     events: SessionEvents = field(default_factory=SessionEvents)
     messages: list[dict[str, Any]] = field(default_factory=list)
     message_ids: list[int] = field(default_factory=list)

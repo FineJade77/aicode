@@ -51,7 +51,7 @@ async def test_send_message_rejects_unconfigured_provider(tmp_path, monkeypatch)
     store = SessionStore(path=tmp_path / "s.sqlite")
     runtime = build_test_runtime(tmp_path, sessions=store)
     session = store.create(workspace=str(tmp_path))
-    monkeypatch.setattr(runtime.agent.model_router.primary, "is_configured", lambda: False)
+    monkeypatch.setattr(runtime.agent.model_runtime.primary, "is_configured", lambda: False)
 
     with pytest.raises(HTTPException) as exc_info:
         await server.send_message(

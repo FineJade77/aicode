@@ -10,7 +10,6 @@ from pathlib import Path
 from app.execution.host import HostExecutionBackend
 from app.execution.models import ExecutionRequest, ExecutionResult
 
-
 MEMORY_PATTERN = re.compile(r"^[1-9][0-9]*(?:[kKmMgG])?$")
 CPU_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
 

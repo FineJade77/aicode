@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,7 +30,7 @@ async def async_main() -> int:
     if not tasks:
         raise SystemExit("no eval tasks matched")
     suite_name = args.suite or tasks[0].stem
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_root = args.output_root
     if not output_root.is_absolute():
         output_root = REPOSITORY_ROOT / output_root

@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
@@ -53,14 +53,16 @@ def retry_after_seconds(headers: Any) -> float | None:
     if parsed is None:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return _capped((parsed - datetime.now(timezone.utc)).total_seconds())
+        parsed = parsed.replace(tzinfo=UTC)
+    return _capped((parsed - datetime.now(UTC)).total_seconds())
 
 
 def _capped(seconds: float) -> float | None:
     if seconds <= 0:
         return None
     return min(seconds, RETRY_AFTER_CAP_SECONDS)
+
+
 TOOL_ARGUMENT_PARSE_ERROR_KEY = "__aicode_tool_argument_parse_error__"
 TOOL_ARGUMENT_PARSE_ERROR_RAW_LIMIT = 1_000
 

@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from app.tools.review import DiffFile, DiffLine, format_review_report, load_untracked_files, review_diff_text, review_files, review_report_data, review_rules_data
+from app.tools.review import (
+    DiffFile,
+    DiffLine,
+    format_review_report,
+    load_untracked_files,
+    review_diff_text,
+    review_files,
+    review_report_data,
+    review_rules_data,
+)
 
 
 def test_review_detects_secrets_without_echoing_value() -> None:

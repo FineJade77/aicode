@@ -10,7 +10,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 MANIFEST_SCHEMA_VERSION = 1
 RUNTIME_FILES = ("app", "pyproject.toml", "requirements.lock.txt")
 

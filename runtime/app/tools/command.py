@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from app.execution import ExecutionRequest, ExecutionService, ResourceLimits
 

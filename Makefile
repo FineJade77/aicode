@@ -1,4 +1,4 @@
-.PHONY: build install test-install-e2e test-local-provider-smoke deps deps-go deps-python test test-go test-python eval-smoke compile-python tidy-go lock-python
+.PHONY: build install test-install-e2e test-local-provider-smoke deps deps-go deps-python test test-go test-python lint lint-python eval-smoke compile-python tidy-go lock-python
 
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
@@ -47,7 +47,12 @@ lock-python:
 	cd runtime && uv pip compile pyproject.toml --universal --python-version 3.11 -o requirements.lock.txt
 	cd runtime && uv pip compile pyproject.toml --universal --python-version 3.11 --extra dev -o requirements-dev.lock.txt
 
-test: test-go test-python
+lint: lint-python
+
+lint-python:
+	python3 -m ruff check .
+
+test: lint-python test-go test-python
 
 test-go:
 	$(GOENV) go test ./cli/...

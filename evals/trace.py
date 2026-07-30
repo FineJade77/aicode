@@ -8,7 +8,6 @@ from typing import Any
 
 from app.agent.history import COMPACTION_PROMPT_VERSION
 from app.audit.redaction import redact
-
 from evals import EVAL_CONTRACT_VERSION, RUNNER_VERSION
 
 

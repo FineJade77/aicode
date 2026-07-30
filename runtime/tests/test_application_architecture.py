@@ -21,7 +21,6 @@ from app.models.router import ModelRouter
 from app.policy.engine import PolicyEngine
 from tests.fakes import FakeProvider, text_turn
 
-
 RUNTIME_APP = Path(__file__).resolve().parents[1] / "app"
 
 
@@ -115,8 +114,8 @@ async def test_agent_core_runs_with_fake_model_and_in_memory_session(tmp_path: P
     trace = MemoryTrace()
     model = ModelRouter(primary=FakeProvider([text_turn("No changes needed")]), settings=Settings())
     runtime = AgentRuntime(
-        model_router=model,
-        audit=trace,
+        model_runtime=model,
+        trace=trace,
         policy=PolicyEngine(),
         tools=DefaultToolRuntime(),
         workspace=LocalWorkspaceRuntime(),

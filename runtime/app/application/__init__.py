@@ -5,7 +5,6 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-
 _EXPORTS = {
     "APPLICATION_CONTRACT_VERSION": ("app.application.contracts", "APPLICATION_CONTRACT_VERSION"),
     "AgentRunState": ("app.application.contracts", "AgentRunState"),

@@ -4,7 +4,6 @@ from typing import Any
 
 from app.application.contracts import application_contract_descriptor
 
-
 API_CONTRACT_VERSION = "2.0"
 API_MIN_SUPPORTED_VERSION = "2.0"
 

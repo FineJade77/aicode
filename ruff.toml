@@ -1,0 +1,25 @@
+# Repo-wide lint configuration.
+#
+# Deliberately at the root rather than inside runtime/pyproject.toml: ruff picks
+# the nearest config above each file, so a config under runtime/ would leave
+# evals/ on ruff's defaults without any warning.
+line-length = 160
+target-version = "py311"
+
+[lint]
+# E/F: correctness and obvious mistakes. I: import order. UP: stay current with
+# the minimum Python. B: bugbear's real-defect subset.
+select = ["E", "F", "I", "UP", "B"]
+
+[lint.isort]
+# Without this ruff treats `app`/`evals`/`tests` as third-party and interleaves
+# them with pytest and pydantic, which hides the layering the imports express.
+known-first-party = ["app", "evals", "tests"]
+
+[lint.per-file-ignores]
+# These lines are single-string model prompts, tool descriptions and review
+# findings. They are read as prose by a model or a user, and wrapping them would
+# hurt legibility without making the code clearer.
+"runtime/app/agent/prompts.py" = ["E501"]
+"runtime/app/tools/registry.py" = ["E501"]
+"runtime/app/tools/review.py" = ["E501"]

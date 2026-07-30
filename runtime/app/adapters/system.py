@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 
 class SystemClock:
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def today(self) -> date:
         return self.now().date()

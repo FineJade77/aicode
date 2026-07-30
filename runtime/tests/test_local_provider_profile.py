@@ -182,8 +182,8 @@ async def test_no_auth_localhost_profile_probe_and_full_edit_flow(tmp_path: Path
     router = ModelRouter.from_settings(settings)
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
     runtime = AgentRuntime(
-        model_router=router,
-        audit=audit,
+        model_runtime=router,
+        trace=audit,
         policy=PolicyEngine(),
         tools=DefaultToolRuntime(),
         workspace=LocalWorkspaceRuntime(),
@@ -283,10 +283,10 @@ async def test_probe_classifies_unreachable_endpoint() -> None:
 @pytest.mark.asyncio
 async def test_probe_fails_when_model_returns_text_instead_of_native_tool_call() -> None:
     stream = (
-        'data: {"model":"local-model","choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n'
-        'data: {"model":"local-model","choices":[{"delta":{}}]}\n\n'
-        "data: [DONE]\n\n"
-    ).encode()
+        b'data: {"model":"local-model","choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n'
+        b'data: {"model":"local-model","choices":[{"delta":{}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
