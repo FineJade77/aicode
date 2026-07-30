@@ -205,6 +205,9 @@ class RunCoordinator:
                     "run_id": run_id,
                     "approval_id": approval.approval_id,
                     "kind": approval.kind,
+                    # Distinguishes cancellation from an approval that simply went
+                    # unanswered; the broker emits reason="timeout" for that case.
+                    "reason": "run_cancelled",
                     "message": "The current run was cancelled and the pending approval expired.",
                 }
             )

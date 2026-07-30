@@ -281,6 +281,12 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 
 如果 daemon 重启或 session 恢复时发现未决 approval，Runtime 会把这些 approval 标记为 expired/rejected，并发出对应事件，避免恢复后一直悬挂等待。
 
+审批有四种终态，**互相区分**：`accepted` / `rejected`（用户明确拒绝）/ `timed_out`（无人应答）/ `cancelled`（run 被取消）。超时不会被当成拒绝——告诉模型"用户拒绝了"会让它放弃一个本来正确的方案；实际给出的提示是"超时且未记录任何决定，这不是拒绝，请停下来告诉用户需要批准什么"，而不是让它重试到下一个同样没人应答的提示。CLI 侧同样区分展示。
+
+```bash
+export AICODE_APPROVAL_TIMEOUT_SECONDS="300"   # 默认 300
+```
+
 ### 列出与清理 session
 
 ```bash

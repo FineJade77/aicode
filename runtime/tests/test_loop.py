@@ -572,3 +572,80 @@ async def test_disabled_budget_leaves_behaviour_unchanged(tmp_path):
     assert len(fake.calls) == 1
     finals = events_of(session, "final")
     assert finals[-1]["summary"] == "Done without any budget stop."
+
+
+@pytest.mark.asyncio
+async def test_approval_timeout_is_reported_to_the_model_as_not_a_refusal(tmp_path):
+    """The user-visible payoff of distinguishing timeout from rejection.
+
+    With a collapsed result the model was told "user rejected this edit" for a
+    request nobody saw, and could abandon a correct plan. The tool result must
+    now say it was not a refusal, and must tell the model to stop rather than
+    retry into another unattended prompt.
+    """
+    target = tmp_path / "calc.py"
+    target.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    turns = [
+        tool_turn(
+            "edit_file",
+            {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"},
+            call_id="edit_1",
+        ),
+        text_turn("Reported the pending approval to the user."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    # No approver task runs, so the request goes unanswered.
+    runtime.approvals = SessionApprovalBroker(timeout_seconds=0.05)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    tool_messages = [message for message in session.messages if message.get("role") == "tool"]
+    assert tool_messages, "the timed-out edit must still produce a tool result"
+    text = tool_messages[-1]["content"]
+    assert "timed out" in text
+    assert "not a refusal" in text
+    assert "rejected" not in text
+
+    rejected = events_of(session, "edit.rejected")
+    assert rejected and rejected[-1]["resolution"] == "timed_out"
+    expired = events_of(session, "approval.expired")
+    assert expired and expired[-1]["reason"] == "timeout"
+    # The edit must not have been applied.
+    assert target.read_text(encoding="utf-8") == "def add(a, b):\n    return a - b\n"
+
+
+@pytest.mark.asyncio
+async def test_explicit_rejection_still_reads_as_a_refusal(tmp_path):
+    """Regression guard: the timeout wording must not leak into real rejections."""
+    target = tmp_path / "calc.py"
+    target.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    turns = [
+        tool_turn(
+            "edit_file",
+            {"path": "calc.py", "old_text": "a - b", "new_text": "a + b"},
+            call_id="edit_1",
+        ),
+        text_turn("Adjusted after the rejection."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+
+    async def reject_pending():
+        for _ in range(200):
+            pending = [a for a in session.approvals.values() if a.accepted is None]
+            if pending:
+                session.resolve_approval(pending[0].approval_id, accepted=False)
+                return
+            await asyncio.sleep(0.01)
+
+    rejecter = asyncio.create_task(reject_pending())
+    await run_turn(session, Request(tmp_path), runtime)
+    await rejecter
+
+    tool_messages = [message for message in session.messages if message.get("role") == "tool"]
+    text = tool_messages[-1]["content"]
+    assert "user rejected" in text
+    assert "timed out" not in text
+    rejected = events_of(session, "edit.rejected")
+    assert rejected and rejected[-1]["resolution"] == "rejected"

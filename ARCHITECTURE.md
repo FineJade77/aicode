@@ -281,6 +281,16 @@ TrustStore 默认位于 `~/.aicode/trust.json` 或 `$AICODE_HOME/trust.json`，�
 
 仓库内 `.aicode/config.json`、rules 和 memory 均不能声明 trust。Git remote 与记录不一致、workspace 消失或记录不存在时，Runtime 返回 `untrusted`。CLI 通过 `GET/POST /v1/trust` 和 `POST /v1/trust/remove` 管理这份仓库外状态。
 
+### 8.2 审批终态
+
+`ApprovalDecision` 有四个值：`accepted` / `rejected` / `timed_out` / `missing`，`PendingApproval.resolution` 另记录 `cancelled`。
+
+此前 `wait_for_approval` 返回 `bool | None`，把"用户拒绝"和"超时无人应答"折叠成同一个 `False`。模型因此会为一个没人看到的请求收到"user rejected this edit"，可能就此放弃一个本来正确的方案。
+
+现在超时的 tool 结果明确说明"这不是拒绝"，并要求模型**停下来告知用户**而不是重试——重试只会阻塞在下一个同样无人应答的提示上。事件侧复用 `approval.expired` 并带 `reason`（`timeout` / `run_cancelled`），避免新增一个近似重复的 event type；`tool.rejected` / `edit.rejected` 带 `resolution` 字段，CLI 据此区分展示。
+
+超时时长由 `AICODE_APPROVAL_TIMEOUT_SECONDS` 配置，默认 300 秒，读取发生在 broker（adapter 层），Agent Core 不感知配置来源。
+
 ## 9. Edit Path
 
 文件修改不会直接由模型写入。当前写入路径是：

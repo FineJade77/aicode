@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"strings"
@@ -396,4 +397,34 @@ func captureRenderEvent(event map[string]any) string {
 	os.Stdout = oldStdout
 	output, _ := io.ReadAll(reader)
 	return string(output)
+}
+
+func TestRenderTimedOutApprovalIsNotShownAsRejection(t *testing.T) {
+	// The user needs to know whether they declined or simply missed the prompt,
+	// because only the second case is worth retrying.
+	var out bytes.Buffer
+	RenderEventTo(&out, map[string]any{
+		"type":       "edit.rejected",
+		"path":       "calc.py",
+		"resolution": "timed_out",
+	})
+	text := out.String()
+	if !strings.Contains(text, "timed out") {
+		t.Fatalf("expected a timeout to be reported as such, got %q", text)
+	}
+	if strings.Contains(text, "Edit rejected") {
+		t.Fatalf("a timeout must not read as a rejection, got %q", text)
+	}
+}
+
+func TestRenderExplicitEditRejectionStillReadsAsRejection(t *testing.T) {
+	var out bytes.Buffer
+	RenderEventTo(&out, map[string]any{
+		"type":       "edit.rejected",
+		"path":       "calc.py",
+		"resolution": "rejected",
+	})
+	if text := out.String(); !strings.Contains(text, "Edit rejected") {
+		t.Fatalf("expected an explicit rejection label, got %q", text)
+	}
 }

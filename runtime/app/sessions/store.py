@@ -15,7 +15,7 @@ from typing import Any
 from app.adapters.system import SystemClock, UuidGenerator
 from app.core.ports import Clock, IdGenerator
 from app.core.session import COMPACTION_SCHEMA_VERSION as CORE_COMPACTION_SCHEMA_VERSION
-from app.core.session import CompactionEntry
+from app.core.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalDecision, CompactionEntry
 from app.events.types import validate_event
 from app.security.secrets import redact_known_environment_secrets
 
@@ -76,12 +76,15 @@ class PendingApproval:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     decision_event: asyncio.Event = field(default_factory=asyncio.Event)
     accepted: bool | None = None
+    # "accepted" | "rejected" | "timed_out" | "cancelled". Distinguishes an
+    # explicit refusal from one nobody answered.
+    resolution: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "approval_id": self.approval_id,
             "kind": self.kind,
-            "status": "pending" if self.accepted is None else ("accepted" if self.accepted else "rejected"),
+            "status": "pending" if self.accepted is None else (self.resolution or ("accepted" if self.accepted else "rejected")),
             "created_at": self.created_at.isoformat(),
         }
 
@@ -329,16 +332,17 @@ class Session:
         self.approvals[approval.approval_id] = approval
         return approval
 
-    def resolve_approval(self, approval_id: str, accepted: bool) -> bool:
+    def resolve_approval(self, approval_id: str, accepted: bool, *, resolution: str = "") -> bool:
         approval = self.approvals.get(approval_id)
         if approval is None or approval.accepted is not None:
             return False
         approval.accepted = accepted
+        approval.resolution = resolution or ("accepted" if accepted else "rejected")
         approval.decision_event.set()
         return True
 
-    def expire_approval(self, approval_id: str) -> bool:
-        return self.resolve_approval(approval_id, accepted=False)
+    def expire_approval(self, approval_id: str, *, resolution: str = "cancelled") -> bool:
+        return self.resolve_approval(approval_id, accepted=False, resolution=resolution)
 
     def expire_pending_approvals(self) -> list[PendingApproval]:
         expired: list[PendingApproval] = []
@@ -347,16 +351,24 @@ class Session:
                 expired.append(approval)
         return expired
 
-    async def wait_for_approval(self, approval_id: str, timeout_seconds: float = 300.0) -> bool | None:
+    async def wait_for_approval(
+        self,
+        approval_id: str,
+        timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+    ) -> ApprovalDecision:
         approval = self.approvals.get(approval_id)
         if approval is None:
-            return None
+            return ApprovalDecision.MISSING
         try:
             await asyncio.wait_for(approval.decision_event.wait(), timeout=timeout_seconds)
         except TimeoutError:
-            self.expire_approval(approval_id)
-            return False
-        return approval.accepted
+            # Recorded as a distinct resolution, not as a rejection: nobody
+            # decided, so the model must not be told the user refused.
+            self.expire_approval(approval_id, resolution="timed_out")
+            return ApprovalDecision.TIMED_OUT
+        if approval.resolution == "timed_out":
+            return ApprovalDecision.TIMED_OUT
+        return ApprovalDecision.ACCEPTED if approval.accepted else ApprovalDecision.REJECTED
 
 
 class SessionStore:

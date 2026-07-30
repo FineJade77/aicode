@@ -2,10 +2,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any, Protocol
 
 
 COMPACTION_SCHEMA_VERSION = 1
+DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
+
+
+class ApprovalDecision(StrEnum):
+    """Why an approval request stopped waiting.
+
+    A tri-state bool previously collapsed "the user said no" and "nobody
+    answered in time" into the same `False`. The model then saw
+    "user rejected this edit" for an unattended request and could plausibly
+    abandon a correct plan, so the two outcomes are now distinct.
+    """
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    TIMED_OUT = "timed_out"
+    MISSING = "missing"
 
 
 class EventSink(Protocol):
@@ -105,4 +122,8 @@ class AgentSession(Protocol):
 
     def expire_pending_approvals(self) -> list[Any]: ...
 
-    async def wait_for_approval(self, approval_id: str, timeout_seconds: float = 300.0) -> bool | None: ...
+    async def wait_for_approval(
+        self,
+        approval_id: str,
+        timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+    ) -> ApprovalDecision: ...

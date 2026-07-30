@@ -8,7 +8,7 @@ from app.agent.prompts import VERIFY_NOTE, budget_note, build_system_prompt
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRuntime
 from app.core.hashing import stable_hash
-from app.core.session import AgentSession
+from app.core.session import AgentSession, ApprovalDecision
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     CompletionResult,
@@ -411,14 +411,14 @@ async def execute_gated(
         return await execute_edit(session, request, call, runtime, context)
 
     if gate.verdict == "ask":
-        accepted = await request_approval(
+        decision = await request_approval(
             session,
             "tool",
             {"tool": call.name, "tool_call_id": call.id, "args": call.arguments, "reason": gate.reason},
             runtime,
         )
-        if accepted is not True:
-            reason = "user rejected the command"
+        if decision is not ApprovalDecision.ACCEPTED:
+            reason = approval_failure_text(decision, "run this command")
             await session.events.put(
                 {
                     "type": "tool.rejected",
@@ -426,6 +426,7 @@ async def execute_gated(
                     "tool_call_id": call.id,
                     "error": reason,
                     "risk_level": gate.risk_level,
+                    "resolution": str(decision),
                 }
             )
             return f"[{reason}]", 0
@@ -501,18 +502,25 @@ async def execute_edit(
     auto = session.auto_accept_edits and not runtime.tools.is_protected_path(proposal.path, context.protected_paths)
     if auto:
         await session.events.put({"type": "edit.auto_approved", "path": proposal.path, "tool_call_id": call.id})
-        accepted = True
+        decision = ApprovalDecision.ACCEPTED
     else:
-        accepted = await request_approval(
+        decision = await request_approval(
             session,
             "edit",
             {"path": proposal.path, "kind": proposal.kind, "diff": proposal.diff, "tool_call_id": call.id},
             runtime,
         )
 
-    if accepted is not True:
-        reason = "user rejected this edit"
-        await session.events.put({"type": "edit.rejected", "path": proposal.path, "tool_call_id": call.id})
+    if decision is not ApprovalDecision.ACCEPTED:
+        reason = approval_failure_text(decision, "apply this edit")
+        await session.events.put(
+            {
+                "type": "edit.rejected",
+                "path": proposal.path,
+                "tool_call_id": call.id,
+                "resolution": str(decision),
+            }
+        )
         return f"[{reason}] {proposal.path}", 0
 
     try:
@@ -618,7 +626,7 @@ async def request_approval(
     kind: str,
     payload: dict[str, Any],
     runtime: AgentRuntime,
-) -> bool | None:
+) -> ApprovalDecision:
     if runtime.approvals is None:
         raise RuntimeError("AgentRuntime is missing an approval broker")
     return await runtime.approvals.request(
@@ -626,6 +634,24 @@ async def request_approval(
         kind=kind,
         payload=payload,
     )
+
+
+def approval_failure_text(decision: ApprovalDecision, action: str) -> str:
+    """Explain to the model why an approval did not go through.
+
+    A timeout deliberately reads differently from a refusal, and says not to
+    treat it as one: nobody decided, so abandoning an otherwise correct plan
+    would be the wrong response. It also tells the model to stop rather than
+    silently retry, since a retry would just block on another unattended prompt.
+    """
+    if decision is ApprovalDecision.TIMED_OUT:
+        return (
+            f"approval to {action} timed out with no decision recorded; this is not a refusal. "
+            "Stop and tell the user what needs approving instead of retrying"
+        )
+    if decision is ApprovalDecision.MISSING:
+        return f"approval to {action} could not be found, so it was not performed"
+    return f"user rejected the request to {action}"
 
 
 def turn_budget(runtime: AgentRuntime) -> TurnBudget:

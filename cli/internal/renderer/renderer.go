@@ -447,7 +447,7 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 	case "tool.denied":
 		fmt.Fprintf(out, "Tool denied by policy: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":
-		fmt.Fprintf(out, "Tool execution rejected: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "%s: %s (%s)\n", approvalOutcomeLabel(event, "Tool execution rejected", "Tool execution not approved"), stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.error":
 		detail := toolDetailLine("Tool failed", event)
 		if detail == "" {
@@ -461,7 +461,7 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 	case "edit.applied":
 		fmt.Fprintf(out, "\nEdit applied: %v (%v)\n", event["path"], event["kind"])
 	case "edit.rejected":
-		fmt.Fprintf(out, "\nEdit rejected: %v\n", event["path"])
+		fmt.Fprintf(out, "\n%s: %v\n", approvalOutcomeLabel(event, "Edit rejected", "Edit not approved (approval timed out)"), event["path"])
 	case "edit.auto_approved":
 		fmt.Fprintf(out, "\n[allowed for this session] Edit applied automatically: %v\n", event["path"])
 	case "usage.recorded":
@@ -542,6 +542,16 @@ func contextOutputLine(event map[string]any) string {
 // budgetExceededLine reports a stopped run prominently: the user is about to get
 // a shorter answer than they asked for, and needs to know it was a spend cap
 // rather than the model deciding the task was finished.
+// approvalOutcomeLabel keeps an unanswered approval from being reported as a
+// refusal. The user needs to know whether they declined or simply missed the
+// prompt, because only the second case is worth retrying.
+func approvalOutcomeLabel(event map[string]any, rejected string, timedOut string) string {
+	if stringValue(event["resolution"]) == "timed_out" {
+		return timedOut
+	}
+	return rejected
+}
+
 func budgetExceededLine(event map[string]any) string {
 	reason := stringValue(event["reason"])
 	if reason == "" {
