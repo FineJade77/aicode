@@ -5,16 +5,15 @@ import pytest
 
 from app.server import auth
 from app.server import main as server
-from app.sessions.store import SessionStore
+from tests.fakes import build_test_runtime
 
 
 @pytest.fixture
 def client_factory(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        server.application_runtime,
-        "sessions",
-        SessionStore(path=tmp_path / "s.sqlite"),
-    )
+    # httpx.ASGITransport does not run the ASGI lifespan, so the runtime is
+    # injected through dependency_overrides rather than app.state.
+    runtime = build_test_runtime(tmp_path)
+    server.app.dependency_overrides[server.get_runtime] = lambda: runtime
     monkeypatch.delenv(auth.TOKEN_ENV, raising=False)
     monkeypatch.delenv(auth.ANONYMOUS_ENV, raising=False)
 
@@ -32,7 +31,9 @@ def client_factory(tmp_path, monkeypatch):
         transport = httpx.ASGITransport(app=server.app)
         return httpx.AsyncClient(transport=transport, base_url="http://test")
 
-    return make
+    yield make
+
+    server.app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio

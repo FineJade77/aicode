@@ -154,3 +154,44 @@ def imported_modules(path: Path) -> list[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.append(node.module)
     return modules
+
+
+def test_importing_the_transport_does_not_build_a_runtime(tmp_path: Path) -> None:
+    """Importing `app.server.main` must have no infrastructure side effects.
+
+    A module-level `build_application_runtime(settings)` used to open SQLite and
+    construct provider clients merely because something imported this module. The
+    ASGI lifespan now owns construction, which is also what allows two
+    differently configured runtimes in one process.
+    """
+    code = f"""
+import os, pathlib
+state = pathlib.Path({str(tmp_path)!r})
+os.environ["AICODE_HOME"] = str(state)
+os.environ["AICODE_SESSION_DB_PATH"] = str(state / "sessions.sqlite")
+os.environ["AICODE_AUDIT_PATH"] = str(state / "audit.jsonl")
+
+from app.server import main
+
+assert not hasattr(main, "application_runtime"), "the module global must not come back"
+assert getattr(main.app.state, "runtime", None) is None, "no runtime before the lifespan runs"
+leaked = sorted(p.name for p in state.iterdir()) if state.exists() else []
+assert leaked == [], leaked
+"""
+    subprocess.run([sys.executable, "-c", code], cwd=RUNTIME_APP.parent, check=True)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_builds_and_releases_the_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AICODE_HOME", str(tmp_path))
+    monkeypatch.setenv("AICODE_SESSION_DB_PATH", str(tmp_path / "sessions.sqlite"))
+    monkeypatch.setenv("AICODE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    from app.server import main as server
+
+    assert getattr(server.app.state, "runtime", None) is None
+    async with server.lifespan(server.app):
+        runtime = server.app.state.runtime
+        assert runtime is not None
+        assert runtime.session_service is not None
+
+    assert server.app.state.runtime is None, "the lifespan must release the runtime on shutdown"

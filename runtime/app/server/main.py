@@ -2,27 +2,16 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.adapters.composition import build_application_runtime
-from app.adapters.usage import JsonlUsageRuntime
-from app.agent.loop import AgentLoop
 from app.application.contracts import TurnRequest
 from app.application.errors import ApplicationError
-from app.application.services import (
-    ApprovalService,
-    ContextService,
-    ExecutionApplicationService,
-    ModelService,
-    ProjectTrustService,
-    RunCoordinator,
-    SessionService,
-    TraceService,
-)
+from app.application.runtime import ApplicationRuntime
 from app.config.settings import settings
 from app.contracts.api import contract_descriptor
 from app.core.session import AgentSession
@@ -33,13 +22,21 @@ from app.server.auth import auth_middleware
 # run-scoped stream re-checks whether its run can still emit.
 SSE_IDLE_TIMEOUT_SECONDS = float(os.getenv("AICODE_SSE_IDLE_TIMEOUT_SECONDS", "15") or 15)
 
-application_runtime = build_application_runtime(settings)
-
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    yield
-    await application_runtime.aclose()
+async def lifespan(instance: FastAPI):
+    """Own the runtime's whole lifetime.
+
+    Building at import time opened SQLite and provider clients as a side effect of
+    importing this module, made the module order-dependent, and made two
+    differently configured runtimes impossible in one process.
+    """
+    instance.state.runtime = build_application_runtime(settings)
+    try:
+        yield
+    finally:
+        await instance.state.runtime.aclose()
+        instance.state.runtime = None
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -157,53 +154,20 @@ class TrustListResponse(BaseModel):
     projects: list[TrustStatusResponse]
 
 
-def session_service() -> SessionService:
-    return SessionService(
-        application_runtime.sessions,
-        application_runtime.trace,
-        application_runtime.workspace,
-    )
+def get_runtime(request: Request) -> ApplicationRuntime:
+    """Resolve the per-application runtime built by the ASGI lifespan.
+
+    Handlers take this as a dependency rather than reading a module global, so a
+    single process can host more than one differently configured Runtime and
+    tests can inject one instead of monkeypatching shared state.
+    """
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:  # pragma: no cover - only reachable if lifespan was skipped
+        raise RuntimeError("application runtime is not initialised; the ASGI lifespan did not run")
+    return runtime
 
 
-def run_coordinator() -> RunCoordinator:
-    model = application_runtime.agent.model_runtime or application_runtime.model
-    return RunCoordinator(
-        model,
-        application_runtime.trace,
-        AgentLoop(application_runtime.agent),
-    )
-
-
-def approval_service() -> ApprovalService:
-    return ApprovalService(application_runtime.trace)
-
-
-def context_service() -> ContextService:
-    return ContextService(application_runtime.agent, application_runtime.trace)
-
-
-def trace_service() -> TraceService:
-    return TraceService(
-        application_runtime.trace,
-        JsonlUsageRuntime(application_runtime.trace.path),
-        application_runtime.clock,
-    )
-
-
-def project_trust_service() -> ProjectTrustService:
-    return ProjectTrustService(application_runtime.trust, application_runtime.trace)
-
-
-def execution_application_service() -> ExecutionApplicationService:
-    return ExecutionApplicationService(
-        application_runtime.execution,
-        application_runtime.workspace,
-        application_runtime.sandbox_limits,
-    )
-
-
-def model_service() -> ModelService:
-    return ModelService(application_runtime.model)
+RuntimeDep = Annotated[ApplicationRuntime, Depends(get_runtime)]
 
 
 def raise_http_error(exc: ApplicationError) -> None:
@@ -211,8 +175,8 @@ def raise_http_error(exc: ApplicationError) -> None:
 
 
 @app.get("/v1/daemon/status")
-async def daemon_status() -> dict[str, Any]:
-    return application_runtime.status(pid=os.getpid())
+async def daemon_status(runtime: RuntimeDep) -> dict[str, Any]:
+    return runtime.status(pid=os.getpid())
 
 
 @app.get("/v1/meta/contract")
@@ -221,56 +185,56 @@ async def api_contract() -> dict[str, Any]:
 
 
 @app.post("/v1/executions", response_model=ExecutionResponse)
-async def execute_sandbox(request: SandboxExecutionRequest) -> dict[str, Any]:
+async def execute_sandbox(request: SandboxExecutionRequest, runtime: RuntimeDep) -> dict[str, Any]:
     try:
-        return await execution_application_service().execute(request)
+        return await runtime.executions.execute(request)
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/executions/{execution_id}/cancel", response_model=CancelExecutionResponse)
-async def cancel_execution(execution_id: str) -> dict[str, str]:
-    return await execution_application_service().cancel(execution_id)
+async def cancel_execution(execution_id: str, runtime: RuntimeDep) -> dict[str, str]:
+    return await runtime.executions.cancel(execution_id)
 
 
 @app.post("/v1/daemon/prepare-stop")
-async def prepare_daemon_stop() -> dict[str, Any]:
-    return await application_runtime.prepare_stop()
+async def prepare_daemon_stop(runtime: RuntimeDep) -> dict[str, Any]:
+    return await runtime.prepare_stop()
 
 
 @app.get("/v1/trust", response_model=TrustStatusResponse | TrustListResponse)
-async def get_trust(workspace: str | None = None) -> Any:
+async def get_trust(runtime: RuntimeDep, workspace: str | None = None) -> Any:
     try:
-        return project_trust_service().get(workspace)
+        return runtime.projects.get(workspace)
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/trust", response_model=TrustStatusResponse)
-async def trust_project(request: TrustRequest) -> dict[str, Any]:
+async def trust_project(request: TrustRequest, runtime: RuntimeDep) -> dict[str, Any]:
     try:
-        return project_trust_service().set_trusted(request.workspace)
+        return runtime.projects.set_trusted(request.workspace)
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/trust/remove", response_model=TrustStatusResponse)
-async def remove_project_trust(request: TrustRequest) -> dict[str, Any]:
+async def remove_project_trust(request: TrustRequest, runtime: RuntimeDep) -> dict[str, Any]:
     try:
-        return project_trust_service().remove(request.workspace)
+        return runtime.projects.remove(request.workspace)
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
-    session = await session_service().create(request.workspace)
+async def create_session(request: CreateSessionRequest, runtime: RuntimeDep) -> CreateSessionResponse:
+    session = await runtime.session_service.create(request.workspace)
     return CreateSessionResponse(session_id=session.session_id)
 
 
 @app.get("/v1/sessions")
-async def list_sessions(last: bool = False, limit: int | None = None, offset: int = 0) -> Any:
-    result = session_service().list(last=last, limit=limit, offset=offset)
+async def list_sessions(runtime: RuntimeDep, last: bool = False, limit: int | None = None, offset: int = 0) -> Any:
+    result = runtime.session_service.list(last=last, limit=limit, offset=offset)
     if result is None:
         return None
     if isinstance(result, list):
@@ -279,34 +243,34 @@ async def list_sessions(last: bool = False, limit: int | None = None, offset: in
 
 
 @app.post("/v1/sessions/prune", response_model=PruneSessionsResponse)
-async def prune_sessions(request: PruneSessionsRequest) -> dict[str, Any]:
-    return session_service().prune(
+async def prune_sessions(request: PruneSessionsRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    return runtime.session_service.prune(
         max_sessions=request.max_sessions if request.max_sessions is not None else settings.session_retention.max_sessions,
         max_age_days=request.max_age_days if request.max_age_days is not None else settings.session_retention.max_age_days,
     )
 
 
 @app.get("/v1/sessions/{session_id}")
-async def get_session(session_id: str) -> dict[str, Any]:
+async def get_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
     try:
-        return session_service().get(session_id).to_dict()
+        return runtime.session_service.get(session_id).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/messages", response_model=SendMessageResponse)
-async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
-    session = require_session(session_id)
-    effective_request = bind_message_request_to_session(session, request)
+async def send_message(session_id: str, request: MessageRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
+    effective_request = bind_message_request_to_session(runtime, session, request)
     try:
-        return (await run_coordinator().submit(session, effective_request)).to_dict()
+        return (await runtime.runs.submit(session, effective_request)).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.get("/v1/sessions/{session_id}/events")
-async def stream_events(session_id: str, request: Request, after: int | None = None, run_id: str | None = None) -> StreamingResponse:
-    session = require_session(session_id)
+async def stream_events(session_id: str, request: Request, runtime: RuntimeDep, after: int | None = None, run_id: str | None = None) -> StreamingResponse:
+    session = require_session(runtime, session_id)
     cursor = event_cursor(after, request.headers.get("last-event-id"))
     if cursor is None:
         cursor = session.events.default_after()
@@ -344,10 +308,10 @@ async def stream_events(session_id: str, request: Request, after: int | None = N
 
 
 @app.post("/v1/sessions/{session_id}/approve")
-async def approve(session_id: str, request: ApprovalRequest) -> dict[str, str]:
-    session = require_session(session_id)
+async def approve(session_id: str, request: ApprovalRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
     try:
-        return approval_service().resolve(
+        return runtime.approvals.resolve(
             session,
             request.approval_id,
             accepted=True,
@@ -358,79 +322,79 @@ async def approve(session_id: str, request: ApprovalRequest) -> dict[str, str]:
 
 
 @app.post("/v1/sessions/{session_id}/reject")
-async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
-    session = require_session(session_id)
+async def reject(session_id: str, request: ApprovalRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
     try:
-        return approval_service().resolve(session, request.approval_id, accepted=False)
+        return runtime.approvals.resolve(session, request.approval_id, accepted=False)
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/cancel", response_model=CancelRunResponse)
-async def cancel_run(session_id: str) -> dict[str, Any]:
-    session = require_session(session_id)
-    return (await run_coordinator().cancel(session)).to_dict()
+async def cancel_run(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    session = require_session(runtime, session_id)
+    return (await runtime.runs.cancel(session)).to_dict()
 
 
 @app.post("/v1/sessions/{session_id}/steer", response_model=SteerResponse)
-async def steer_run(session_id: str, request: SteerRequest) -> dict[str, Any]:
-    session = require_session(session_id)
+async def steer_run(session_id: str, request: SteerRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    session = require_session(runtime, session_id)
     try:
-        return (await run_coordinator().steer(session, request.message)).to_dict()
+        return (await runtime.runs.steer(session, request.message)).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/compact", response_model=CompactResponse)
-async def compact_session(session_id: str) -> dict[str, Any]:
-    session = require_session(session_id)
+async def compact_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    session = require_session(runtime, session_id)
     try:
-        return (await context_service().compact(session)).to_dict()
+        return (await runtime.contexts.compact(session)).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
 @app.get("/v1/usage")
-async def usage(today: bool = False, session_id: str | None = None) -> dict[str, Any]:
-    return await trace_service().summarize(today=today, session_id=session_id)
+async def usage(runtime: RuntimeDep, today: bool = False, session_id: str | None = None) -> dict[str, Any]:
+    return await runtime.traces.summarize(today=today, session_id=session_id)
 
 
 @app.get("/v1/usage/sessions/{session_id}")
-async def usage_for_session(session_id: str) -> dict[str, Any]:
-    return await trace_service().summarize(session_id=session_id)
+async def usage_for_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    return await runtime.traces.summarize(session_id=session_id)
 
 
 @app.get("/v1/models/routes")
-async def model_routes() -> dict[str, Any]:
-    return model_service().routes()
+async def model_routes(runtime: RuntimeDep) -> dict[str, Any]:
+    return runtime.models.routes()
 
 
 @app.get("/v1/models/probe")
-async def model_probe(tools: bool = True, model: str | None = None) -> dict[str, Any]:
-    return await model_service().probe(model=model, tools=tools)
+async def model_probe(runtime: RuntimeDep, tools: bool = True, model: str | None = None) -> dict[str, Any]:
+    return await runtime.models.probe(model=model, tools=tools)
 
 
 @app.get("/v1/review/rules")
-async def review_rules(workspace: str | None = None) -> dict[str, Any]:
-    return application_runtime.workspace.review_rules(workspace)
+async def review_rules(runtime: RuntimeDep, workspace: str | None = None) -> dict[str, Any]:
+    return runtime.workspace.review_rules(workspace)
 
 
-def require_session(session_id: str) -> AgentSession:
+def require_session(runtime: ApplicationRuntime, session_id: str) -> AgentSession:
     try:
-        return session_service().require(session_id)
+        return runtime.session_service.require(session_id)
     except ApplicationError as exc:
         raise_http_error(exc)
 
 
-def bind_message_request_to_session(session: AgentSession, request: MessageRequest) -> TurnRequest:
+def bind_message_request_to_session(
+    runtime: ApplicationRuntime,
+    session: AgentSession,
+    request: MessageRequest,
+) -> TurnRequest:
     try:
-        return session_service().bind_turn(session, request.to_contract())
+        return runtime.session_service.bind_turn(session, request.to_contract())
     except ApplicationError as exc:
         raise_http_error(exc)
-
-
-def same_workspace(left: str, right: str) -> bool:
-    return application_runtime.workspace.same_workspace(left, right)
 
 
 def unreachable_run_terminal(

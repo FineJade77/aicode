@@ -130,7 +130,13 @@ Runtime 分为三层：
 - `agent/` + `core/`：transport-independent AgentLoop、ContextManager、Policy，以及 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、Clock/IDs ports。
 - `adapters/`：composition root、SQLite/内存 session、JSONL usage、provider router、host/Docker execution、workspace/project config、tool registry、approval broker 与系统 clock/UUID。
 
-`server/main.py` 只创建一个 `ApplicationRuntime`。handler 负责 Pydantic 输入输出、transport DTO ↔ Application contract 显式转换、ApplicationError → HTTP 状态映射，以及 SSE 编码；run、approval、trust、usage 和 execution 业务规则由 Application Services 承担。
+`ApplicationRuntime` 由 ASGI lifespan 创建并挂在 `app.state`，handler 通过 `Depends(get_runtime)` 取用。此前它是模块级全局：import `app.server.main` 就会打开 SQLite、构造 provider client，模块顺序敏感，且一个进程内无法并存两个配置不同的 Runtime——这与 T-011a/T-011b 建立的 ports 分层自相矛盾，也让 ROADMAP 标注为已完成的"可嵌入 Runtime"在 transport 层被打破。
+
+handler 负责 Pydantic 输入输出、transport DTO ↔ Application contract 显式转换、ApplicationError → HTTP 状态映射，以及 SSE 编码；run、approval、trust、usage 和 execution 业务规则由 Application Services 承担。
+
+handler **直接复用 `ApplicationRuntime.__post_init__` 装配好的 service**（`runtime.session_service` / `.runs` / `.approvals` / …）。此前 transport 每个请求都把这 8 个 service 重建一遍（包括新建一个 `AgentLoop`），而 composition root 已经建好了同一批对象——两套装配并存，runtime 自己的 service 成了死代码。
+
+两条架构守卫锁定这一点：`test_importing_the_transport_does_not_build_a_runtime`（import 不得产生任何基础设施副作用，模块全局不得回归）与 `test_two_runtimes_coexist_in_one_process`（同进程两个 Runtime 各自只看到自己的 session）。
 
 依赖规则：
 
