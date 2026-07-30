@@ -3,6 +3,7 @@ import os
 import pytest
 
 from app.policy.engine import PolicyEngine
+from app.tools.registry import DEFAULT_REGISTRY
 
 
 @pytest.fixture
@@ -10,40 +11,51 @@ def engine():
     return PolicyEngine()
 
 
+def gate_tool(engine, name, args, mode="default", **kwargs):
+    """Gate a tool the way the Agent Loop does.
+
+    read_only comes from the tool's own ToolSpec rather than being hardcoded
+    here, so these tests also verify that the declaration is right — the policy
+    engine no longer keeps its own copy of the read-only names.
+    """
+    spec = DEFAULT_REGISTRY.spec_for(name)
+    return engine.gate(name, args, mode=mode, read_only=bool(spec is not None and spec.read_only), **kwargs)
+
+
 def gate_bash(engine, command, mode="default", **kwargs):
-    return engine.gate("bash", {"command": command}, mode=mode, **kwargs)
+    return gate_tool(engine, "bash", {"command": command}, mode=mode, **kwargs)
 
 
 def test_read_only_tools_allowed_in_review(engine):
-    assert engine.gate("read_file", {"path": "a.py"}, mode="review").verdict == "allow"
-    assert engine.gate("search", {"query": "x"}, mode="review").verdict == "allow"
-    assert engine.gate("related_files", {"path": "a.py"}, mode="review").verdict == "allow"
+    assert gate_tool(engine, "read_file", {"path": "a.py"}, mode="review").verdict == "allow"
+    assert gate_tool(engine, "search", {"query": "x"}, mode="review").verdict == "allow"
+    assert gate_tool(engine, "related_files", {"path": "a.py"}, mode="review").verdict == "allow"
 
 
 def test_write_tools_denied_in_review(engine):
-    assert engine.gate("edit_file", {"path": "a.py"}, mode="review").verdict == "deny"
+    assert gate_tool(engine, "edit_file", {"path": "a.py"}, mode="review").verdict == "deny"
     assert gate_bash(engine, "ls", mode="review").verdict == "deny"
 
 
 def test_write_tools_denied_in_commit_message_mode(engine):
-    assert engine.gate("read_file", {"path": "a.py"}, mode="commit_message").verdict == "allow"
-    assert engine.gate("edit_file", {"path": "a.py"}, mode="commit_message").verdict == "deny"
+    assert gate_tool(engine, "read_file", {"path": "a.py"}, mode="commit_message").verdict == "allow"
+    assert gate_tool(engine, "edit_file", {"path": "a.py"}, mode="commit_message").verdict == "deny"
     assert gate_bash(engine, "git diff", mode="commit_message").verdict == "deny"
 
 
 def test_read_only_tools_allowed_in_explain(engine):
-    assert engine.gate("read_file", {"path": "a.py"}, mode="explain").verdict == "allow"
-    assert engine.gate("search", {"query": "x"}, mode="explain").verdict == "allow"
-    assert engine.gate("related_files", {"path": "a.py"}, mode="explain").verdict == "allow"
+    assert gate_tool(engine, "read_file", {"path": "a.py"}, mode="explain").verdict == "allow"
+    assert gate_tool(engine, "search", {"query": "x"}, mode="explain").verdict == "allow"
+    assert gate_tool(engine, "related_files", {"path": "a.py"}, mode="explain").verdict == "allow"
 
 
 def test_write_tools_denied_in_explain_mode(engine):
-    assert engine.gate("edit_file", {"path": "a.py"}, mode="explain").verdict == "deny"
+    assert gate_tool(engine, "edit_file", {"path": "a.py"}, mode="explain").verdict == "deny"
     assert gate_bash(engine, "ls", mode="explain").verdict == "deny"
 
 
 def test_edit_file_always_asks(engine):
-    assert engine.gate("edit_file", {"path": "a.py"}).verdict == "ask"
+    assert gate_tool(engine, "edit_file", {"path": "a.py"}).verdict == "ask"
 
 
 def test_low_risk_commands_allowed(engine):
@@ -179,7 +191,7 @@ def test_gate_reason_is_english(engine):
     decision = engine.gate("bash", {"command": "rm -rf /"})
     assert decision.verdict == "deny"
     assert "not allowed" in decision.reason and all(ord(char) < 128 for char in decision.reason)
-    review = engine.gate("edit_file", {"path": "a.py"}, mode="review")
+    review = gate_tool(engine, "edit_file", {"path": "a.py"}, mode="review")
     assert review.verdict == "deny"
     assert "read-only" in review.reason
 

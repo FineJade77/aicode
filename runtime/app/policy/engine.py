@@ -11,7 +11,8 @@ from typing import Any
 from app.core.paths import is_protected_path
 from app.security.secrets import contains_known_environment_secret
 
-READ_ONLY_TOOLS_V2 = {"read_file", "search", "list_files", "related_files", "review_diff"}
+# Modes in which no write tool may run, whatever the schema exposed. This is the
+# hard enforcement layer for the case where a client bypasses the tool schema.
 READ_ONLY_MODES = {"review", "commit_message", "explain"}
 
 DENY_EXECUTABLES = {"rm", "sudo", "su", "shutdown", "reboot", "mkfs", "dd"}
@@ -99,11 +100,19 @@ class PolicyEngine:
         args: dict[str, Any],
         mode: str = "default",
         *,
+        read_only: bool = False,
         workspace: Path | None = None,
         protected_paths: list[str] | None = None,
         trust_level: str = "trusted",
     ) -> GateDecision:
-        if tool_name in READ_ONLY_TOOLS_V2:
+        """Classify a tool call.
+
+        `read_only` is supplied by the caller from the tool's own `ToolSpec`
+        rather than looked up here. The policy engine previously kept its own
+        copy of the read-only tool names, which had to be kept in step with the
+        registry by hand; one declaration per tool removes that drift.
+        """
+        if read_only:
             return GateDecision("allow", "low")
         if mode in READ_ONLY_MODES:
             return GateDecision(

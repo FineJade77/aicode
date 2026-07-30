@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import shutil
 import time
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 from app.config.settings import settings
+from app.core.tools import ToolSpec
 from app.execution.docker import docker_available, missing_image_hint
 from app.execution.models import ResourceLimits
 from app.project.config import load_project_config
 from app.security.secrets import redact_known_environment_secrets
 from app.tools.base import (
     IGNORED_DIRS,
+    Tool,
     ToolContext,
     ToolError,
     ToolResult,
@@ -39,11 +44,65 @@ MAX_BASH_TIMEOUT = 600
 
 WORKSPACE_ARG = {"type": "string", "description": "Optional configured read-only workspace name; defaults to the primary workspace"}
 
-TOOL_SCHEMAS: list[dict[str, Any]] = [
-    {
-        "name": "read_file",
-        "description": "Read a text file with line numbers. Use offset and limit to continue through large files.",
-        "input_schema": {
+# Modes whose tool schema must not include any write tool. Declared once and
+# attached to the specs themselves, so a new write tool inherits the restriction
+# instead of relying on someone remembering to extend a separate name set.
+WRITE_HIDDEN_MODES = frozenset({"review", "explain"})
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionTool:
+    """Adapts a plain callable to the Tool protocol."""
+
+    spec: ToolSpec
+    handler: Callable[[dict[str, Any], ToolContext], Awaitable[ToolResult]]
+
+    async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        return await self.handler(args, context)
+
+
+@dataclass(frozen=True, slots=True)
+class EditFileTool:
+    """Registered so `edit_file` has a spec, but never executed from here.
+
+    The Agent Loop intercepts `approval="diff"` tools to present a diff and apply
+    the change itself. Reaching this body means that routing was bypassed, so it
+    reports that rather than falling through to "unknown tool", which would be
+    actively wrong about a tool that does exist.
+    """
+
+    spec: ToolSpec
+
+    async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        del args, context
+        return ToolResult(success=False, error="edit_file is applied by the agent loop after diff approval", risk_level="medium")
+
+
+def context_first(handler: Callable[..., Any]) -> Callable[[dict[str, Any], ToolContext], Awaitable[ToolResult]]:
+    """Wrap a `(context, arguments)` tool function, sync or async.
+
+    The built-in tools predate the registry and come in both argument orders and
+    both sync and async flavours; normalising here avoids rewriting them all.
+    """
+
+    async def run(args: dict[str, Any], context: ToolContext) -> ToolResult:
+        outcome = handler(context, args)
+        if inspect.isawaitable(outcome):
+            return await outcome
+        return outcome
+
+    return run
+
+# One declaration per tool. `read_only` and `approval` live here rather than in
+# separate name sets, which is what previously let the registry and the policy
+# engine drift apart on which tools are read-only.
+TOOL_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        name="read_file",
+        description="Read a text file with line numbers. Use offset and limit to continue through large files.",
+        read_only=True,
+        approval="none",
+        input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Relative path"},
@@ -53,11 +112,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "required": ["path"],
         },
-    },
-    {
-        "name": "search",
-        "description": "Search repository text with a regular expression to locate symbols, strings, or files. Optionally filter with a glob.",
-        "input_schema": {
+    ),
+    ToolSpec(
+        name="search",
+        description="Search repository text with a regular expression to locate symbols, strings, or files. Optionally filter with a glob.",
+        read_only=True,
+        approval="none",
+        input_schema={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Regular expression"},
@@ -67,11 +128,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "required": ["query"],
         },
-    },
-    {
-        "name": "list_files",
-        "description": "List directory structure. Use this to understand layout; use search to find specific content.",
-        "input_schema": {
+    ),
+    ToolSpec(
+        name="list_files",
+        description="List directory structure. Use this to understand layout; use search to find specific content.",
+        read_only=True,
+        approval="none",
+        input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string", "default": "."},
@@ -79,11 +142,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "workspace": WORKSPACE_ARG,
             },
         },
-    },
-    {
-        "name": "related_files",
-        "description": "Find read-only context related to a file using source/test naming, matching names, and reference lines.",
-        "input_schema": {
+    ),
+    ToolSpec(
+        name="related_files",
+        description="Find read-only context related to a file using source/test naming, matching names, and reference lines.",
+        read_only=True,
+        approval="none",
+        input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Relative path"},
@@ -92,11 +157,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "required": ["path"],
         },
-    },
-    {
-        "name": "bash",
-        "description": "Run shell commands in the primary workspace. Low-risk commands run directly, medium-risk commands require approval, and destructive commands are denied.",
-        "input_schema": {
+    ),
+    ToolSpec(
+        name="bash",
+        description="Run shell commands in the primary workspace. Low-risk commands run directly, medium-risk commands require approval, and destructive commands are denied.",
+        read_only=False,
+        approval="gate",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
@@ -104,16 +172,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "required": ["command"],
         },
-    },
-    {
-        "name": "edit_file",
-        "description": (
+    ),
+    ToolSpec(
+        name="edit_file",
+        description=(
             "Edit files in the primary workspace after the user approves the diff. "
             "For replace, old_text must be an exact, unique source fragment and new_text is its replacement. "
             "For create, leave old_text empty and provide the complete file in new_text. "
             "For delete, set delete to true. Each edit is approved independently."
         ),
-        "input_schema": {
+        read_only=False,
+        approval="diff",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
@@ -123,29 +194,105 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
             "required": ["path"],
         },
-    },
-    {
-        "name": "review_diff",
-        "description": "Run deterministic review rules on the current git diff and return structured findings.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
+    ),
+    ToolSpec(
+        name="review_diff",
+        description="Run deterministic review rules on the current git diff and return structured findings.",
+        read_only=True,
+        approval="none",
+        input_schema={"type": "object", "properties": {}},
+    ),
 ]
 
-READ_ONLY_TOOL_NAMES = {"read_file", "search", "list_files", "related_files", "review_diff"}
-NO_TOOL_MODES = {"commit_message"}
-# Modes that must never see bash/edit_file in their tool schema, so the model
-# cannot even attempt a write call. Kept in sync with policy.engine.READ_ONLY_MODES,
-# which is the hard enforcement layer in case a client bypasses the schema.
-READ_ONLY_SCHEMA_MODES = {"review", "explain"}
-TOOL_SCHEMAS_BY_NAME = {schema["name"]: schema for schema in TOOL_SCHEMAS}
+# Modes that must never see a write tool, so the model cannot even attempt the
+# call. The policy layer still denies non-read-only tools in these modes, in case
+# a client bypasses the schema.
+NO_TOOL_MODES = frozenset({"commit_message"})
+
+TOOL_SPECS_BY_NAME = {spec.name: spec for spec in TOOL_SPECS}
+# Retained for the contract drift tests and any caller that only needs the wire
+# form; derived from TOOL_SPECS so it can never disagree with them.
+TOOL_SCHEMAS: list[dict[str, Any]] = [spec.to_schema() for spec in TOOL_SPECS]
 
 
-def tool_schemas_for_mode(mode: str) -> list[dict[str, Any]]:
-    if mode in NO_TOOL_MODES:
-        return []
-    if mode in READ_ONLY_SCHEMA_MODES:
-        return [schema for schema in TOOL_SCHEMAS if schema["name"] in READ_ONLY_TOOL_NAMES]
-    return list(TOOL_SCHEMAS)
+class ToolRegistry:
+    """Name-to-tool lookup with the spec as the single source of truth.
+
+    Replaces a module-level schema list plus an if/elif dispatch chain. Adding a
+    tool is now one `register` call instead of edits to the schema list, the
+    dispatch chain, and two separate read-only name sets.
+    """
+
+    def __init__(self, tools: Iterable[Tool] = ()) -> None:
+        self._tools: dict[str, Tool] = {}
+        for tool in tools:
+            self.register(tool)
+
+    def register(self, tool: Tool) -> None:
+        name = tool.spec.name
+        if name in self._tools:
+            raise ValueError(f"tool already registered: {name}")
+        self._tools[name] = tool
+
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
+
+    def spec_for(self, name: str) -> ToolSpec | None:
+        tool = self._tools.get(name)
+        return tool.spec if tool is not None else None
+
+    def specs(self) -> list[ToolSpec]:
+        return [tool.spec for tool in self._tools.values()]
+
+    def schemas_for_mode(self, mode: str) -> list[dict[str, Any]]:
+        if mode in NO_TOOL_MODES:
+            return []
+        return [tool.spec.to_schema() for tool in self._tools.values() if tool.spec.visible_in(mode)]
+
+    def validate_arguments(self, name: str, arguments: dict[str, Any]) -> str | None:
+        spec = self.spec_for(name)
+        if spec is None:
+            return None
+        return _validate_schema_value(arguments, spec.input_schema, path="")
+
+    async def run(self, name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+        started = time.perf_counter()
+        validation_error = self.validate_arguments(name, arguments)
+        if validation_error is not None:
+            return with_duration(
+                ToolResult(
+                    success=False,
+                    error=f"argument validation failed: {validation_error}",
+                    data={"validation_error": validation_error},
+                ),
+                started,
+            )
+        tool = self._tools.get(name)
+        if tool is None:
+            return with_duration(ToolResult(success=False, error=f"unknown tool: {name}", risk_level="high"), started)
+        try:
+            return with_duration(await tool.run(arguments, context), started)
+        except ToolError as exc:
+            return with_duration(ToolResult(success=False, error=str(exc)), started)
+        except Exception as exc:  # Return tool failures to the model without interrupting the loop.
+            return with_duration(
+                ToolResult(success=False, error=f"{exc.__class__.__name__}: {exc}", risk_level="high"), started
+            )
+
+
+def build_default_registry() -> ToolRegistry:
+    return ToolRegistry(
+        [
+            FunctionTool(TOOL_SPECS_BY_NAME["read_file"], context_first(read_file_lines)),
+            FunctionTool(TOOL_SPECS_BY_NAME["search"], context_first(run_search)),
+            FunctionTool(TOOL_SPECS_BY_NAME["list_files"], ListFilesTool().run),
+            FunctionTool(TOOL_SPECS_BY_NAME["related_files"], RelatedFilesTool().run),
+            FunctionTool(TOOL_SPECS_BY_NAME["bash"], context_first(run_bash)),
+            EditFileTool(TOOL_SPECS_BY_NAME["edit_file"]),
+            FunctionTool(TOOL_SPECS_BY_NAME["review_diff"], ReviewDiffTool().run),
+        ]
+    )
+
 
 
 def build_tool_context(
@@ -211,10 +358,7 @@ def _sandbox_pids_limit() -> int:
 
 
 def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> str | None:
-    schema = TOOL_SCHEMAS_BY_NAME.get(name)
-    if schema is None:
-        return None
-    return _validate_schema_value(arguments, schema["input_schema"], path="")
+    return DEFAULT_REGISTRY.validate_arguments(name, arguments)
 
 
 def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> str | None:
@@ -247,34 +391,11 @@ def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> str
 
 
 async def run_tool(name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
-    started = time.perf_counter()
-    validation_error = validate_tool_arguments(name, arguments)
-    if validation_error is not None:
-        return with_duration(
-            ToolResult(success=False, error=f"argument validation failed: {validation_error}", data={"validation_error": validation_error}),
-            started,
-        )
+    return await DEFAULT_REGISTRY.run(name, arguments, context)
 
-    try:
-        if name == "read_file":
-            return with_duration(read_file_lines(context, arguments), started)
-        if name == "search":
-            return with_duration(await run_search(context, arguments), started)
-        if name == "list_files":
-            return with_duration(await ListFilesTool().run(arguments, context), started)
-        if name == "related_files":
-            return with_duration(await RelatedFilesTool().run(arguments, context), started)
-        if name == "review_diff":
-            return with_duration(await ReviewDiffTool().run(arguments, context), started)
-        if name == "bash":
-            return with_duration(await run_bash(context, arguments), started)
-        if name == "edit_file":
-            return with_duration(ToolResult(success=False, error="edit_file is handled by the agent loop", risk_level="medium"), started)
-        return with_duration(ToolResult(success=False, error=f"unknown tool: {name}", risk_level="high"), started)
-    except ToolError as exc:
-        return with_duration(ToolResult(success=False, error=str(exc)), started)
-    except Exception as exc:  # Return tool failures to the model without interrupting the loop.
-        return with_duration(ToolResult(success=False, error=f"{exc.__class__.__name__}: {exc}", risk_level="high"), started)
+
+def tool_schemas_for_mode(mode: str) -> list[dict[str, Any]]:
+    return DEFAULT_REGISTRY.schemas_for_mode(mode)
 
 
 def with_duration(result: ToolResult, started: float) -> ToolResult:
@@ -509,3 +630,9 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
         error="" if result.returncode == 0 else text,
         data=data,
     )
+
+
+# The built-in set. Module-level so the existing function-style call sites keep
+# working; embedders build their own registry instead. Instantiated at the end of
+# the module because it references the tool functions defined above.
+DEFAULT_REGISTRY = build_default_registry()

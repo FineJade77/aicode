@@ -351,10 +351,14 @@ async def execute_gated(
         )
         return f"[tool argument validation failed] {message}", 0
 
+    spec = runtime.tools.spec_for(call.name)
     gate = policy.gate(
         call.name,
         call.arguments,
         mode=request.mode,
+        # Read from the tool's own declaration; the policy engine no longer keeps
+        # a second copy of which tools are read-only.
+        read_only=bool(spec is not None and spec.read_only),
         workspace=context.workspace,
         protected_paths=context.protected_paths,
         trust_level=context.trust_level,
@@ -395,7 +399,9 @@ async def execute_gated(
         )
         return f"[denied by policy] {gate.reason}", 0
 
-    if call.name == "edit_file":
+    if spec is not None and spec.approval == "diff":
+        # Declared behaviour, not a hardcoded tool name: any future tool that
+        # needs diff approval routes here without editing the loop.
         return await execute_edit(session, request, call, runtime, context)
 
     if gate.verdict == "ask":

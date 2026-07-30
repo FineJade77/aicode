@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from app.core.session import AgentSession
+from app.core.tools import ToolSpec
 from app.models.provider import CompletionResult, ModelCapability
 
 
@@ -112,6 +113,10 @@ class ToolRuntime(Protocol):
         run_id: str = "",
         trust_level: str = "trusted",
     ) -> Any: ...
+
+    def spec_for(self, name: str) -> ToolSpec | None: ...
+
+    def specs(self) -> list[ToolSpec]: ...
 
     def validate_arguments(self, name: str, arguments: dict[str, Any]) -> str | None: ...
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.core.paths import is_protected_path
+from app.core.tools import ToolSpec
 from app.project.config import WorkspaceRef, default_protected_paths
 
 
@@ -38,10 +39,11 @@ class ToolResult:
 
 
 class Tool(Protocol):
-    name: str
+    """A registered tool: its declaration plus how to run it."""
 
-    async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
-        ...
+    spec: ToolSpec
+
+    async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult: ...
 
 
 class ToolError(Exception):

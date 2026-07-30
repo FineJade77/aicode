@@ -3,20 +3,32 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.tools.base import is_protected_path
+from app.core.tools import ToolSpec
+from app.tools.base import ToolContext, ToolResult, is_protected_path
 from app.tools.edit import apply_edit, build_edit_proposal
-from app.tools.registry import build_tool_context, run_tool, tool_schemas_for_mode, validate_tool_arguments
+from app.tools.registry import ToolRegistry, build_default_registry, build_tool_context
 
 
 class DefaultToolRuntime:
     """Adapter over the built-in workspace tools.
 
-    Agent Core depends on this object through ToolRuntime instead of importing
-    filesystem, shell, edit, or execution implementations directly.
+    Agent Core depends on this object through ToolRegistry instead of importing
+    filesystem, shell, edit, or execution implementations directly. Holds a real
+    registry instance, so an embedder can pass its own to add tools without
+    touching Agent Core.
     """
 
+    def __init__(self, registry: ToolRegistry | None = None) -> None:
+        self.registry = registry or build_default_registry()
+
     def schemas_for_mode(self, mode: str) -> list[dict[str, Any]]:
-        return tool_schemas_for_mode(mode)
+        return self.registry.schemas_for_mode(mode)
+
+    def spec_for(self, name: str) -> ToolSpec | None:
+        return self.registry.spec_for(name)
+
+    def specs(self) -> list[ToolSpec]:
+        return self.registry.specs()
 
     def build_context(
         self,
@@ -27,7 +39,7 @@ class DefaultToolRuntime:
         session_id: str = "",
         run_id: str = "",
         trust_level: str = "trusted",
-    ) -> Any:
+    ) -> ToolContext:
         return build_tool_context(
             workspace,
             mode,
@@ -38,10 +50,10 @@ class DefaultToolRuntime:
         )
 
     def validate_arguments(self, name: str, arguments: dict[str, Any]) -> str | None:
-        return validate_tool_arguments(name, arguments)
+        return self.registry.validate_arguments(name, arguments)
 
-    async def run(self, name: str, arguments: dict[str, Any], context: Any) -> Any:
-        return await run_tool(name, arguments, context)
+    async def run(self, name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+        return await self.registry.run(name, arguments, context)
 
     def build_edit_proposal(
         self,

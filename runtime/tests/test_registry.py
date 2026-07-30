@@ -1,9 +1,18 @@
 import pytest
 
+from app.core.tools import ToolSpec
+from app.policy.engine import PolicyEngine
 from app.project.config import WorkspaceRef
-from app.tools.base import ToolContext
+from app.tools.base import ToolContext, ToolResult
 from app.tools.command import CommandResult
-from app.tools.registry import TOOL_SCHEMAS, run_tool, tool_schemas_for_mode
+from app.tools.registry import (
+    DEFAULT_REGISTRY,
+    TOOL_SCHEMAS,
+    WRITE_HIDDEN_MODES,
+    build_default_registry,
+    run_tool,
+    tool_schemas_for_mode,
+)
 
 
 def make_context(tmp_path) -> ToolContext:
@@ -368,3 +377,95 @@ async def test_unknown_workspace_rejected(tmp_path):
 
     assert not result.success
     assert "unknown workspace" in result.error
+
+
+class _CountingTool:
+    """A tool defined entirely outside the built-in set."""
+
+    def __init__(self, spec: ToolSpec) -> None:
+        self.spec = spec
+        self.calls = 0
+
+    async def run(self, args, context):
+        self.calls += 1
+        return ToolResult(success=True, text=f"counted {args.get('label', '')}".strip())
+
+
+def _spec(name: str, *, read_only: bool, approval: str = "gate", hidden: frozenset[str] = frozenset()) -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        description=f"{name} test tool",
+        read_only=read_only,
+        approval=approval,
+        hidden_in_modes=hidden,
+        input_schema={"type": "object", "properties": {"label": {"type": "string"}}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_custom_read_only_tool_is_visible_and_allowed_without_touching_core(tmp_path):
+    """The point of the registry: one registration, no edits elsewhere.
+
+    Adding a tool previously meant editing the schema list, the dispatch chain,
+    the registry's read-only names and the policy engine's separate copy of them.
+    """
+    tool = _CountingTool(_spec("inspect_manifest", read_only=True, approval="none"))
+    registry = build_default_registry()
+    registry.register(tool)
+
+    # Visible to the model, including in the read-only modes.
+    assert "inspect_manifest" in {schema["name"] for schema in registry.schemas_for_mode("default")}
+    assert "inspect_manifest" in {schema["name"] for schema in registry.schemas_for_mode("review")}
+
+    # The policy engine allows it purely because the spec says it is read-only.
+    spec = registry.spec_for("inspect_manifest")
+    assert spec is not None
+    decision = PolicyEngine().gate("inspect_manifest", {}, mode="review", read_only=spec.read_only)
+    assert decision.verdict == "allow"
+
+    # And it is dispatched by lookup, not by a name branch.
+    result = await registry.run("inspect_manifest", {"label": "x"}, ToolContext(workspace=tmp_path))
+    assert result.success is True
+    assert result.text == "counted x"
+    assert tool.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_custom_write_tool_is_hidden_and_denied_in_read_only_modes(tmp_path):
+    tool = _CountingTool(_spec("mutate_manifest", read_only=False, hidden=WRITE_HIDDEN_MODES))
+    registry = build_default_registry()
+    registry.register(tool)
+
+    assert "mutate_manifest" not in {schema["name"] for schema in registry.schemas_for_mode("review")}
+    spec = registry.spec_for("mutate_manifest")
+    assert PolicyEngine().gate("mutate_manifest", {}, mode="review", read_only=spec.read_only).verdict == "deny"
+    # Never executed: the schema hides it and the policy layer refuses it.
+    assert tool.calls == 0
+
+
+def test_registry_rejects_a_duplicate_name(tmp_path):
+    """A silently replaced tool would be a confusing way to lose behaviour."""
+    registry = build_default_registry()
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(_CountingTool(_spec("bash", read_only=False)))
+
+
+def test_specs_are_the_single_source_of_read_only_truth():
+    """Regression guard for the drift this refactor removed.
+
+    The policy engine used to keep its own set of read-only tool names next to the
+    registry's; nothing stopped the two from disagreeing.
+    """
+    import app.policy.engine as policy_module
+
+    assert not hasattr(policy_module, "READ_ONLY_TOOLS_V2")
+    read_only = {spec.name for spec in DEFAULT_REGISTRY.specs() if spec.read_only}
+    assert read_only == {"read_file", "search", "list_files", "related_files", "review_diff"}
+
+
+def test_edit_file_declares_diff_approval():
+    """The Agent Loop routes on this, rather than on the tool's name."""
+    spec = DEFAULT_REGISTRY.spec_for("edit_file")
+    assert spec is not None
+    assert spec.approval == "diff"
+    assert [s.name for s in DEFAULT_REGISTRY.specs() if s.approval == "diff"] == ["edit_file"]

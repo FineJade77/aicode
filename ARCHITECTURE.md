@@ -267,6 +267,16 @@ emit run.completed or run.failed
 
 ## 7. Tool Registry
 
+`ToolRegistry` 是真正的 name → tool 注册表，每个工具由一份 `ToolSpec`（`app/core/tools.py`）声明：`name` / `description` / `input_schema` / `read_only` / `approval`（`none` | `gate` | `diff`）/ `hidden_in_modes`。
+
+**一份声明，三个消费者**：模型看 `input_schema`，policy 读 `read_only`，Agent Loop 读 `approval`。`ToolSpec` 因此放在 `core` 而不是工具实现旁边——这三层互不导入。
+
+这替换掉了此前的模块级 schema 列表 + if/elif 分发链。更重要的是消灭了一处真实的 drift 风险：读写属性此前在 `tools/registry.py` 的 `READ_ONLY_TOOL_NAMES` 和 `policy/engine.py` 的 `READ_ONLY_TOOLS_V2` 各维护一份，靠注释提醒保持同步。现在 `PolicyEngine.gate` 接收调用方从 `ToolSpec` 读出的 `read_only`，自己不再持有名单。
+
+Agent Loop 的 diff 审批同样改为按声明分发（`spec.approval == "diff"`）而不是 `if call.name == "edit_file"`，未来任何需要 diff 审批的工具无需改动 loop。
+
+新增一个工具现在只需一次 `register`；`test_a_custom_read_only_tool_is_visible_and_allowed_without_touching_core` 锁定了这一点，`test_specs_are_the_single_source_of_read_only_truth` 则守住 drift 不回归。
+
 Runtime 当前注册的工具：
 
 | Tool | 类型 | 说明 |
