@@ -161,6 +161,23 @@ Runtime 使用 FastAPI + Uvicorn，持久化默认落在 `.aicode/state/` 下。
 
 SSE event 使用递增 `event_id`，CLI 可以用 `Last-Event-ID` 恢复事件流。
 
+### 4.1 SSE 流的终止保证
+
+CLI 把"流结束但没收到 `final`"当作可重试的断连并重连（`streamEvents`）。因此**按 `run_id` 过滤的流必须始终抵达一个终态事件**，否则一个再也不会产生事件的 run 会让 CLI 陷入无限重连。
+
+两种会永久等待的情形被显式终止：
+
+- run 已在请求 cursor 之前结束——客户端重连到了自己 `final` 之后。此时重放它记录的终态事件。
+- run 没有任何保留事件，且既不在运行也不在队列中。event 持久化是 best-effort，session 被驱逐重建后 `final` 可能已丢失，而一个过期的 run id 看起来完全一样。此时合成一个终态事件让客户端停止；**该事件不写入 session**，因为实际上没有发生任何新的事情。
+
+同时流每 `AICODE_SSE_IDLE_TIMEOUT_SECONDS`（默认 15 秒）发一次 `: keep-alive` 注释帧，既向客户端也向中间代理证明连接存活，并借这个节拍重新判断上述两种情形。
+
+### 4.2 Provider 重试
+
+两个 provider 的可重试状态码（429/5xx）此前使用固定 `0.5 * 2**attempt`。固定退避会让所有撞上同一个限流的客户端同步重试，重新制造引发限流的那个突发。现在改为带 equal jitter 的指数退避（保留下半区间，使重试仍有合理的最小等待），并优先采用服务端的 `Retry-After`（支持 delay-seconds 与 HTTP-date 两种形式）。
+
+`Retry-After` 有 60 秒上限：provider 声明数分钟等待时应当作错误暴露给用户，而不是静默挂起。格式非法的 header 回落到 jitter 退避——让它抛异常会把一个可重试的 429 变成 provider 崩溃。
+
 ## 5. Agent Loop
 
 Agent Loop 是一次 run 的核心状态机。

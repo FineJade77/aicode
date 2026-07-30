@@ -172,17 +172,53 @@ class SessionEvents:
     def retained_count(self) -> int:
         return len(self._events)
 
-    async def subscribe(self, after: int | None = None) -> AsyncIterator[dict[str, Any]]:
+    async def subscribe(
+        self,
+        after: int | None = None,
+        *,
+        idle_timeout: float | None = None,
+    ) -> AsyncIterator[dict[str, Any] | None]:
+        """Yield events after `cursor`, or None each time `idle_timeout` elapses.
+
+        The idle tick lets the caller emit an SSE keep-alive and re-check whether
+        the run it is following can still produce events. Without it a stream
+        waiting on a run that will never emit again blocks until the client's own
+        timeout, and the CLI treats that as a retryable disconnect and reconnects
+        forever.
+        """
         cursor = after or 0
         while True:
+            idle = False
             async with self._condition:
                 while True:
                     event = self._first_event_after(cursor)
                     if event is not None:
                         cursor = int(event.get("event_id") or cursor)
                         break
-                    await self._condition.wait()
+                    if idle_timeout is None:
+                        await self._condition.wait()
+                        continue
+                    try:
+                        await asyncio.wait_for(self._condition.wait(), timeout=idle_timeout)
+                    except TimeoutError:
+                        idle = True
+                        break
+            # Yielding happens outside the condition so the lock is never held
+            # across a suspension point.
+            if idle:
+                yield None
+                continue
             yield dict(event)
+
+    def final_event_for_run(self, run_id: str) -> dict[str, Any] | None:
+        """The retained terminal event for a run, if it is still in the buffer."""
+        for event in reversed(self._events):
+            if event.get("type") == "final" and str(event.get("run_id") or "") == run_id:
+                return dict(event)
+        return None
+
+    def has_events_for_run(self, run_id: str) -> bool:
+        return any(str(event.get("run_id") or "") == run_id for event in self._events)
 
     def _first_event_after(self, after: int) -> dict[str, Any] | None:
         for event in self._events:
@@ -265,6 +301,13 @@ class Session:
         queued = QueuedAgentRun(run_id=self.ids.new("run"), request=request)
         self.agent_queue.put_nowait(queued)
         return queued
+
+    def queued_run_ids(self) -> set[str]:
+        """Run ids waiting to start, so a stream can tell "not yet" from "gone"."""
+        pending = getattr(self.agent_queue, "_queue", None)
+        if pending is None:
+            return set()
+        return {str(getattr(item, "run_id", "")) for item in pending}
 
     def enqueue_steer(self, message: str) -> int:
         self.steer_queue.put_nowait(message)

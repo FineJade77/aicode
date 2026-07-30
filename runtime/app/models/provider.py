@@ -1,10 +1,66 @@
 from __future__ import annotations
 
+import random
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+RETRY_BASE_DELAY_SECONDS = 0.5
+RETRY_MAX_DELAY_SECONDS = 8.0
+# A server-supplied Retry-After is honoured, but not without bound: a provider
+# advertising a multi-minute wait should surface as an error the user can react
+# to rather than a silently hung request.
+RETRY_AFTER_CAP_SECONDS = 60.0
+
+
+def backoff_delay(attempt: int, *, random_source: Any = None) -> float:
+    """Exponential backoff with equal jitter.
+
+    Plain `base * 2**attempt` makes every client that hit the same rate limit
+    retry in lockstep, re-creating the burst that caused it. Jitter spreads them
+    out; the lower half is kept so a retry still waits a sensible minimum
+    instead of hammering immediately.
+    """
+    ceiling = min(RETRY_MAX_DELAY_SECONDS, RETRY_BASE_DELAY_SECONDS * (2**attempt))
+    generator = random_source or random
+    return generator.uniform(ceiling / 2, ceiling)
+
+
+def retry_after_seconds(headers: Any) -> float | None:
+    """Parse a Retry-After header in either delay-seconds or HTTP-date form."""
+    if headers is None:
+        return None
+    raw = ""
+    try:
+        raw = str(headers.get("retry-after") or "").strip()
+    except AttributeError:
+        return None
+    if not raw:
+        return None
+    try:
+        return _capped(float(raw))
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        # A malformed header must fall back to jittered backoff. Letting this
+        # raise would turn a retryable 429 into an unhandled provider crash.
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return _capped((parsed - datetime.now(timezone.utc)).total_seconds())
+
+
+def _capped(seconds: float) -> float | None:
+    if seconds <= 0:
+        return None
+    return min(seconds, RETRY_AFTER_CAP_SECONDS)
 TOOL_ARGUMENT_PARSE_ERROR_KEY = "__aicode_tool_argument_parse_error__"
 TOOL_ARGUMENT_PARSE_ERROR_RAW_LIMIT = 1_000
 

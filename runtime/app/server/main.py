@@ -29,6 +29,10 @@ from app.core.session import AgentSession
 from app.events.sse import encode_sse
 from app.server.auth import auth_middleware
 
+# Idle interval between SSE keep-alive frames. Also the cadence at which a
+# run-scoped stream re-checks whether its run can still emit.
+SSE_IDLE_TIMEOUT_SECONDS = float(os.getenv("AICODE_SSE_IDLE_TIMEOUT_SECONDS", "15") or 15)
+
 application_runtime = build_application_runtime(settings)
 
 
@@ -309,7 +313,27 @@ async def stream_events(session_id: str, request: Request, after: int | None = N
     target_run_id = run_id or session.events.default_run_id()
 
     async def iterator():
-        async for event in session.events.subscribe(after=cursor):
+        # A run-scoped stream must always reach a terminal event. The client
+        # treats a stream that ends without `final` as a retryable disconnect and
+        # reconnects, so a run that can no longer produce events would otherwise
+        # put the CLI in an endless reconnect loop.
+        if target_run_id:
+            terminal = unreachable_run_terminal(session, target_run_id, cursor)
+            if terminal is not None:
+                yield encode_sse(terminal)
+                return
+
+        async for event in session.events.subscribe(after=cursor, idle_timeout=SSE_IDLE_TIMEOUT_SECONDS):
+            if event is None:
+                if target_run_id:
+                    terminal = unreachable_run_terminal(session, target_run_id, cursor)
+                    if terminal is not None:
+                        yield encode_sse(terminal)
+                        return
+                # Proves the connection is alive to both the client and any
+                # intermediary that would otherwise drop an idle stream.
+                yield ": keep-alive\n\n"
+                continue
             if target_run_id and event.get("run_id") != target_run_id:
                 continue
             yield encode_sse(event)
@@ -407,6 +431,43 @@ def bind_message_request_to_session(session: AgentSession, request: MessageReque
 
 def same_workspace(left: str, right: str) -> bool:
     return application_runtime.workspace.same_workspace(left, right)
+
+
+def unreachable_run_terminal(
+    session: AgentSession,
+    run_id: str,
+    cursor: int | None,
+) -> dict[str, Any] | None:
+    """A terminal event to close a stream whose run can no longer emit, else None.
+
+    Two cases produce a stream that would otherwise wait forever:
+
+    * The run already finished at or before the requested cursor — a client that
+      reconnected past its own `final`. Its recorded terminal event is replayed.
+    * The run has no retained events and is neither running nor queued. Event
+      persistence is best-effort, so a `final` can be missing after the session
+      was evicted and rebuilt, and a stale run id looks identical. A synthesized
+      terminal event is emitted so the client stops instead of reconnecting; it is
+      not written to the session, because nothing new actually happened.
+    """
+    terminal = session.events.final_event_for_run(run_id)
+    if terminal is not None:
+        if cursor is not None and int(terminal.get("event_id") or 0) <= cursor:
+            return terminal
+        return None
+    if session.events.has_events_for_run(run_id):
+        return None
+    if session.current_run_id == run_id or run_id in session.queued_run_ids():
+        return None
+    return {
+        "type": "final",
+        "run_id": run_id,
+        "status": "unavailable",
+        "summary": (
+            f"No events are available for run {run_id}. It is not running, and its history is no "
+            "longer retained; start a new run or stream without a run_id filter."
+        ),
+    }
 
 
 def event_cursor(after: int | None, last_event_id: str | None) -> int | None:

@@ -10,6 +10,8 @@ import httpx
 from app.config.settings import AnthropicSettings
 from app.models.provider import (
     RETRYABLE_STATUS,
+    backoff_delay,
+    retry_after_seconds,
     CompletionRequest,
     ContextOverflowError,
     ProviderError,
@@ -99,18 +101,20 @@ class AnthropicProvider:
                         if is_context_overflow_response(response.status_code, body):
                             raise ContextOverflowError(f"anthropic HTTP {response.status_code}: {body}")
                         if response.status_code in RETRYABLE_STATUS and attempt < 2:
-                            raise _Retry(body)
+                            raise _Retry(retry_after_seconds(response.headers))
                         raise ProviderError(f"anthropic HTTP {response.status_code}: {body}")
                     async for event in self._parse_stream(response, request.model):
                         yielded = True
                         yield event
                 return
-            except _Retry:
-                await asyncio.sleep(0.5 * 2**attempt)
+            except _Retry as retry:
+                # Honour Retry-After when present, otherwise back off with jitter
+                # so concurrent clients do not retry in lockstep.
+                await asyncio.sleep(retry.delay if retry.delay is not None else backoff_delay(attempt))
             except httpx.TransportError as exc:
                 if yielded or attempt >= 2:
                     raise ProviderError(f"anthropic request failed: {exc}") from exc
-                await asyncio.sleep(0.5 * 2**attempt)
+                await asyncio.sleep(backoff_delay(attempt))
 
     async def _parse_stream(self, response, fallback_model: str):
         usage = Usage()
@@ -151,4 +155,8 @@ class AnthropicProvider:
 
 
 class _Retry(Exception):
-    pass
+    """Retryable HTTP status, carrying the server's Retry-After if it sent one."""
+
+    def __init__(self, delay: float | None = None) -> None:
+        super().__init__("retryable provider response")
+        self.delay = delay
