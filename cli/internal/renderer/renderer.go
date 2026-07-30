@@ -444,6 +444,12 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		}
 	case "run.budget.exceeded":
 		fmt.Fprint(out, budgetExceededLine(event))
+	case "mcp.server.started":
+		fmt.Fprintf(out, "MCP server %q ready (%d tools)\n", stringValue(event["server"]), countValue(event["tools"]))
+	case "mcp.server.failed":
+		// Reported rather than swallowed: the user configured this server and
+		// would otherwise just find its tools quietly missing.
+		fmt.Fprintf(out, "MCP server %q failed to start: %s\n", stringValue(event["server"]), stringValue(event["error"]))
 	case "tool.denied":
 		fmt.Fprintf(out, "Tool denied by policy: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":
@@ -550,6 +556,13 @@ func approvalOutcomeLabel(event map[string]any, rejected string, timedOut string
 		return timedOut
 	}
 	return rejected
+}
+
+func countValue(value any) int {
+	if items, ok := value.([]any); ok {
+		return len(items)
+	}
+	return 0
 }
 
 func budgetExceededLine(event map[string]any) string {

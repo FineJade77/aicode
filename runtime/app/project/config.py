@@ -21,6 +21,23 @@ class ReviewConfig:
 
 
 @dataclass(slots=True)
+class McpServerRef:
+    """One MCP server declared by the project.
+
+    `env_allowlist` names extra environment variables the server may inherit on
+    top of the minimal default set. It is an allowlist rather than a pass-through
+    so a project cannot hand provider keys to third-party code by declaring a
+    server.
+    """
+
+    name: str
+    command: list[str]
+    env_allowlist: tuple[str, ...] = ()
+    startup_timeout: float = 20.0
+    call_timeout: float = 60.0
+
+
+@dataclass(slots=True)
 class ExecutionConfig:
     """Project-level override for where Agent shell commands run.
 
@@ -82,6 +99,7 @@ class ProjectConfig:
     workspaces: list[WorkspaceRef] = field(default_factory=list)
     review: ReviewConfig = field(default_factory=ReviewConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    mcp_servers: list[McpServerRef] = field(default_factory=list)
 
 
 def load_project_config(workspace: Path) -> ProjectConfig:
@@ -103,6 +121,7 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
     workspaces = raw.get("workspaces")
     review = raw.get("review")
     execution = raw.get("execution")
+    mcp = raw.get("mcp")
 
     return ProjectConfig(
         project_name=as_optional_str(raw.get("projectName")),
@@ -111,7 +130,50 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
         workspaces=parse_workspaces(workspaces),
         review=parse_review_config(review),
         execution=parse_execution_config(execution),
+        mcp_servers=parse_mcp_servers(mcp),
     )
+
+
+def parse_mcp_servers(raw: Any) -> list[McpServerRef]:
+    if not isinstance(raw, dict):
+        return []
+    servers = raw.get("servers")
+    if not isinstance(servers, list):
+        return []
+    refs: list[McpServerRef] = []
+    seen: set[str] = set()
+    for item in servers:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        command = item.get("command")
+        # A server without a usable name or command is skipped rather than
+        # guessed at: launching the wrong process is worse than launching none.
+        if not name or name in seen or not isinstance(command, list) or not command:
+            continue
+        argv = [str(part) for part in command if str(part)]
+        if not argv:
+            continue
+        seen.add(name)
+        env_allowlist = item.get("envAllowlist")
+        refs.append(
+            McpServerRef(
+                name=name,
+                command=argv,
+                env_allowlist=tuple(str(key) for key in env_allowlist) if isinstance(env_allowlist, list) else (),
+                startup_timeout=bounded_float(item.get("startupTimeoutSeconds"), default=20.0, minimum=1.0, maximum=300.0),
+                call_timeout=bounded_float(item.get("callTimeoutSeconds"), default=60.0, minimum=1.0, maximum=600.0),
+            )
+        )
+    return refs
+
+
+def bounded_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(parsed, minimum), maximum)
 
 
 def parse_execution_config(raw: Any) -> ExecutionConfig:

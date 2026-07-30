@@ -311,6 +311,21 @@ Runtime 当前注册的工具：
 
 即使模型绕过 schema 直接请求工具，Policy 层仍会做二次校验。
 
+### 7.1 MCP 外部工具
+
+`.aicode/config.json` 的 `mcp.servers[]` 声明的服务器以子进程启动，通过 stdio 讲 JSON-RPC（`initialize` → `tools/list` → `tools/call`）。它们的工具经 `ToolSpec` 注册进同一个 registry，因此走与内置工具完全相同的 policy gate 和审批链路。
+
+四条安全约束：
+
+- **命名空间**：外部工具暴露为 `mcp__<server>__<tool>`。一个提供名为 `bash` 或 `edit_file` 的服务器否则会悄悄接管 policy 层有专门规则的名字。
+- **不相信服务器的自述**：`read_only=False` 与 `approval="gate"` 是强制的，不从 descriptor 读取。服务器声称自己只读是第三方代码不可验证的主张，采信它等于对外部代码完全跳过审批。因此每次外部工具调用都需要用户确认，只读模式下直接拒绝。
+- **环境隔离**：服务器复用与其它子进程相同的最小环境变量 allowlist（`build_subprocess_environment`），provider key 与 Runtime token 不会传入。项目可通过 `envAllowlist` 追加具体变量名——是允许清单而非透传，否则声明一个服务器就能把密钥交给第三方代码。
+- **故障隔离**：单个服务器启动失败、协议违规或调用超时都不会影响主 loop。启动失败记入 `mcp.server.failed` 事件与 manager status，其余服务器照常工作；调用失败作为 tool error 返回给模型，让这一轮继续。
+
+未注册的工具名仍是硬拒绝（`unknown tool`）：Runtime 无法描述的东西不能运行。
+
+**当前只实现 stdio transport。** HTTP transport 尚未提供——发布一个未经充分测试的第二 transport 比不发布更糟。
+
 ## 8. Policy And Approval
 
 Policy 层对每个工具调用做本地判定：

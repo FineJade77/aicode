@@ -84,6 +84,57 @@
         }
       },
       "additionalProperties": true
+    },
+    "mcp": {
+      "type": "object",
+      "description": "External tool servers spoken to over the Model Context Protocol.",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "command"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Namespace for this server's tools; they are exposed as mcp__<name>__<tool>."
+              },
+              "command": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "description": "argv used to launch the server; it speaks MCP over stdio."
+              },
+              "envAllowlist": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra environment variables the server may inherit, on top of the minimal default set. Provider keys and the Runtime token are never passed."
+              },
+              "startupTimeoutSeconds": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 300,
+                "default": 20
+              },
+              "callTimeoutSeconds": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 600,
+                "default": 60
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

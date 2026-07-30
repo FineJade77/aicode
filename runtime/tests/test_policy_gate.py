@@ -18,8 +18,7 @@ def gate_tool(engine, name, args, mode="default", **kwargs):
     here, so these tests also verify that the declaration is right — the policy
     engine no longer keeps its own copy of the read-only names.
     """
-    spec = DEFAULT_REGISTRY.spec_for(name)
-    return engine.gate(name, args, mode=mode, read_only=bool(spec is not None and spec.read_only), **kwargs)
+    return engine.gate(name, args, mode=mode, spec=DEFAULT_REGISTRY.spec_for(name), **kwargs)
 
 
 def gate_bash(engine, command, mode="default", **kwargs):
@@ -188,7 +187,7 @@ def test_prior_bypass_inputs_still_deny_after_quote_aware_split(engine):
 
 
 def test_gate_reason_is_english(engine):
-    decision = engine.gate("bash", {"command": "rm -rf /"})
+    decision = gate_tool(engine, "bash", {"command": "rm -rf /"})
     assert decision.verdict == "deny"
     assert "not allowed" in decision.reason and all(ord(char) < 128 for char in decision.reason)
     review = gate_tool(engine, "edit_file", {"path": "a.py"}, mode="review")

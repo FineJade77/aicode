@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.paths import is_protected_path
+from app.core.tools import ToolSpec
 from app.security.secrets import contains_known_environment_secret
 
 # Modes in which no write tool may run, whatever the schema exposed. This is the
@@ -100,19 +101,23 @@ class PolicyEngine:
         args: dict[str, Any],
         mode: str = "default",
         *,
-        read_only: bool = False,
+        spec: ToolSpec | None = None,
         workspace: Path | None = None,
         protected_paths: list[str] | None = None,
         trust_level: str = "trusted",
     ) -> GateDecision:
-        """Classify a tool call.
+        """Classify a tool call from the tool's own declaration.
 
-        `read_only` is supplied by the caller from the tool's own `ToolSpec`
-        rather than looked up here. The policy engine previously kept its own
-        copy of the read-only tool names, which had to be kept in step with the
-        registry by hand; one declaration per tool removes that drift.
+        The engine reads `read_only` and `approval` off the `ToolSpec` rather
+        than keeping its own copy of which tools are which; that copy previously
+        had to be kept in step with the registry by hand.
+
+        A missing spec means the tool is not registered, which stays a hard deny:
+        anything the Runtime cannot describe must not run.
         """
-        if read_only:
+        if spec is None:
+            return GateDecision("deny", "high", f"unknown tool: {tool_name}")
+        if spec.read_only:
             return GateDecision("allow", "low")
         if mode in READ_ONLY_MODES:
             return GateDecision(
@@ -120,7 +125,7 @@ class PolicyEngine:
                 "high",
                 f"{mode} mode only permits read-only tools",
             )
-        if tool_name == "edit_file":
+        if spec.approval == "diff":
             return GateDecision("ask", "medium", "file writes require inline diff confirmation")
         if tool_name == "bash":
             return self.gate_bash(
@@ -129,8 +134,10 @@ class PolicyEngine:
                 protected_paths=protected_paths,
                 trust_level=trust_level,
             )
-        return GateDecision("deny", "high", f"unknown tool: {tool_name}")
-
+        # A registered non-read-only tool that is neither an edit nor a shell
+        # command: an externally provided tool such as one exposed over MCP. The
+        # Runtime cannot reason about what it does, so it always asks.
+        return GateDecision("ask", "medium", f"{tool_name} is not a read-only tool and needs confirmation")
     def gate_bash(
         self,
         command: str,

@@ -12,6 +12,8 @@ EVENT_TYPES = frozenset(
         "run.steer.applied",
         "run.cancelled",
         "run.budget.exceeded",
+        "mcp.server.started",
+        "mcp.server.failed",
         "assistant.delta",
         "tool.started",
         "tool.output",

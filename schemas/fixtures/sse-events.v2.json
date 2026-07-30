@@ -189,6 +189,23 @@
     },
     {
       "event_id": 22,
+      "type": "mcp.server.started",
+      "server": "files",
+      "tools": [
+        "mcp__files__read",
+        "mcp__files__stat"
+      ],
+      "message": "MCP server 'files' started with 2 tools."
+    },
+    {
+      "event_id": 23,
+      "type": "mcp.server.failed",
+      "server": "broken",
+      "error": "RuntimeError: server exited during handshake",
+      "message": "MCP server 'broken' did not start; its tools are unavailable."
+    },
+    {
+      "event_id": 24,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

@@ -420,7 +420,7 @@ async def test_a_custom_read_only_tool_is_visible_and_allowed_without_touching_c
     # The policy engine allows it purely because the spec says it is read-only.
     spec = registry.spec_for("inspect_manifest")
     assert spec is not None
-    decision = PolicyEngine().gate("inspect_manifest", {}, mode="review", read_only=spec.read_only)
+    decision = PolicyEngine().gate("inspect_manifest", {}, mode="review", spec=spec)
     assert decision.verdict == "allow"
 
     # And it is dispatched by lookup, not by a name branch.
@@ -438,7 +438,7 @@ async def test_a_custom_write_tool_is_hidden_and_denied_in_read_only_modes(tmp_p
 
     assert "mutate_manifest" not in {schema["name"] for schema in registry.schemas_for_mode("review")}
     spec = registry.spec_for("mutate_manifest")
-    assert PolicyEngine().gate("mutate_manifest", {}, mode="review", read_only=spec.read_only).verdict == "deny"
+    assert PolicyEngine().gate("mutate_manifest", {}, mode="review", spec=spec).verdict == "deny"
     # Never executed: the schema hides it and the policy layer refuses it.
     assert tool.calls == 0
 

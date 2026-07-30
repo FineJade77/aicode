@@ -447,9 +447,9 @@ async def execute_gated(
         call.name,
         call.arguments,
         mode=request.mode,
-        # Read from the tool's own declaration; the policy engine no longer keeps
-        # a second copy of which tools are read-only.
-        read_only=bool(spec is not None and spec.read_only),
+        # The tool's own declaration drives the verdict; the policy engine keeps
+        # no second copy of which tools are read-only or need approval.
+        spec=spec,
         workspace=context.workspace,
         protected_paths=context.protected_paths,
         trust_level=context.trust_level,
