@@ -316,6 +316,32 @@ export AICODE_AUDIT_MAX_BYTES="67108864"   # 默认 64MB，0 表示不轮转
 export AICODE_AUDIT_BACKUP_COUNT="5"       # 保留 audit.jsonl.1 ~ .5
 ```
 
+### 分布式追踪（可选）
+
+审计 JSONL 始终是本地真相来源；追踪是**叠加**的——丢掉追踪后端绝不会代价一条审计记录。
+
+```bash
+pip install 'aicode-runtime[otel]'
+export AICODE_OTEL_ENABLED=1
+export AICODE_OTEL_ENDPOINT="http://localhost:4318/v1/traces"   # 留空则读标准 OTEL_EXPORTER_OTLP_* 变量
+export AICODE_OTEL_SERVICE_NAME="aicode-runtime"
+```
+
+span 层级为 `run → tool.call → execution`，由 Runtime 本来就在记录的 start/finish 事件对派生；其余事件成为所属 span 上的点事件。span 属性复用审计脱敏，因此 provider key 一类值不会离开本机。
+
+OTel SDK 是**可选依赖**：关闭追踪时既不需要也不会加载它。开启但未安装会直接报错并给出安装命令——运维以为在跑而实际没在跑的追踪后端，比没有更糟。
+
+60 秒本地验证（Jaeger）：
+
+```bash
+docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:1.57
+AICODE_OTEL_ENABLED=1 AICODE_OTEL_ENDPOINT=http://localhost:4318/v1/traces aicode daemon start
+aicode "解释这个项目的结构"
+open http://localhost:16686      # 选 service aicode-runtime
+```
+
+Langfuse 等接受 OTLP/HTTP 的后端把 `AICODE_OTEL_ENDPOINT` 指向其 traces 端点即可。
+
 ## Project Trust 与本地执行安全
 
 workspace 默认是 `untrusted`。untrusted workspace 里 Agent 的 **每一条 `bash` 命令都会被路由进 Docker 沙箱**（禁网、workspace 可写挂载、`.env*` 遮蔽、资源受限），而不是在宿主机执行；`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令还需要逐次批准。确认仓库可信后可执行：

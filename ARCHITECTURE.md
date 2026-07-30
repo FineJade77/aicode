@@ -483,6 +483,29 @@ compaction 在每次模型调用前按该路由的 capability 主动发生。摘
 
 敏感字段会尽量脱敏，例如 API key、token、authorization header 和常见 secret 环境变量；已知 Runtime secret 也会从 neutral fields、tool output 和 SSE 中替换。写入 patch 时，审计记录使用 `patch_hash` 等摘要信息辅助追踪，避免不必要地扩散完整敏感内容。
 
+### 15.2 分布式追踪（可选）
+
+`SpanTraceSink` 是 TraceSink 的**装饰器**而非替代：它把每个事件转发给 JSONL sink，同时派生 span。JSONL 仍是真相来源，追踪是叠加的——丢掉追踪后端绝不能代价一条审计记录。
+
+span 由 Runtime 本来就在记录的 start/finish 事件对派生，得到层级 `run → tool.call → execution`：
+
+| 开启 | 关闭 | 关联键 |
+| --- | --- | --- |
+| `run.started` | `session.final` / `run.cancelled` / `session.error` | `run_id`（关闭事件按 session，因为 `session.final` 不带 run_id） |
+| `tool.started` | `tool.finished` | `tool_call_id` |
+| `execution.started` | `execution.finished` | `execution_id` |
+
+其余事件成为最内层 open span 上的点事件。几条不变量：
+
+- 关闭一个 span 会**连带丢弃在它内部打开的 span**——tool span 不能比发出它的 run 活得更久，否则被取消的 run 会永久留下一个 open span，下一个 run 的事件会挂到它下面。
+- 只有 close 事件而没有对应 open（daemon 中途重启）时降级为点事件，而不是去关一个无关的 span。
+- 无 session 的事件（trust 变更、保留策略清理）不进入追踪，JSONL 已经记录。
+- span 属性复用 `audit/redaction.py` 的脱敏：span 会离开本机。
+- 派生过程中的任何异常都被吞掉：坏掉的 exporter 是降级的可观测性信号，不是失败的 run。
+- `aclose` 会关闭仍然打开的 span，避免被杀掉的 daemon 留下悬挂 trace。
+
+OTel SDK 是可选依赖（`pip install 'aicode-runtime[otel]'`），懒加载。span 派生逻辑本身零依赖，因此可以在不安装 SDK 的情况下用内存 emitter 完整测试；`OtelSpanEmitter` 只是一层薄适配。开启追踪但 SDK 缺失会直接报错——运维以为在跑而实际没在跑的追踪后端比没有更糟。
+
 ### 15.1 审计不丢失、不无限增长
 
 审计日志是安全证据链，因此它和普通日志有两条不同的要求：

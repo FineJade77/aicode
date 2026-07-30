@@ -12,6 +12,8 @@ from app.agent.types import AgentRuntime
 from app.application.runtime import ApplicationRuntime
 from app.application.services import SandboxLimits
 from app.audit.logger import AuditLogger
+from app.audit.otel import OtelSpanEmitter, otel_enabled, otel_endpoint, otel_service_name
+from app.audit.spans import SpanTraceSink
 from app.config.settings import Settings
 from app.execution import ExecutionService
 from app.models.router import ModelRouter
@@ -20,12 +22,27 @@ from app.project.trust import TrustStore
 from app.sessions.store import SessionStore
 
 
+def build_trace_sink():
+    """JSONL audit trail, optionally wrapped so it also emits spans.
+
+    The JSONL sink stays the source of truth and tracing is additive: losing a
+    tracing backend must never cost an audit record.
+    """
+    trace = AuditLogger.from_env()
+    if not otel_enabled():
+        return trace
+    return SpanTraceSink(
+        trace,
+        OtelSpanEmitter(endpoint=otel_endpoint(), service_name=otel_service_name()),
+    )
+
+
 def build_application_runtime(settings: Settings) -> ApplicationRuntime:
     """Build all concrete adapters in one place."""
 
     clock = SystemClock()
     ids = UuidGenerator()
-    trace = AuditLogger.from_env()
+    trace = build_trace_sink()
     sessions = SessionStore(clock=clock, ids=ids)
     model = ModelRouter.from_settings(settings)
     execution = ExecutionService(audit=trace)
