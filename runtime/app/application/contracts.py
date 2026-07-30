@@ -4,9 +4,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from app.core.session import AgentSession
+from app.agent.session import AgentSession
 
 APPLICATION_CONTRACT_VERSION = "2.0"
+API_CONTRACT_VERSION = "2.0"
+API_MIN_SUPPORTED_VERSION = "2.0"
 
 RunAdmissionStatus = Literal["accepted", "queued"]
 RunControlStatus = Literal["cancelled", "idle"]
@@ -22,6 +24,22 @@ def application_contract_descriptor() -> dict[str, Any]:
             "turn": "TurnRequest",
             "run": "RunReceipt",
             "run_control": "RunControl",
+        },
+    }
+
+
+def contract_descriptor(runtime_version: str) -> dict[str, Any]:
+    """Versioned contract shared by CLI, HTTP/SSE and future transports."""
+
+    return {
+        "contract_version": API_CONTRACT_VERSION,
+        "min_supported_version": API_MIN_SUPPORTED_VERSION,
+        "runtime_version": runtime_version,
+        "application": application_contract_descriptor(),
+        "transports": {
+            "http": {"version": "v1", "status": "stable"},
+            "sse": {"event_schema": "v2", "status": "stable"},
+            "stdio_jsonrpc": {"version": "2.0", "status": "planned"},
         },
     }
 

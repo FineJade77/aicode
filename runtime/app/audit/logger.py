@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from app.audit.redaction import redact
-from app.core.hashing import stable_hash as _stable_hash
+from app.security import stable_hash as _stable_hash
 
 AUDIT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 5
 
-# Backward-compatible import path; new code imports from app.core.hashing.
+# Backward-compatible import path; new code imports from app.security.
 stable_hash = _stable_hash
 
 

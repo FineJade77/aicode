@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.config.settings import AnthropicSettings
+from app.config import AnthropicSettings
 from app.models.provider import (
     RETRYABLE_STATUS,
     CompletionRequest,

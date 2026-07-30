@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 
-from app.config.settings import Settings
+from app.config import Settings
 from app.models.provider import (
     RETRY_AFTER_CAP_SECONDS,
     RETRY_BASE_DELAY_SECONDS,

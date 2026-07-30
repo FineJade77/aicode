@@ -181,7 +181,7 @@ def source_versions(repository_root: Path) -> dict[str, str]:
         "eval_schema_sha256": eval_schema_digest.hexdigest(),
         "prompt_sha256": sha256_file(repository_root / "runtime/app/agent/prompts.py"),
         "tool_schema_sha256": sha256_file(repository_root / "schemas/tools.schema.json"),
-        "policy_sha256": sha256_file(repository_root / "runtime/app/policy/engine.py"),
+        "policy_sha256": sha256_file(repository_root / "runtime/app/agent/policy.py"),
         "compaction_prompt_version": COMPACTION_PROMPT_VERSION,
     }
 

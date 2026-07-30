@@ -1,7 +1,7 @@
 import pytest
 
-from app.core.tools import ToolSpec
-from app.policy.engine import PolicyEngine
+from app.agent.policy import PolicyEngine
+from app.agent.ports import ToolSpec
 from app.project.config import WorkspaceRef
 from app.tools.base import ToolContext, ToolResult
 from app.tools.command import CommandResult
@@ -456,7 +456,7 @@ def test_specs_are_the_single_source_of_read_only_truth():
     The policy engine used to keep its own set of read-only tool names next to the
     registry's; nothing stopped the two from disagreeing.
     """
-    import app.policy.engine as policy_module
+    import app.agent.policy as policy_module
 
     assert not hasattr(policy_module, "READ_ONLY_TOOLS_V2")
     read_only = {spec.name for spec in DEFAULT_REGISTRY.specs() if spec.read_only}

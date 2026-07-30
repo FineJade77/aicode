@@ -8,17 +8,17 @@ from typing import Any
 
 import pytest
 
-from app.adapters.approvals import SessionApprovalBroker
-from app.adapters.memory import InMemorySessionRepository
-from app.adapters.system import SystemClock
-from app.adapters.tools import DefaultToolRuntime
-from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import AgentLoop
+from app.agent.policy import PolicyEngine
 from app.agent.types import AgentRuntime
-from app.config.settings import Settings
-from app.contracts.api import contract_descriptor
+from app.application.contracts import contract_descriptor
+from app.config import Settings
 from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
+from app.sessions.approvals import SessionApprovalBroker
+from app.sessions.memory import InMemorySessionRepository
+from app.system import SystemClock
+from app.tools.runtime import DefaultToolRuntime
+from app.tools.workspace import LocalWorkspaceRuntime
 from tests.fakes import FakeProvider, text_turn
 
 RUNTIME_APP = Path(__file__).resolve().parents[1] / "app"
@@ -63,7 +63,7 @@ class Request:
         self.mode = "default"
 
 
-def test_agent_core_import_has_no_transport_or_infrastructure_side_effects() -> None:
+def test_agent_import_has_no_transport_or_concrete_runtime_side_effects() -> None:
     code = """
 import sys
 from app.agent.loop import AgentLoop
@@ -71,17 +71,17 @@ forbidden = [
     name for name in sys.modules
     if name == "fastapi"
     or name.startswith("app.server")
-    or name.startswith("app.adapters")
-    or name.startswith("app.sessions")
-    or name.startswith("app.tools")
-    or name.startswith("app.project")
+    or name == "app.bootstrap"
+    or name.startswith("app.sessions.store")
+    or name.startswith("app.tools.runtime")
+    or name.startswith("app.tools.workspace")
 ]
 assert not forbidden, forbidden
 """
     subprocess.run([sys.executable, "-c", code], cwd=RUNTIME_APP.parent, check=True)
 
 
-def test_application_contract_import_has_no_transport_or_adapter_side_effects() -> None:
+def test_application_contract_import_has_no_transport_or_bootstrap_side_effects() -> None:
     code = """
 import sys
 from app.application import TurnRequest
@@ -90,27 +90,35 @@ forbidden = [
     name for name in sys.modules
     if name == "fastapi"
     or name.startswith("app.server")
-    or name.startswith("app.adapters")
+    or name == "app.bootstrap"
 ]
 assert not forbidden, forbidden
 """
     subprocess.run([sys.executable, "-c", code], cwd=RUNTIME_APP.parent, check=True)
 
 
-def test_application_and_agent_layers_do_not_import_transports_or_adapters() -> None:
-    forbidden = ("fastapi", "app.server", "app.adapters", "app.sessions", "app.tools", "app.project")
-    for package in ("agent", "core"):
-        for path in (RUNTIME_APP / package).glob("*.py"):
-            imports = imported_modules(path)
-            assert not [name for name in imports if name.startswith(forbidden)], path
+def test_agent_and_application_do_not_import_transport_or_bootstrap() -> None:
+    agent_forbidden = (
+        "fastapi",
+        "app.server",
+        "app.bootstrap",
+        "app.sessions.store",
+        "app.tools.runtime",
+        "app.tools.workspace",
+    )
+    for path in (RUNTIME_APP / "agent").glob("*.py"):
+        imports = imported_modules(path)
+        assert not [name for name in imports if name.startswith(agent_forbidden)], path
 
     for path in (RUNTIME_APP / "application").glob("*.py"):
         imports = imported_modules(path)
-        assert not [name for name in imports if name.startswith(("fastapi", "app.server", "app.adapters"))], path
+        assert not [
+            name for name in imports if name.startswith(("fastapi", "app.server", "app.bootstrap"))
+        ], path
 
 
 @pytest.mark.asyncio
-async def test_agent_core_runs_with_fake_model_and_in_memory_session(tmp_path: Path) -> None:
+async def test_agent_runs_with_fake_model_and_in_memory_session(tmp_path: Path) -> None:
     trace = MemoryTrace()
     model = ModelRouter(primary=FakeProvider([text_turn("No changes needed")]), settings=Settings())
     runtime = AgentRuntime(

@@ -11,12 +11,12 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-from app.config.settings import settings
-from app.core.tools import ToolSpec
+from app.agent.ports import ToolSpec
+from app.config import settings
 from app.execution.docker import docker_available, missing_image_hint
 from app.execution.models import ResourceLimits
 from app.project.config import load_project_config
-from app.security.secrets import redact_known_environment_secrets
+from app.security import redact_known_environment_secrets
 from app.tools.base import (
     IGNORED_DIRS,
     Tool,

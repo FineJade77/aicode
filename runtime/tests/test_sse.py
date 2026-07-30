@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.events.sse import encode_sse
+from app.events import encode_sse
 from app.server import main as server
 from app.sessions.store import Session, SessionEvents
 

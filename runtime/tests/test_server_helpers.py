@@ -4,19 +4,15 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from app.adapters.approvals import SessionApprovalBroker
-from app.adapters.system import SystemClock
-from app.adapters.tools import DefaultToolRuntime
-from app.adapters.workspace import LocalWorkspaceRuntime
+from app.agent.policy import PolicyEngine
 from app.agent.types import AgentRuntime
 from app.application.contracts import TurnRequest
 from app.application.errors import Conflict
 from app.application.services import RunCoordinator
 from app.audit.logger import AuditLogger
-from app.config.settings import Settings
+from app.config import Settings
 from app.execution.models import ExecutionResult, ExecutionStatus
 from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
 from app.project.detect import detect_test_command
 from app.project.trust import TrustStore
 from app.server import main as server
@@ -38,7 +34,11 @@ from app.server.main import (
     review_rules,
     trust_project,
 )
+from app.sessions.approvals import SessionApprovalBroker
 from app.sessions.store import Session, SessionStore
+from app.system import SystemClock
+from app.tools.runtime import DefaultToolRuntime
+from app.tools.workspace import LocalWorkspaceRuntime
 from tests.fakes import FakeProvider, build_test_runtime, text_turn
 
 

@@ -1,6 +1,11 @@
+"""Security helpers for secrets, sensitive values, and protected paths."""
+
 from __future__ import annotations
 
+import hashlib
 import os
+from fnmatch import fnmatch
+from pathlib import Path
 from typing import Any
 
 SENSITIVE_ENV_FRAGMENTS = {
@@ -19,6 +24,23 @@ SENSITIVE_ENV_FRAGMENTS = {
     "TOKEN",
 }
 MIN_SECRET_LENGTH = 6
+
+
+def stable_hash(value: str | bytes) -> str:
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    return hashlib.sha256(value).hexdigest()
+
+
+def is_protected_path(rel_path: str, protected_paths: list[str]) -> bool:
+    normalized = rel_path.replace("\\", "/").lstrip("./")
+    for pattern in protected_paths:
+        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
+        if fnmatch(normalized, normalized_pattern):
+            return True
+        if "/" not in normalized_pattern and Path(normalized).name == normalized_pattern:
+            return True
+    return False
 
 
 def sensitive_env_key(key: str) -> bool:

@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.config.settings import OpenAICompatibleSettings
+from app.config import OpenAICompatibleSettings
 from app.models.openai_compatible import OpenAICompatibleProvider, to_openai_messages, to_openai_tools
 from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ContextOverflowError, ProviderError
 

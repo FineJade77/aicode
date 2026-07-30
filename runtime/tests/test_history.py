@@ -11,7 +11,7 @@ from app.agent.history import (
 from app.agent.types import AgentRuntime
 from app.application.services import ContextService
 from app.audit.logger import AuditLogger
-from app.config.settings import Settings
+from app.config import Settings
 from app.models.provider import ProviderError
 from app.models.router import ModelRouter
 from app.sessions.store import COMPACTION_SCHEMA_VERSION, SessionStore

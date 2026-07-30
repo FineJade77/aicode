@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.core.tools import ToolSpec
+from app.agent.ports import ToolSpec
 from app.tools.base import ToolContext, ToolResult
 from app.tools.mcp.client import StdioMcpServer
 from app.tools.mcp.protocol import McpProtocolError, tool_result_text

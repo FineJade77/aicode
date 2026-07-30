@@ -1,9 +1,11 @@
+"""Concrete tool runtime exposed to the agent."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from app.core.tools import ToolSpec
+from app.agent.ports import ToolSpec
 from app.tools.base import ToolContext, ToolResult, is_protected_path
 from app.tools.edit import apply_edit, build_edit_proposal
 from app.tools.registry import ToolRegistry, build_default_registry, build_tool_context

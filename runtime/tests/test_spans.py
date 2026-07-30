@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from app.adapters.composition import build_trace_sink
 from app.audit import otel
 from app.audit.logger import AuditLogger
 from app.audit.spans import SpanTraceSink
+from app.bootstrap import build_trace_sink
 
 
 @dataclass
@@ -255,7 +255,7 @@ def test_enabling_tracing_without_the_sdk_fails_loudly(monkeypatch: pytest.Monke
     def missing_sdk(*_args, **_kwargs):
         raise RuntimeError(otel.INSTALL_HINT)
 
-    monkeypatch.setattr("app.adapters.composition.OtelSpanEmitter", missing_sdk)
+    monkeypatch.setattr("app.bootstrap.OtelSpanEmitter", missing_sdk)
 
     with pytest.raises(RuntimeError) as excinfo:
         build_trace_sink()
@@ -269,7 +269,7 @@ def test_enabled_tracing_wraps_the_audit_sink_rather_than_replacing_it(
 ) -> None:
     monkeypatch.setenv(otel.OTEL_ENABLED_ENV, "1")
     monkeypatch.setenv("AICODE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("app.adapters.composition.OtelSpanEmitter", lambda **_kwargs: RecordingEmitter())
+    monkeypatch.setattr("app.bootstrap.OtelSpanEmitter", lambda **_kwargs: RecordingEmitter())
 
     sink = build_trace_sink()
 

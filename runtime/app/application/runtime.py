@@ -4,7 +4,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.loop import AgentLoop
+from app.agent.ports import (
+    Clock,
+    ExecutionRuntime,
+    ModelRuntime,
+    ProjectTrustRepository,
+    SessionRepository,
+    TraceSink,
+    UsageRuntime,
+    WorkspaceRuntime,
+)
 from app.agent.types import AgentRuntime
+from app.application.contracts import contract_descriptor
 from app.application.services import (
     ApprovalService,
     ContextService,
@@ -15,17 +26,6 @@ from app.application.services import (
     SandboxLimits,
     SessionService,
     TraceService,
-)
-from app.contracts.api import contract_descriptor
-from app.core.ports import (
-    Clock,
-    ExecutionRuntime,
-    ModelRuntime,
-    ProjectTrustRepository,
-    SessionRepository,
-    TraceSink,
-    UsageRuntime,
-    WorkspaceRuntime,
 )
 
 

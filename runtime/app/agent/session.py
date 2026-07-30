@@ -1,3 +1,5 @@
+"""Session contracts and value types used by the agent loop."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

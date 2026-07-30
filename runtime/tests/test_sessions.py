@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.session import CompactionEntry
+from app.agent.session import CompactionEntry
 from app.sessions.store import (
     COMPACTION_SCHEMA_VERSION,
     MIGRATIONS,

@@ -34,7 +34,7 @@ include = ["app*"]
 [tool.mypy]
 python_version = "3.11"
 files = ["app"]
-# Deliberately not `strict`. The goal is to make the ports/adapters boundary
+# Deliberately not `strict`. The goal is to make the dependency boundaries
 # actually checked, not to chase annotations through every helper at once. The
 # Agent Core and contract modules below are held to a higher bar because that is
 # where an unchecked `Any` costs the most.
@@ -45,7 +45,7 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["app.core.*", "app.application.*", "app.agent.types"]
+module = ["app.agent.*", "app.application.*"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 

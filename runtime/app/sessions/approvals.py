@@ -1,9 +1,11 @@
+"""Session-backed approval handling for agent tool calls."""
+
 from __future__ import annotations
 
 import os
 from typing import Any
 
-from app.core.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, AgentSession, ApprovalDecision
+from app.agent.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, AgentSession, ApprovalDecision
 
 
 class SessionApprovalBroker:

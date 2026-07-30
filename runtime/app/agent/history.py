@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.session import COMPACTION_SCHEMA_VERSION, AgentSession, CompactionEntry
+from app.agent.session import COMPACTION_SCHEMA_VERSION, AgentSession, CompactionEntry
 from app.models.provider import ModelCapability, ProviderError
-from app.security.secrets import redact_known_environment_secrets
+from app.security import redact_known_environment_secrets
 
 HISTORY_TOKEN_BUDGET = 60_000
 HARD_BUDGET_FACTOR = 1.5

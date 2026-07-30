@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.models.provider import CompletionResult
-from app.security.secrets import redact_known_environment_secrets
+from app.security import redact_known_environment_secrets
 
 
 @dataclass(slots=True)

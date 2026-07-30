@@ -1,3 +1,5 @@
+"""Agent tool execution policy and approval decisions."""
+
 from __future__ import annotations
 
 import os
@@ -8,9 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.core.paths import is_protected_path
-from app.core.tools import ToolSpec
-from app.security.secrets import contains_known_environment_secret
+from app.agent.ports import ToolSpec
+from app.security import contains_known_environment_secret, is_protected_path
 
 # Modes in which no write tool may run, whatever the schema exposed. This is the
 # hard enforcement layer for the case where a client bypasses the tool schema.

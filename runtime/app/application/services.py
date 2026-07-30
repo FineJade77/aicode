@@ -8,6 +8,17 @@ from typing import Any
 
 from app.agent.history import ContextManager, latest_valid_compaction
 from app.agent.loop import AgentLoop
+from app.agent.ports import (
+    Clock,
+    ExecutionRuntime,
+    ModelRuntime,
+    ProjectTrustRepository,
+    SessionRepository,
+    TraceSink,
+    UsageRuntime,
+    WorkspaceRuntime,
+)
+from app.agent.session import AgentSession
 from app.agent.types import AgentRuntime
 from app.application.contracts import (
     CompactionReceipt,
@@ -18,19 +29,8 @@ from app.application.contracts import (
     TurnRequest,
 )
 from app.application.errors import Conflict, InvalidRequest, NotFound, ProviderUnavailable
-from app.core.hashing import stable_hash
-from app.core.ports import (
-    Clock,
-    ExecutionRuntime,
-    ModelRuntime,
-    ProjectTrustRepository,
-    SessionRepository,
-    TraceSink,
-    UsageRuntime,
-    WorkspaceRuntime,
-)
-from app.core.session import AgentSession
 from app.execution import ExecutionRequest, ResourceLimits
+from app.security import stable_hash
 
 
 class SessionService:

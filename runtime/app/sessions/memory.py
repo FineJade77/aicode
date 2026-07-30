@@ -1,8 +1,10 @@
+"""In-memory session repository used by tests and embedded runtimes."""
+
 from __future__ import annotations
 
-from app.adapters.system import SystemClock, UuidGenerator
-from app.core.ports import Clock, IdGenerator
+from app.agent.ports import Clock, IdGenerator
 from app.sessions.store import Session
+from app.system import SystemClock, UuidGenerator
 
 
 class InMemorySessionRepository:

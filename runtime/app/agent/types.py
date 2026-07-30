@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.core.ports import (
+from app.agent.ports import (
     ApprovalBroker,
     Clock,
     ExecutionRuntime,

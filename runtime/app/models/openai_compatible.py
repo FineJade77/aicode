@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from app.config.settings import OpenAICompatibleSettings
+from app.config import OpenAICompatibleSettings
 from app.models.provider import (
     RETRYABLE_STATUS,
     CompletionRequest,

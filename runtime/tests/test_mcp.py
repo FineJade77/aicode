@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from app.core.tools import ToolSpec
-from app.policy.engine import PolicyEngine
+from app.agent.policy import PolicyEngine
+from app.agent.ports import ToolSpec
 from app.project.config import parse_project_config
 from app.tools.base import ToolContext
 from app.tools.mcp import McpManager, McpServerConfig, qualified_tool_name, spec_from_mcp

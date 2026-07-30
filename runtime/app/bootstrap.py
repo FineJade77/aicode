@@ -1,25 +1,27 @@
+"""Application composition root."""
+
 from __future__ import annotations
 
 import os
 
-from app.adapters.approvals import SessionApprovalBroker
-from app.adapters.system import SystemClock, UuidGenerator
-from app.adapters.tools import DefaultToolRuntime
-from app.adapters.usage import JsonlUsageRuntime
-from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.history import ContextManager
+from app.agent.policy import PolicyEngine
 from app.agent.types import AgentRuntime
 from app.application.runtime import ApplicationRuntime
 from app.application.services import SandboxLimits
 from app.audit.logger import AuditLogger
 from app.audit.otel import OtelSpanEmitter, otel_enabled, otel_endpoint, otel_service_name
 from app.audit.spans import SpanTraceSink
-from app.config.settings import Settings
+from app.config import Settings
 from app.execution import ExecutionService
 from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
 from app.project.trust import TrustStore
+from app.sessions.approvals import SessionApprovalBroker
 from app.sessions.store import SessionStore
+from app.system import SystemClock, UuidGenerator
+from app.tools.runtime import DefaultToolRuntime
+from app.tools.workspace import LocalWorkspaceRuntime
+from app.usage.store import JsonlUsageRuntime
 
 
 def build_trace_sink():

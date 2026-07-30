@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import Any
+from typing import Any, Protocol
 
-from app.execution.backend import ExecutionBackend
 from app.execution.docker import DockerExecutionBackend
 from app.execution.host import HostExecutionBackend
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus
+
+
+class ExecutionBackend(Protocol):
+    async def execute(self, request: ExecutionRequest) -> ExecutionResult: ...
+
+    async def cancel(self, execution_id: str) -> bool: ...
+
+    async def cancel_all(self) -> None: ...
 
 
 class ExecutionService:

@@ -2,8 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from app.adapters.memory import InMemorySessionRepository
-from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.types import AgentRuntime
 from app.application.contracts import (
     CompactionReceipt,
@@ -14,8 +12,10 @@ from app.application.contracts import (
 )
 from app.application.services import ContextService, RunCoordinator, SessionService
 from app.audit.logger import AuditLogger
-from app.config.settings import Settings
+from app.config import Settings
 from app.models.router import ModelRouter
+from app.sessions.memory import InMemorySessionRepository
+from app.tools.workspace import LocalWorkspaceRuntime
 from tests.fakes import FakeProvider
 
 

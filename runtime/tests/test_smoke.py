@@ -1,4 +1,4 @@
-from app.events.sse import encode_sse
+from app.events import encode_sse
 
 
 def test_encode_sse_contains_event_and_data() -> None:

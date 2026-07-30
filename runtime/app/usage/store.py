@@ -21,6 +21,16 @@ class UsageRecord:
     estimated_cost: float
 
 
+class JsonlUsageRuntime:
+    """Read usage aggregates from the append-only audit JSONL stream."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def summarize(self, *, session_id: str | None = None, day: date | None = None) -> dict[str, Any]:
+        return summarize_usage(self.path, session_id=session_id, day=day)
+
+
 def summarize_usage(audit_path: Path, *, session_id: str | None = None, day: date | None = None) -> dict[str, Any]:
     records = list(read_usage_records(audit_path))
     if session_id is not None:

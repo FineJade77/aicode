@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.security.secrets import redact_known_environment_secrets
+from app.security import redact_known_environment_secrets
 
 SENSITIVE_KEY_FRAGMENTS = {
     "api_key",

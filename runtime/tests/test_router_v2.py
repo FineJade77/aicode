@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.config.settings import ContextSettings, ModelSettings, OpenAICompatibleSettings, PricingSettings, Settings
+from app.config import ContextSettings, ModelSettings, OpenAICompatibleSettings, PricingSettings, Settings
 from app.models.provider import ProviderCapabilityError, ProviderNotConfigured
 from app.models.router import ModelRouter
 from app.usage.pricing import ModelPrice

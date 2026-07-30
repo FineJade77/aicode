@@ -5,7 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.security.secrets import contains_known_environment_secret
+from app.security import contains_known_environment_secret
 from app.tools.base import ToolError, display_path, reject_protected_path, resolve_workspace_path
 
 

@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus
-from app.security.secrets import sensitive_env_key
+from app.security import sensitive_env_key
 
 PROCESS_DRAIN_TIMEOUT_SECONDS = 1.0
 DEFAULT_HOST_ENV_KEYS = {

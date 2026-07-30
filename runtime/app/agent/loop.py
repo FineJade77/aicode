@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.history import ContextManager, persist_message, truncate_tool_output
+from app.agent.policy import PolicyEngine
 from app.agent.prompts import VERIFY_NOTE, budget_note, build_system_prompt
+from app.agent.session import AgentSession, ApprovalDecision
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRequest, AgentRuntime
-from app.core.hashing import stable_hash
-from app.core.session import AgentSession, ApprovalDecision
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     CompletionResult,
@@ -18,7 +18,7 @@ from app.models.provider import (
     ToolCallRequest,
     tool_argument_parse_error,
 )
-from app.policy.engine import PolicyEngine
+from app.security import stable_hash
 
 
 class AgentLoop:

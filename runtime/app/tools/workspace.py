@@ -1,9 +1,11 @@
+"""Workspace inspection exposed to the agent and application services."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.config.settings import settings
+from app.config import settings
 from app.project.config import ProjectConfig, load_project_config
 from app.project.detect import detect_project_command, detect_test_command
 from app.tools.registry import resolve_bash_backend

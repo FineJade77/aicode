@@ -12,11 +12,10 @@ from app.application.contracts import (
     SessionSnapshot,
     SteerReceipt,
     TurnRequest,
+    contract_descriptor,
 )
-from app.config.settings import Settings
-from app.contracts.api import contract_descriptor
-from app.events.sse import encode_sse
-from app.events.types import EVENT_TYPES
+from app.config import Settings
+from app.events import EVENT_TYPES, encode_sse
 from app.execution.models import ExecutionStatus
 from app.models.router import ModelRouter
 from app.server.main import (

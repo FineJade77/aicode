@@ -8,14 +8,13 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.adapters.composition import build_application_runtime
-from app.application.contracts import TurnRequest
+from app.agent.session import AgentSession
+from app.application.contracts import TurnRequest, contract_descriptor
 from app.application.errors import ApplicationError
 from app.application.runtime import ApplicationRuntime
-from app.config.settings import settings
-from app.contracts.api import contract_descriptor
-from app.core.session import AgentSession
-from app.events.sse import encode_sse
+from app.bootstrap import build_application_runtime
+from app.config import settings
+from app.events import encode_sse
 from app.server.auth import auth_middleware
 
 # Idle interval between SSE keep-alive frames. Also the cadence at which a

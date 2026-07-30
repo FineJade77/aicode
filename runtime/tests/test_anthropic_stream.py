@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.config.settings import AnthropicSettings
+from app.config import AnthropicSettings
 from app.models.anthropic import AnthropicProvider, to_anthropic_messages
 from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ContextOverflowError, ProviderError
 

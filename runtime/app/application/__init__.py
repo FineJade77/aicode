@@ -6,6 +6,8 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
+    "API_CONTRACT_VERSION": ("app.application.contracts", "API_CONTRACT_VERSION"),
+    "API_MIN_SUPPORTED_VERSION": ("app.application.contracts", "API_MIN_SUPPORTED_VERSION"),
     "APPLICATION_CONTRACT_VERSION": ("app.application.contracts", "APPLICATION_CONTRACT_VERSION"),
     "AgentRunState": ("app.application.contracts", "AgentRunState"),
     "CompactionReceipt": ("app.application.contracts", "CompactionReceipt"),
@@ -14,6 +16,7 @@ _EXPORTS = {
     "SessionSnapshot": ("app.application.contracts", "SessionSnapshot"),
     "SteerReceipt": ("app.application.contracts", "SteerReceipt"),
     "TurnRequest": ("app.application.contracts", "TurnRequest"),
+    "contract_descriptor": ("app.application.contracts", "contract_descriptor"),
     "ApplicationRuntime": ("app.application.runtime", "ApplicationRuntime"),
     "ApprovalService": ("app.application.services", "ApprovalService"),
     "ContextService": ("app.application.services", "ContextService"),

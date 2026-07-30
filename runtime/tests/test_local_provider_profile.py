@@ -12,18 +12,18 @@ from typing import Any
 import httpx
 import pytest
 
-from app.adapters.approvals import SessionApprovalBroker
-from app.adapters.system import SystemClock
-from app.adapters.tools import DefaultToolRuntime
-from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import run_turn_safely
+from app.agent.policy import PolicyEngine
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
-from app.config.settings import ModelSettings, OpenAICompatibleSettings, Settings
+from app.config import ModelSettings, OpenAICompatibleSettings, Settings
 from app.models.openai_compatible import OpenAICompatibleProvider
 from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
+from app.sessions.approvals import SessionApprovalBroker
 from app.sessions.store import SessionStore
+from app.system import SystemClock
+from app.tools.runtime import DefaultToolRuntime
+from app.tools.workspace import LocalWorkspaceRuntime
 
 
 class Request:

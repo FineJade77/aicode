@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.core.paths import is_protected_path
-from app.core.tools import ToolSpec
+from app.agent.ports import ToolSpec
 from app.project.config import WorkspaceRef, default_protected_paths
+from app.security import is_protected_path
 
 
 @dataclass(slots=True)

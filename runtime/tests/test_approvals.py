@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.core.session import ApprovalDecision
+from app.agent.session import ApprovalDecision
 from app.sessions.store import Session
 
 

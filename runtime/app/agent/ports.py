@@ -1,12 +1,34 @@
+"""Dependency interfaces consumed by the agent and application services."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
-from app.core.session import AgentSession
-from app.core.tools import ToolSpec
+from app.agent.session import AgentSession
 from app.models.provider import CompletionResult, ModelCapability
+
+ApprovalMode = Literal["none", "gate", "diff"]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    """Metadata shared by providers, policy decisions, and tool execution."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    read_only: bool
+    approval: ApprovalMode = "gate"
+    hidden_in_modes: frozenset[str] = field(default_factory=frozenset)
+
+    def to_schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "input_schema": self.input_schema}
+
+    def visible_in(self, mode: str) -> bool:
+        return mode not in self.hidden_in_modes
 
 
 @runtime_checkable

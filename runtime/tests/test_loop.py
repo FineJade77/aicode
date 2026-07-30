@@ -4,14 +4,11 @@ import time
 
 import pytest
 
-from app.adapters.approvals import SessionApprovalBroker
-from app.adapters.system import SystemClock
-from app.adapters.tools import DefaultToolRuntime
-from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.loop import complete_with_compaction, consecutive_tool_groups, run_turn
+from app.agent.policy import PolicyEngine
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
-from app.config.settings import Settings
+from app.config import Settings
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     ContextOverflowError,
@@ -20,9 +17,12 @@ from app.models.provider import (
     Usage,
 )
 from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
 from app.project.trust import TrustStore
+from app.sessions.approvals import SessionApprovalBroker
 from app.sessions.store import SessionStore
+from app.system import SystemClock
+from app.tools.runtime import DefaultToolRuntime
+from app.tools.workspace import LocalWorkspaceRuntime
 from app.usage.pricing import ModelPrice
 from tests.fakes import FakeProvider, text_turn, tool_turn
 

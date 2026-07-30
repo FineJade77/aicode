@@ -1,9 +1,9 @@
 import json
 
-from app.adapters.workspace import LocalWorkspaceRuntime
 from app.agent.prompts import build_system_prompt
 from app.agent.turn import TurnBudget, assistant_message, tool_message, user_message, user_note
 from app.models.provider import CompletionResult, ToolCallRequest
+from app.tools.workspace import LocalWorkspaceRuntime
 
 
 class FakeRequest:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from app.config.settings import Settings
+from app.config import Settings
 from app.models.anthropic import AnthropicProvider
 from app.models.openai_compatible import OpenAICompatibleProvider
 from app.models.provider import (

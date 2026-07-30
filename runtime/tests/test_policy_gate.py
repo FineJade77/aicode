@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from app.policy.engine import PolicyEngine
+from app.agent.policy import PolicyEngine
 from app.tools.registry import DEFAULT_REGISTRY
 
 

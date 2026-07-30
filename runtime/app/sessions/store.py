@@ -12,12 +12,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.adapters.system import SystemClock, UuidGenerator
-from app.core.ports import Clock, IdGenerator
-from app.core.session import COMPACTION_SCHEMA_VERSION as CORE_COMPACTION_SCHEMA_VERSION
-from app.core.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalDecision, CompactionEntry
-from app.events.types import validate_event
-from app.security.secrets import redact_known_environment_secrets
+from app.agent.ports import Clock, IdGenerator
+from app.agent.session import COMPACTION_SCHEMA_VERSION as CORE_COMPACTION_SCHEMA_VERSION
+from app.agent.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalDecision, CompactionEntry
+from app.events import validate_event
+from app.security import redact_known_environment_secrets
+from app.system import SystemClock, UuidGenerator
 
 DEFAULT_SESSION_EVENT_LIMIT = 2_000
 MAX_TRANSIENT_RETAINED_EVENTS = 200
