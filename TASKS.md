@@ -394,7 +394,7 @@
 
 - 此前每次数据库调用都新开一个 rollback-journal 连接且 `synchronous=FULL`，**实测一条消息写入 5.175ms**，全部发生在事件循环上——而同一循环正在向 SSE 推送 `assistant.delta`；一次 20 条消息的 turn 意味着约 100ms 循环阻塞。
 - 改为复用单个连接，`journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=5000`，**实测降到 1.060ms（约 4.9x）**。`_connect()` 改为 contextmanager 以保持所有调用点写法不变；连接同时被事件循环与 write-behind 工作线程使用，因此 `check_same_thread=False` 搭配一把覆盖整个事务的锁。
-- **偏离原计划**：未把 `append_message` 改成 `asyncio.to_thread`。测量后剩余成本约 1.1ms，而改成异步需要让 `persist_message` 与 `AgentSession` 协议一并异步化；1ms 级单次阻塞对 SSE 流式输出已不构成可感知影响，收益不足以支撑这个扩散。理由写入 `ARCHITECTURE.md` 14.1，便于后续复核该判断。
+- **偏离原计划**：未把 `append_message` 改成 `asyncio.to_thread`。测量后剩余成本约 1.1ms，而改成异步需要让 `persist_message` 与 `AgentSession` 协议一并异步化；1ms 级单次阻塞对 SSE 流式输出已不构成可感知影响，收益不足以支撑这个扩散。理由写入 `ARCHITECTURE.md` 14.2（SQLite 写入路径），便于后续复核该判断。
 - 新增 WAL pragma、连接复用、并发写读不出现 `database is locked`、`aclose` 释放连接四项测试。
 - 验证：Python 325 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、clean-home install E2E 通过。
 

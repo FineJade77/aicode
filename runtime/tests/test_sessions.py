@@ -4,7 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from app.sessions.store import Session, SessionEvents, SessionStore, normalize_cache_limit, normalize_event_limit
+from app.sessions.store import (
+    MIGRATIONS,
+    SCHEMA_VERSION,
+    SchemaVersionError,
+    Session,
+    SessionEvents,
+    SessionStore,
+    normalize_cache_limit,
+    normalize_event_limit,
+)
 
 
 def test_session_store_persists_sessions_and_messages(tmp_path: Path) -> None:
@@ -593,3 +602,111 @@ async def test_session_store_aclose_releases_the_connection(tmp_path: Path) -> N
     await store.aclose()
 
     assert store._conn is None
+
+
+def test_fresh_database_lands_on_the_current_schema_version(tmp_path: Path) -> None:
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    store.create(workspace=str(tmp_path))
+
+    with store._connect() as conn:
+        assert conn.execute("pragma user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_legacy_database_without_user_version_is_migrated_in_place(tmp_path: Path) -> None:
+    """Databases created before the ladder carry user_version=0 while already
+    holding the tables, and must be advanced without losing rows."""
+    db = tmp_path / "s.sqlite"
+    legacy = sqlite3.connect(db)
+    legacy.executescript(
+        """
+        create table sessions (
+            session_id text primary key,
+            workspace text not null,
+            created_at text not null,
+            language text
+        );
+        create table messages (
+            id integer primary key autoincrement,
+            session_id text not null,
+            role text not null,
+            payload text not null,
+            created_at text not null
+        );
+        insert into sessions (session_id, workspace, created_at, language)
+        values ('sess_old', '/repo', '2026-01-01T00:00:00+00:00', 'zh');
+        insert into messages (session_id, role, payload, created_at)
+        values ('sess_old', 'user', '{"role":"user","content":"legacy"}', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = SessionStore(path=db)
+    session = store.get("sess_old")
+
+    assert session is not None
+    assert session.workspace == "/repo"
+    assert [message["content"] for message in session.messages] == ["legacy"]
+    with store._connect() as conn:
+        assert conn.execute("pragma user_version").fetchone()[0] == SCHEMA_VERSION
+        columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+        assert "updated_at" in columns
+        assert "language" not in columns
+
+
+def test_database_from_a_newer_build_is_refused(tmp_path: Path) -> None:
+    """Continuing against an unknown schema risks writing rows an older build
+    cannot read back, so refusing is the correct behaviour."""
+    db = tmp_path / "s.sqlite"
+    seeded = SessionStore(path=db)
+    seeded.create(workspace=str(tmp_path))
+    seeded._close_connection()
+    future = sqlite3.connect(db)
+    future.execute(f"pragma user_version = {SCHEMA_VERSION + 1}")
+    future.commit()
+    future.close()
+
+    store = SessionStore(path=db)
+    with pytest.raises(SchemaVersionError) as excinfo:
+        store.create(workspace=str(tmp_path))
+
+    message = str(excinfo.value)
+    assert str(SCHEMA_VERSION + 1) in message
+    assert "Upgrade aicode" in message, "the refusal must tell the user what to do"
+
+
+def test_migrations_are_append_only_and_ordered(tmp_path: Path) -> None:
+    """Renumbering or reordering a shipped migration would desynchronise every
+    database in the field, which records how far it has been advanced."""
+    versions = [version for version, _ in MIGRATIONS]
+    assert versions == sorted(versions)
+    assert versions == list(range(1, len(versions) + 1))
+    assert SCHEMA_VERSION == versions[-1]
+
+
+def test_already_current_but_unversioned_database_is_stamped_without_changes(tmp_path: Path) -> None:
+    """The real upgrade path for existing users.
+
+    A database written by the build just before the ladder already has the final
+    table shape but carries user_version=0. Every migration must be a no-op and
+    the data must be untouched — only the version stamp advances.
+    """
+    db = tmp_path / "s.sqlite"
+    seeded = SessionStore(path=db)
+    session = seeded.create(workspace=str(tmp_path))
+    seeded.append_message(session, {"role": "user", "content": "keep me"})
+    seeded._close_connection()
+    # Simulate the pre-ladder state: correct schema, no version recorded.
+    unversioned = sqlite3.connect(db)
+    unversioned.execute("pragma user_version = 0")
+    unversioned.commit()
+    unversioned.close()
+
+    store = SessionStore(path=db)
+    restored = store.get(session.session_id)
+
+    assert restored is not None
+    assert [message["content"] for message in restored.messages] == ["keep me"]
+    with store._connect() as conn:
+        assert conn.execute("pragma user_version").fetchone()[0] == SCHEMA_VERSION
+        assert conn.execute("select count(*) from messages").fetchone()[0] == 1

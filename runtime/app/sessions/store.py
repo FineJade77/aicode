@@ -27,6 +27,15 @@ DEFAULT_SESSION_CACHE_LIMIT = 200
 COMPACTION_SCHEMA_VERSION = CORE_COMPACTION_SCHEMA_VERSION
 
 
+class SchemaVersionError(RuntimeError):
+    """The database was written by a newer aicode than this one understands.
+
+    Refusing is deliberate. Continuing against an unknown schema risks writing
+    rows an older build cannot read back, or silently ignoring columns a newer
+    build depends on.
+    """
+
+
 @dataclass(slots=True)
 class PendingApproval:
     approval_id: str
@@ -530,59 +539,20 @@ class SessionStore:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.executescript(
-                """
-                create table if not exists sessions (
-                    session_id text primary key,
-                    workspace text not null,
-                    created_at text not null,
-                    updated_at text not null
-                );
-
-                create table if not exists messages (
-                    id integer primary key autoincrement,
-                    session_id text not null,
-                    role text not null,
-                    payload text not null,
-                    created_at text not null,
-                    foreign key (session_id) references sessions(session_id)
-                );
-
-                create index if not exists idx_messages_session_id on messages(session_id, id);
-
-                create table if not exists compactions (
-                    id integer primary key autoincrement,
-                    session_id text not null,
-                    schema_version integer not null,
-                    start_message_id integer not null,
-                    end_message_id integer not null,
-                    summary text not null,
-                    provider text not null,
-                    model text not null,
-                    prompt_version text not null,
-                    before_tokens integer not null,
-                    after_tokens integer not null,
-                    context_window integer not null,
-                    created_at text not null,
-                    foreign key (session_id) references sessions(session_id)
-                );
-
-                create index if not exists idx_compactions_session_id on compactions(session_id, id);
-
-                create table if not exists events (
-                    id integer primary key autoincrement,
-                    session_id text not null,
-                    sequence integer not null,
-                    payload text not null,
-                    created_at text not null,
-                    foreign key (session_id) references sessions(session_id)
-                );
-
-                create unique index if not exists idx_events_session_sequence on events(session_id, sequence);
-            """
-            )
-            self._ensure_updated_at_column(conn)
-            self._remove_language_column(conn)
+            current = int(conn.execute("pragma user_version").fetchone()[0])
+            if current > SCHEMA_VERSION:
+                raise SchemaVersionError(
+                    f"session database at {self.path} uses schema version {current}, but this "
+                    f"aicode build only understands up to {SCHEMA_VERSION}. Upgrade aicode, or point "
+                    f"AICODE_SESSION_DB_PATH at a different database."
+                )
+            for version, migrate in MIGRATIONS:
+                if version > current:
+                    migrate(conn)
+            if current < SCHEMA_VERSION:
+                # Not parameterised because PRAGMA does not accept bindings; the
+                # value is our own module constant, never user input.
+                conn.execute(f"pragma user_version = {SCHEMA_VERSION}")
         self._schema_ready = True
 
     @contextmanager
@@ -898,35 +868,109 @@ class SessionStore:
             events.append(event)
         return events
 
-    def _ensure_updated_at_column(self, conn: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
-        if "updated_at" in columns:
-            return
-        conn.execute("alter table sessions add column updated_at text")
-        conn.execute("update sessions set updated_at = created_at where updated_at is null")
+def _migration_001_base_schema(conn: sqlite3.Connection) -> None:
+    """Base tables and indexes.
 
-    def _remove_language_column(self, conn: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
-        if "language" not in columns:
-            return
-        conn.execute(
-            """
-            create table sessions_without_language (
-                session_id text primary key,
-                workspace text not null,
-                created_at text not null,
-                updated_at text not null
-            )
-            """
+    Kept idempotent (`if not exists`) because databases created before the
+    migration ladder existed carry `user_version = 0` while already holding
+    these tables, and must land on the ladder without being recreated.
+    """
+    conn.executescript(
+        """
+        create table if not exists sessions (
+            session_id text primary key,
+            workspace text not null,
+            created_at text not null,
+            updated_at text not null
+        );
+
+        create table if not exists messages (
+            id integer primary key autoincrement,
+            session_id text not null,
+            role text not null,
+            payload text not null,
+            created_at text not null,
+            foreign key (session_id) references sessions(session_id)
+        );
+
+        create index if not exists idx_messages_session_id on messages(session_id, id);
+
+        create table if not exists compactions (
+            id integer primary key autoincrement,
+            session_id text not null,
+            schema_version integer not null,
+            start_message_id integer not null,
+            end_message_id integer not null,
+            summary text not null,
+            provider text not null,
+            model text not null,
+            prompt_version text not null,
+            before_tokens integer not null,
+            after_tokens integer not null,
+            context_window integer not null,
+            created_at text not null,
+            foreign key (session_id) references sessions(session_id)
+        );
+
+        create index if not exists idx_compactions_session_id on compactions(session_id, id);
+
+        create table if not exists events (
+            id integer primary key autoincrement,
+            session_id text not null,
+            sequence integer not null,
+            payload text not null,
+            created_at text not null,
+            foreign key (session_id) references sessions(session_id)
+        );
+
+        create unique index if not exists idx_events_session_sequence on events(session_id, sequence);
+        """
+    )
+
+
+def _migration_002_sessions_updated_at(conn: sqlite3.Connection) -> None:
+    """Add `sessions.updated_at`, backfilled from `created_at`."""
+    columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+    if "updated_at" in columns:
+        return
+    conn.execute("alter table sessions add column updated_at text")
+    conn.execute("update sessions set updated_at = created_at where updated_at is null")
+
+
+def _migration_003_drop_sessions_language(conn: sqlite3.Connection) -> None:
+    """Drop the retired `sessions.language` column (English-only Runtime)."""
+    columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+    if "language" not in columns:
+        return
+    conn.execute(
+        """
+        create table sessions_without_language (
+            session_id text primary key,
+            workspace text not null,
+            created_at text not null,
+            updated_at text not null
         )
-        conn.execute(
-            """
-            insert into sessions_without_language (rowid, session_id, workspace, created_at, updated_at)
-            select rowid, session_id, workspace, created_at, updated_at from sessions
-            """
-        )
-        conn.execute("drop table sessions")
-        conn.execute("alter table sessions_without_language rename to sessions")
+        """
+    )
+    conn.execute(
+        """
+        insert into sessions_without_language (rowid, session_id, workspace, created_at, updated_at)
+        select rowid, session_id, workspace, created_at, updated_at from sessions
+        """
+    )
+    conn.execute("drop table sessions")
+    conn.execute("alter table sessions_without_language rename to sessions")
+
+
+# Ordered ladder. Append only: never renumber or edit a shipped migration, since
+# databases in the field record how far they have already been advanced.
+MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
+    (1, _migration_001_base_schema),
+    (2, _migration_002_sessions_updated_at),
+    (3, _migration_003_drop_sessions_language),
+]
+
+SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
 def default_session_db_path() -> Path:

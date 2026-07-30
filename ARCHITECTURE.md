@@ -406,7 +406,17 @@ Runtime 持久化以下内容：
 
 compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
-### 14.1 SQLite 写入路径
+### 14.1 Schema 迁移
+
+`PRAGMA user_version` 记录数据库已推进到的版本，`MIGRATIONS` 是一条**只追加**的有序 ladder，启动时只执行缺失的迁移。已发布的迁移不得重编号或修改——现网数据库记录的正是"我已经推进到第几步"。
+
+- 迁移 1（基线表与索引）保持 `if not exists` 幂等：ladder 之前创建的数据库 `user_version=0` 但已持有这些表，必须能落到 ladder 上而不被重建。
+- 迁移 2 / 3 收编了此前两个 bespoke 修补（补 `sessions.updated_at`、删除退役的 `sessions.language`），各自保留存在性检查。
+- `user_version` 高于当前构建支持的版本时**拒绝打开**并抛 `SchemaVersionError`。带着未知 schema 继续运行会写出旧构建读不回的行，或静默忽略新构建依赖的列。
+
+现实中最常见的升级路径是"表结构已是最终形态但没有版本戳"——此时三条迁移全部空转，只有版本戳前进，由 `test_already_current_but_unversioned_database_is_stamped_without_changes` 锁定。
+
+### 14.2 SQLite 写入路径
 
 单个 WAL 连接在整个 Runtime 内复用，参数：`journal_mode=WAL`、`synchronous=NORMAL`、`busy_timeout=5000`。
 
