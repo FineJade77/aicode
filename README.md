@@ -281,6 +281,24 @@ AICODE_HOME=/tmp/aicode-dev aicode "解释当前项目"
 
 如果 daemon 重启或 session 恢复时发现未决 approval，Runtime 会把这些 approval 标记为 expired/rejected，并发出对应事件，避免恢复后一直悬挂等待。
 
+### 列出与清理 session
+
+```bash
+aicode sessions [--limit N] [--offset N]
+aicode sessions prune [--max-sessions N] [--max-age-days N]
+```
+
+列表只返回摘要（含 `message_count`），不再携带每个 session 的全部消息——单个 session 的历史通过 `GET /v1/sessions/{id}` 获取。50 个 session × 40 条消息实测由 69.4ms / 每行 82KB 降到 1.2ms / 每行 438 字符。
+
+保留策略**默认关闭**：静默删除用户的对话历史比数据库无限增长更糟，因此不配置就不清理。
+
+```bash
+export AICODE_SESSION_RETENTION_MAX_SESSIONS="200"   # 0 表示关闭
+export AICODE_SESSION_RETENTION_MAX_AGE_DAYS="90"    # 0 表示关闭
+```
+
+`aicode sessions prune` 不带参数时套用上面的配置；带参数时以参数为准。清理会一并删除对应的 messages、events 和 compactions。**正在运行或有未决 approval 的 session 永不删除**，即使命中了保留条件——它即将写回状态。返回值里的 `retained_live` 就是这样被跳过的数量。
+
 审计日志会记录 session、tool call、approval、edit、usage、final、error、execution 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；Host/Docker execution 都记录 command hash 而不是原始命令。
 
 审计日志是安全证据链，因此**队列满时不丢弃事件**，而是降级为同步写入——丢一条记录会让"没有危险命令的记录"和"没有发生危险命令"变得不可区分。写入失败会重试，持续失败时在 stderr 报告一次并通过 `aicode daemon status` 的 `audit_writer.healthy` 暴露。

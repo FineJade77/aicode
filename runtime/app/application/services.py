@@ -69,11 +69,35 @@ class SessionService:
     def get(self, session_id: str) -> SessionSnapshot:
         return SessionSnapshot.from_session(self.require(session_id))
 
-    def list(self, *, last: bool = False) -> list[SessionSnapshot] | SessionSnapshot | None:
+    def list(
+        self,
+        *,
+        last: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[SessionSnapshot] | SessionSnapshot | None:
         if not last:
-            return [SessionSnapshot.from_mapping(item) for item in self.sessions.list()]
+            return [
+                SessionSnapshot.from_mapping(item)
+                for item in self.sessions.list(limit=limit, offset=offset)
+            ]
         session = self.sessions.last()
         return None if session is None else SessionSnapshot.from_session(session)
+
+    def prune(self, *, max_sessions: int | None = None, max_age_days: int | None = None) -> dict[str, Any]:
+        result = self.sessions.prune(max_sessions=max_sessions, max_age_days=max_age_days)
+        self.trace.record(
+            "session.pruned",
+            data={
+                "status": result["status"],
+                "deleted_sessions": result["deleted_sessions"],
+                "deleted_messages": result["deleted_messages"],
+                "retained_live": result["retained_live"],
+                "max_sessions": max_sessions,
+                "max_age_days": max_age_days,
+            },
+        )
+        return result
 
     def bind_turn(self, session: AgentSession, request: TurnRequest) -> TurnRequest:
         if not self.workspace.same_workspace(session.workspace, request.workspace):

@@ -76,6 +76,20 @@ class CompactResponse(BaseModel):
     compaction: dict[str, Any] | None
 
 
+class PruneSessionsRequest(BaseModel):
+    """Omitted bounds fall back to the configured retention policy."""
+
+    max_sessions: int | None = Field(default=None, ge=0)
+    max_age_days: int | None = Field(default=None, ge=0)
+
+
+class PruneSessionsResponse(BaseModel):
+    status: Literal["ok", "disabled"]
+    deleted_sessions: int
+    deleted_messages: int
+    retained_live: int
+
+
 class MessageRequest(BaseModel):
     message: str
     mode: str = "default"
@@ -251,13 +265,21 @@ async def create_session(request: CreateSessionRequest) -> CreateSessionResponse
 
 
 @app.get("/v1/sessions")
-async def list_sessions(last: bool = False) -> Any:
-    result = session_service().list(last=last)
+async def list_sessions(last: bool = False, limit: int | None = None, offset: int = 0) -> Any:
+    result = session_service().list(last=last, limit=limit, offset=offset)
     if result is None:
         return None
     if isinstance(result, list):
         return [session.to_dict() for session in result]
     return result.to_dict()
+
+
+@app.post("/v1/sessions/prune", response_model=PruneSessionsResponse)
+async def prune_sessions(request: PruneSessionsRequest) -> dict[str, Any]:
+    return session_service().prune(
+        max_sessions=request.max_sessions if request.max_sessions is not None else settings.session_retention.max_sessions,
+        max_age_days=request.max_age_days if request.max_age_days is not None else settings.session_retention.max_age_days,
+    )
 
 
 @app.get("/v1/sessions/{session_id}")

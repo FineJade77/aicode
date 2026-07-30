@@ -304,6 +304,29 @@ func (c Client) ListTrust(ctx context.Context) (TrustListResponse, error) {
 	return out, err
 }
 
+// PruneSessionsResult reports what a retention pass reclaimed. RetainedLive
+// counts sessions that matched a bound but were skipped because a run or an
+// unresolved approval is still holding them.
+type PruneSessionsResult struct {
+	Status          string `json:"status"`
+	DeletedSessions int    `json:"deleted_sessions"`
+	DeletedMessages int    `json:"deleted_messages"`
+	RetainedLive    int    `json:"retained_live"`
+}
+
+func (c Client) PruneSessions(ctx context.Context, maxSessions *int, maxAgeDays *int) (PruneSessionsResult, error) {
+	payload := map[string]any{}
+	if maxSessions != nil {
+		payload["max_sessions"] = *maxSessions
+	}
+	if maxAgeDays != nil {
+		payload["max_age_days"] = *maxAgeDays
+	}
+	var out PruneSessionsResult
+	err := c.postJSON(ctx, "/v1/sessions/prune", payload, &out)
+	return out, err
+}
+
 func (c Client) TrustProject(ctx context.Context, workspace string) (TrustStatus, error) {
 	var out TrustStatus
 	err := c.postJSON(ctx, "/v1/trust", map[string]string{"workspace": workspace}, &out)

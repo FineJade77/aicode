@@ -14,8 +14,8 @@ import (
 	"github.com/FineJade77/aicode/cli/internal/cmd/modelscmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/replcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/resumecmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/runtimeio"
 	"github.com/FineJade77/aicode/cli/internal/cmd/sandboxcmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/sessionscmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/trustcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/usagecmd"
 	"github.com/FineJade77/aicode/cli/internal/config"
@@ -58,7 +58,7 @@ func run(args []string) error {
 	case "config":
 		return configcmd.Run(cfg, args[1:])
 	case "sessions":
-		return runtimeio.RunSimpleGet(cfg, "/v1/sessions")
+		return sessionscmd.Run(cfg, args[1:])
 	case "usage":
 		return usagecmd.Run(cfg, args[1:])
 	case "models":
@@ -111,7 +111,8 @@ Usage:
   aicode --sandbox docker test
   aicode --sandbox docker build
   aicode --sandbox docker lint
-  aicode sessions
+  aicode sessions [--limit N] [--offset N]
+  aicode sessions prune [--max-sessions N] [--max-age-days N]
   aicode resume --last
   aicode resume --last "Continue the previous task"
   aicode resume <session_id> "Continue this session"

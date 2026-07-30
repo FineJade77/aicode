@@ -8,7 +8,7 @@ import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,38 @@ MAX_TRANSIENT_RETAINED_EVENTS = 200
 EVENT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_SESSION_CACHE_LIMIT = 200
 COMPACTION_SCHEMA_VERSION = CORE_COMPACTION_SCHEMA_VERSION
+
+
+def _parsed_timestamp(value: str) -> datetime:
+    """Parse a stored ISO timestamp, treating anything unreadable as ancient.
+
+    A row whose timestamp cannot be parsed is already corrupt; treating it as old
+    makes retention able to clean it up rather than tripping over it forever.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def idle_agent_state() -> dict[str, Any]:
+    """Run state for a session that is not resident in memory.
+
+    Only a cached session can hold a running task, so an absent cache entry is
+    authoritative evidence that nothing is in flight.
+    """
+    return {
+        "running": False,
+        "queued": 0,
+        "pending_steers": 0,
+        "current_run_id": None,
+        "stage": None,
+        "started_at": None,
+        "last_progress_at": None,
+        "elapsed_seconds": None,
+        "stalled_seconds": None,
+    }
 
 
 class SchemaVersionError(RuntimeError):
@@ -195,6 +227,18 @@ class Session:
     ids: IdGenerator = field(default_factory=UuidGenerator, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "workspace": self.workspace,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "messages": self.messages,
+            "approvals": [approval.to_dict() for approval in self.approvals.values()],
+            "agent": self.agent_state(),
+        }
+
+    def agent_state(self) -> dict[str, Any]:
+        """Run state only, so session listings can report it without hydrating history."""
         now = self.clock.now()
         elapsed_seconds = None
         stalled_seconds = None
@@ -203,23 +247,15 @@ class Session:
         if self.current_run_last_progress_at is not None:
             stalled_seconds = max(0, int((now - self.current_run_last_progress_at).total_seconds()))
         return {
-            "session_id": self.session_id,
-            "workspace": self.workspace,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "messages": self.messages,
-            "approvals": [approval.to_dict() for approval in self.approvals.values()],
-            "agent": {
-                "running": self.agent_runner_active(),
-                "queued": self.agent_queue.qsize(),
-                "pending_steers": self.steer_queue.qsize(),
-                "current_run_id": self.current_run_id,
-                "stage": self.current_run_stage,
-                "started_at": self.current_run_started_at.isoformat() if self.current_run_started_at else None,
-                "last_progress_at": self.current_run_last_progress_at.isoformat() if self.current_run_last_progress_at else None,
-                "elapsed_seconds": elapsed_seconds,
-                "stalled_seconds": stalled_seconds,
-            },
+            "running": self.agent_runner_active(),
+            "queued": self.agent_queue.qsize(),
+            "pending_steers": self.steer_queue.qsize(),
+            "current_run_id": self.current_run_id,
+            "stage": self.current_run_stage,
+            "started_at": self.current_run_started_at.isoformat() if self.current_run_started_at else None,
+            "last_progress_at": self.current_run_last_progress_at.isoformat() if self.current_run_last_progress_at else None,
+            "elapsed_seconds": elapsed_seconds,
+            "stalled_seconds": stalled_seconds,
         }
 
     def enqueue_agent_run(self, request: Any) -> QueuedAgentRun:
@@ -417,23 +453,126 @@ class SessionStore:
             self._touch(session)
             return session
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self, *, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
+        """Return session summaries, newest first.
+
+        Deliberately does not load messages, compactions or events. The previous
+        implementation hydrated every message of every session on each call —
+        50 sessions x 40 messages measured 69ms and ~82KB per row, growing
+        without bound — even though the only consumer (`aicode sessions`) shows a
+        listing. Full history is available from `get(session_id)`.
+
+        Summaries are also not written into the in-memory cache: listing is a
+        read-only overview and must not evict live sessions.
+        """
         self._ensure_schema()
         with self._connect() as conn:
+            sql = "select session_id, workspace, created_at, updated_at from sessions order by updated_at desc, rowid desc"
+            params: list[Any] = []
+            if limit is not None:
+                sql += " limit ? offset ?"
+                params.extend([max(0, limit), max(0, offset)])
+            elif offset:
+                sql += " limit -1 offset ?"
+                params.append(max(0, offset))
+            rows = conn.execute(sql, params).fetchall()
+            counts = self._message_counts(conn, [str(row["session_id"]) for row in rows])
+
+        summaries: list[dict[str, Any]] = []
+        for row in rows:
+            session_id = str(row["session_id"])
+            cached = self._sessions.get(session_id)
+            summary = {
+                "session_id": session_id,
+                "workspace": str(row["workspace"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"] or row["created_at"]),
+                "message_count": counts.get(session_id, 0),
+            }
+            # Only a cached session can be running, so an absent cache entry is
+            # authoritative evidence that the session is idle.
+            summary["agent"] = cached.agent_state() if cached is not None else idle_agent_state()
+            summaries.append(summary)
+        return summaries
+
+    def prune(self, *, max_sessions: int | None = None, max_age_days: int | None = None) -> dict[str, Any]:
+        """Delete old sessions and everything that hangs off them.
+
+        Retention is opt-in (both bounds default to disabled). Silently deleting
+        a user's conversation history is worse than an unbounded database, so
+        nothing is removed unless a bound is configured or passed explicitly.
+
+        A session that is live in memory is never deleted, even if it matches a
+        bound: an in-flight run or an unresolved approval would lose the state it
+        is about to write back.
+        """
+        self._ensure_schema()
+        max_sessions = None if not max_sessions or max_sessions < 0 else max_sessions
+        max_age_days = None if not max_age_days or max_age_days < 0 else max_age_days
+        if max_sessions is None and max_age_days is None:
+            return {"status": "disabled", "deleted_sessions": 0, "deleted_messages": 0, "retained_live": 0}
+
+        protected = {
+            session_id
+            for session_id, session in self._sessions.items()
+            if not self._is_evictable(session)
+        }
+
+        with self._connect() as conn:
             rows = conn.execute(
-                "select rowid, session_id, workspace, created_at, updated_at from sessions order by updated_at desc, rowid desc"
+                "select session_id, updated_at from sessions order by updated_at desc, rowid desc"
             ).fetchall()
-            sessions: list[dict[str, Any]] = []
-            for row in rows:
-                session = self._sessions.get(row["session_id"])
-                if session is None:
-                    session = self._session_from_row(row)
-                    self._attach_events(session, self._load_events_with_recovered_approvals(conn, session.session_id))
-                session.messages, session.message_ids = self._load_message_records(conn, session.session_id)
-                session.compactions = self._load_compactions(conn, session.session_id)
-                self._touch(session)
-                sessions.append(session.to_dict())
-            return sessions
+
+            doomed: list[str] = []
+            if max_age_days is not None:
+                cutoff = self.clock.now() - timedelta(days=max_age_days)
+                for row in rows:
+                    if _parsed_timestamp(str(row["updated_at"])) < cutoff:
+                        doomed.append(str(row["session_id"]))
+            if max_sessions is not None and len(rows) > max_sessions:
+                doomed.extend(str(row["session_id"]) for row in rows[max_sessions:])
+
+            retained_live = sorted({session_id for session_id in doomed if session_id in protected})
+            targets = sorted({session_id for session_id in doomed if session_id not in protected})
+            if not targets:
+                return {
+                    "status": "ok",
+                    "deleted_sessions": 0,
+                    "deleted_messages": 0,
+                    "retained_live": len(retained_live),
+                }
+
+            placeholders = ",".join("?" for _ in targets)
+            deleted_messages = conn.execute(
+                f"select count(*) from messages where session_id in ({placeholders})", targets
+            ).fetchone()[0]
+            for table in ("messages", "events", "compactions"):
+                conn.execute(f"delete from {table} where session_id in ({placeholders})", targets)
+            conn.execute(f"delete from sessions where session_id in ({placeholders})", targets)
+
+        for session_id in targets:
+            self._sessions.pop(session_id, None)
+            if self._last_session_id == session_id:
+                self._last_session_id = None
+
+        return {
+            "status": "ok",
+            "deleted_sessions": len(targets),
+            "deleted_messages": int(deleted_messages),
+            "retained_live": len(retained_live),
+        }
+
+    @staticmethod
+    def _message_counts(conn: sqlite3.Connection, session_ids: list[str]) -> dict[str, int]:
+        """One grouped query rather than a COUNT per session."""
+        if not session_ids:
+            return {}
+        placeholders = ",".join("?" for _ in session_ids)
+        rows = conn.execute(
+            f"select session_id, count(*) as total from messages where session_id in ({placeholders}) group by session_id",
+            session_ids,
+        ).fetchall()
+        return {str(row["session_id"]): int(row["total"]) for row in rows}
 
     def last(self) -> Session | None:
         self._ensure_schema()

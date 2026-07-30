@@ -406,6 +406,16 @@ Runtime 持久化以下内容：
 
 compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
+### 14.0 读取形态与保留策略
+
+`GET /v1/sessions` 与 `SessionStore.list()` 只返回摘要（metadata + `message_count` + agent run state），并支持 `limit` / `offset`。此前每次调用都会 hydrate 所有 session 的所有 messages 与 compactions——50 × 40 实测 69.4ms、每行约 82KB，且随使用时间单调增长，而唯一的消费者 `aicode sessions` 只是展示一个列表。改后为 1.2ms、每行 438 字符。单个 session 的完整历史仍由 `get(session_id)` 提供。
+
+列表也**不再写入内存缓存**：列举是只读概览，不应因此驱逐正在运行的 session。
+
+保留策略（`SessionStore.prune`）默认关闭，两个上界都是 0。静默删除用户的对话历史比数据库无限增长更糟，因此不配置就不清理；配置后由 `aicode sessions prune` 或 `POST /v1/sessions/prune` 触发，一并删除对应的 messages / events / compactions。
+
+**正在运行或有未决 approval 的 session 永不删除**，即使命中保留条件——它即将写回状态；这类被跳过的数量通过返回值的 `retained_live` 汇报，而不是静默忽略。
+
 ### 14.1 Schema 迁移
 
 `PRAGMA user_version` 记录数据库已推进到的版本，`MIGRATIONS` 是一条**只追加**的有序 ladder，启动时只执行缺失的迁移。已发布的迁移不得重编号或修改——现网数据库记录的正是"我已经推进到第几步"。

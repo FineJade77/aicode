@@ -51,6 +51,18 @@ class PricingSettings(BaseModel):
     model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
 
 
+class SessionRetentionSettings(BaseModel):
+    """Opt-in bounds on how much session history is kept.
+
+    Both default to 0 (disabled). Silently deleting a user's conversation
+    history is worse than an unbounded database, so retention only acts once the
+    user asks for it.
+    """
+
+    max_sessions: int = Field(default=0, ge=0)
+    max_age_days: int = Field(default=0, ge=0)
+
+
 class BudgetSettings(BaseModel):
     """Cumulative per-turn spend caps.
 
@@ -95,6 +107,7 @@ class Settings(BaseModel):
     context: ContextSettings = ContextSettings()
     execution: ExecutionSettings = ExecutionSettings()
     budget: BudgetSettings = BudgetSettings()
+    session_retention: SessionRetentionSettings = SessionRetentionSettings()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -145,6 +158,10 @@ class Settings(BaseModel):
             budget=BudgetSettings(
                 max_total_tokens=_non_negative_int_env("AICODE_BUDGET_MAX_TOTAL_TOKENS", 1_000_000),
                 max_total_cost=_non_negative_float_env("AICODE_BUDGET_MAX_TOTAL_COST", 5.0),
+            ),
+            session_retention=SessionRetentionSettings(
+                max_sessions=_non_negative_int_env("AICODE_SESSION_RETENTION_MAX_SESSIONS", 0),
+                max_age_days=_non_negative_int_env("AICODE_SESSION_RETENTION_MAX_AGE_DAYS", 0),
             ),
         )
 

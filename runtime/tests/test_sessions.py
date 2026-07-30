@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from app.core.session import CompactionEntry
 from app.sessions.store import (
+    COMPACTION_SCHEMA_VERSION,
     MIGRATIONS,
     SCHEMA_VERSION,
     SchemaVersionError,
@@ -710,3 +712,137 @@ def test_already_current_but_unversioned_database_is_stamped_without_changes(tmp
     with store._connect() as conn:
         assert conn.execute("pragma user_version").fetchone()[0] == SCHEMA_VERSION
         assert conn.execute("select count(*) from messages").fetchone()[0] == 1
+
+
+def test_list_returns_summaries_without_hydrating_history(tmp_path: Path) -> None:
+    """The listing must not carry every message of every session.
+
+    The previous implementation hydrated all history on each call, which grew
+    without bound even though the only consumer shows an overview.
+    """
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    session = store.create(workspace=str(tmp_path))
+    for index in range(5):
+        store.append_message(session, {"role": "user", "content": f"m{index}"})
+
+    rows = store.list()
+
+    assert len(rows) == 1
+    assert "messages" not in rows[0]
+    assert rows[0]["message_count"] == 5
+    assert rows[0]["agent"]["running"] is False
+
+
+def test_list_does_not_populate_the_session_cache(tmp_path: Path) -> None:
+    """Listing is a read-only overview and must not evict live sessions."""
+    db = tmp_path / "s.sqlite"
+    seeded = SessionStore(path=db)
+    seeded.create(workspace=str(tmp_path))
+    seeded._close_connection()
+
+    store = SessionStore(path=db)
+    store.list()
+
+    assert store._sessions == {}
+
+
+def test_list_supports_limit_and_offset(tmp_path: Path) -> None:
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    created = [store.create(workspace=f"/repo{index}") for index in range(5)]
+    newest_first = [session.session_id for session in reversed(created)]
+
+    assert [row["session_id"] for row in store.list(limit=2)] == newest_first[:2]
+    assert [row["session_id"] for row in store.list(limit=2, offset=2)] == newest_first[2:4]
+    assert [row["session_id"] for row in store.list(offset=4)] == newest_first[4:]
+
+
+def test_prune_is_disabled_unless_a_bound_is_given(tmp_path: Path) -> None:
+    """Silently deleting conversation history is worse than an unbounded database."""
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    store.create(workspace=str(tmp_path))
+
+    result = store.prune()
+
+    assert result["status"] == "disabled"
+    assert result["deleted_sessions"] == 0
+    assert len(store.list()) == 1
+
+
+def test_prune_by_max_sessions_keeps_the_newest(tmp_path: Path) -> None:
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    created = [store.create(workspace=f"/repo{index}") for index in range(5)]
+    for session in created:
+        store.append_message(session, {"role": "user", "content": "x"})
+    store._sessions.clear()
+
+    result = store.prune(max_sessions=2)
+
+    assert result["deleted_sessions"] == 3
+    assert result["deleted_messages"] == 3
+    remaining = {row["session_id"] for row in store.list()}
+    assert remaining == {created[-1].session_id, created[-2].session_id}
+
+
+def test_prune_removes_messages_events_and_compactions(tmp_path: Path) -> None:
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    doomed = store.create(workspace="/old")
+    store.append_message(doomed, {"role": "user", "content": "x"})
+    store.append_compaction(
+        doomed,
+        CompactionEntry(
+            compaction_id=None,
+            session_id=doomed.session_id,
+            schema_version=COMPACTION_SCHEMA_VERSION,
+            start_message_id=1,
+            end_message_id=1,
+            summary="- old",
+            provider="fake",
+            model="fake",
+            prompt_version="v1",
+            before_tokens=10,
+            after_tokens=5,
+            context_window=1000,
+        ),
+    )
+    store.create(workspace="/new")
+    store._sessions.clear()
+
+    store.prune(max_sessions=1)
+
+    with store._connect() as conn:
+        for table in ("messages", "events", "compactions"):
+            leftover = conn.execute(
+                f"select count(*) from {table} where session_id = ?", (doomed.session_id,)
+            ).fetchone()[0]
+            assert leftover == 0, f"{table} rows outlived their session"
+
+
+def test_prune_never_deletes_a_session_with_a_pending_approval(tmp_path: Path) -> None:
+    """An unresolved approval means state is about to be written back."""
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    live = store.create(workspace="/live")
+    live.create_approval("edit", {"path": "a.py"})
+    store.create(workspace="/newer")
+
+    result = store.prune(max_sessions=1)
+
+    assert result["deleted_sessions"] == 0
+    assert result["retained_live"] == 1
+    assert store.get(live.session_id) is not None
+
+
+def test_prune_by_max_age_uses_updated_at(tmp_path: Path) -> None:
+    store = SessionStore(path=tmp_path / "s.sqlite")
+    old = store.create(workspace="/old")
+    recent = store.create(workspace="/recent")
+    store._sessions.clear()
+    with store._connect() as conn:
+        conn.execute(
+            "update sessions set updated_at = ? where session_id = ?",
+            ("2020-01-01T00:00:00+00:00", old.session_id),
+        )
+
+    result = store.prune(max_age_days=30)
+
+    assert result["deleted_sessions"] == 1
+    assert [row["session_id"] for row in store.list()] == [recent.session_id]
