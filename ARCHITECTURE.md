@@ -246,6 +246,20 @@ emit run.completed or run.failed
 
 此前 loop 里有一个局部 `history` 列表，每处都成对调用 `history.append(...)` + `persist_message(...)`——但下一轮的返回值会用 `load_history(session)` 整个覆盖它，所以那些 append 对行为零影响。这不是 bug，而是"内存 history 有独立语义"的假象：任何试图只改内存副本而不落库的后续修改都会静默失效。现已删除，session 是唯一来源。
 
+### 5.0.1 工具调用的并发
+
+模型常在一轮里返回多个 `read_file` / `search`；逐个执行会让这一轮的延迟等于它们之和。实测 6 个各 100ms 的读取：**600ms → 126ms**。
+
+只有**连续的**只读调用会成组并发，因此与写操作的相对顺序被保留——模型放在 edit 之后的 read 仍然读到编辑后的内容。只读工具也是唯一安全的并发组，还有第二个原因：它们的 policy 判定是立即 `allow`，因此并发组永远不会同时挂在两个审批提示上。
+
+三条不变量：
+
+- **结果按模型给出的调用顺序写回**，与完成顺序无关。部分 provider 按位置把 tool result 与 call 配对，用完成顺序会破坏下一次请求。
+- 每次调用使用 `ToolContext` 的独立副本。此前 `tool_call_id` 是赋值到共享对象上的，一旦调用重叠就会互相污染审计与 execution 记录。
+- 并发上限 8。一轮可能返回几十个读取，无上限会同时打开大量文件和子进程。
+
+未注册的工具名没有 spec，因此不能假定它无副作用，永远单独成组。
+
 ### 5.1 单轮预算
 
 `TurnBudget` 有三个维度：`max_steps`（40）、`max_total_tokens`、`max_total_cost`。后两个由 `TurnLedger` 在每次 model call 后累加，**参与控制流而不只是上报**——`max_steps` 单独无法约束花费，一个循环调用工具的模型能在 40 步内消耗大量 token，且每步都重发整段历史。

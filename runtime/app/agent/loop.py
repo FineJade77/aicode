@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -129,11 +131,7 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
             session.mark_agent_progress("finalizing")
             break
 
-        for call in result.tool_calls:
-            session.mark_agent_progress(f"tool.{call.name}")
-            output, applied = await execute_gated(session, request, call, runtime, policy, context)
-            applied_edits += applied
-            persist_message(session, tool_message(call.id, output))
+        applied_edits += await execute_tool_calls(session, request, result.tool_calls, runtime, policy, context)
 
     else:
         budget_reason = "steps"
@@ -278,6 +276,99 @@ async def apply_pending_steers(
         }
     )
     return True
+
+
+MAX_PARALLEL_TOOL_CALLS = 8
+
+
+async def execute_tool_calls(
+    session: AgentSession,
+    request: AgentRequest,
+    calls: list[ToolCallRequest],
+    runtime: AgentRuntime,
+    policy: PolicyEngine,
+    context: Any,
+) -> int:
+    """Run one turn's tool calls, overlapping consecutive read-only ones.
+
+    Models routinely return several `read_file`/`search` calls at once; running
+    them one at a time makes the turn's latency the sum of them all.
+
+    Only *consecutive* read-only calls are grouped, so relative order with
+    writes is preserved: a read that the model placed after an edit still
+    observes that edit. Read-only tools are also the only safe group to overlap
+    for a second reason — their policy verdict is an immediate `allow`, so a
+    parallel group can never sit on two approval prompts at once.
+
+    Results are written back in the model's original call order regardless of
+    completion order; tool results are paired to calls positionally by some
+    providers, so completion order would corrupt the next request.
+    """
+    applied_edits = 0
+    for group in consecutive_tool_groups(calls, runtime):
+        if len(group) > 1:
+            session.mark_agent_progress(f"tool.parallel({len(group)})")
+            semaphore = asyncio.Semaphore(MAX_PARALLEL_TOOL_CALLS)
+            outcomes = list(
+                await asyncio.gather(
+                    *(
+                        _execute_with_limit(semaphore, session, request, call, runtime, policy, context)
+                        for call in group
+                    )
+                )
+            )
+        else:
+            session.mark_agent_progress(f"tool.{group[0].name}")
+            outcomes = [await execute_gated(session, request, group[0], runtime, policy, context)]
+
+        for call, (output, applied) in zip(group, outcomes, strict=True):
+            applied_edits += applied
+            persist_message(session, tool_message(call.id, output))
+    return applied_edits
+
+
+async def _execute_with_limit(
+    semaphore: asyncio.Semaphore,
+    session: AgentSession,
+    request: AgentRequest,
+    call: ToolCallRequest,
+    runtime: AgentRuntime,
+    policy: PolicyEngine,
+    context: Any,
+) -> tuple[str, int]:
+    """Bound how many tool calls run at once.
+
+    A model can return dozens of reads in one turn; without a cap they would all
+    open files and subprocesses simultaneously.
+    """
+    async with semaphore:
+        return await execute_gated(session, request, call, runtime, policy, context)
+
+
+def consecutive_tool_groups(
+    calls: list[ToolCallRequest],
+    runtime: AgentRuntime,
+) -> list[list[ToolCallRequest]]:
+    """Split calls into runs that may overlap, preserving the model's order.
+
+    A run of read-only calls becomes one group; every other call is its own
+    group. Grouping only consecutive calls is what keeps read-after-write
+    ordering intact.
+    """
+    groups: list[list[ToolCallRequest]] = []
+    for call in calls:
+        spec = runtime.tools.spec_for(call.name) if runtime.tools is not None else None
+        parallelizable = bool(spec is not None and spec.read_only)
+        if parallelizable and groups and _group_is_parallel(groups[-1], runtime):
+            groups[-1].append(call)
+            continue
+        groups.append([call])
+    return groups
+
+
+def _group_is_parallel(group: list[ToolCallRequest], runtime: AgentRuntime) -> bool:
+    spec = runtime.tools.spec_for(group[0].name) if runtime.tools is not None else None
+    return bool(spec is not None and spec.read_only)
 
 
 async def execute_gated(
@@ -426,8 +517,11 @@ async def execute_gated(
             return f"[{reason}]", 0
 
     session.mark_agent_progress(f"tool.{call.name}")
-    context.tool_call_id = call.id
-    result = await runtime.tools.run(call.name, call.arguments, context)
+    # A per-call copy rather than assigning onto the shared context: overlapping
+    # calls would otherwise race on tool_call_id and mislabel each other's audit
+    # and execution records.
+    call_context = replace(context, tool_call_id=call.id)
+    result = await runtime.tools.run(call.name, call.arguments, call_context)
     if result.success:
         output = truncate_tool_output(call.name, result.text)
         if runtime.trace is not None:

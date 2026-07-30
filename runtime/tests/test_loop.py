@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -7,7 +8,7 @@ from app.adapters.approvals import SessionApprovalBroker
 from app.adapters.system import SystemClock
 from app.adapters.tools import DefaultToolRuntime
 from app.adapters.workspace import LocalWorkspaceRuntime
-from app.agent.loop import complete_with_compaction, run_turn
+from app.agent.loop import complete_with_compaction, consecutive_tool_groups, run_turn
 from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger, stable_hash
 from app.config.settings import Settings
@@ -15,6 +16,7 @@ from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     ContextOverflowError,
     StreamEvent,
+    ToolCallRequest,
     Usage,
 )
 from app.models.router import ModelRouter
@@ -649,3 +651,157 @@ async def test_explicit_rejection_still_reads_as_a_refusal(tmp_path):
     assert "timed out" not in text
     rejected = events_of(session, "edit.rejected")
     assert rejected and rejected[-1]["resolution"] == "rejected"
+
+
+def multi_tool_turn(calls, text=""):
+    """A scripted turn returning several tool calls at once, as models do."""
+    events = [StreamEvent(type="text_delta", text=text)] if text else []
+    events.extend(
+        StreamEvent(type="tool_call", tool_call=ToolCallRequest(id=call_id, name=name, arguments=args))
+        for call_id, name, args in calls
+    )
+    events.append(StreamEvent(type="done", usage=Usage(10, 5), model="fake-model"))
+    return events
+
+
+class SlowToolRuntime(DefaultToolRuntime):
+    """Wraps the real registry, making each call take a measurable amount of time."""
+
+    def __init__(self, delay: float = 0.15) -> None:
+        super().__init__()
+        self.delay = delay
+        self.concurrent = 0
+        self.peak_concurrent = 0
+
+    async def run(self, name, arguments, context):
+        self.concurrent += 1
+        self.peak_concurrent = max(self.peak_concurrent, self.concurrent)
+        try:
+            await asyncio.sleep(self.delay)
+            return await super().run(name, arguments, context)
+        finally:
+            self.concurrent -= 1
+
+
+@pytest.mark.asyncio
+async def test_consecutive_read_only_calls_run_in_parallel(tmp_path):
+    """Latency of a read batch should track the slowest call, not their sum."""
+    for index in range(4):
+        (tmp_path / f"f{index}.py").write_text(f"x = {index}\n", encoding="utf-8")
+    turns = [
+        multi_tool_turn([(f"tc_{i}", "read_file", {"path": f"f{i}.py"}) for i in range(4)]),
+        text_turn("Read them all."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    tools = SlowToolRuntime(delay=0.15)
+    runtime.tools = tools
+    session = make_session(tmp_path)
+
+    started = time.perf_counter()
+    await run_turn(session, Request(tmp_path), runtime)
+    elapsed = time.perf_counter() - started
+
+    assert tools.peak_concurrent == 4, "the four reads must overlap"
+    # Serial would be >= 0.6s; allow generous headroom for the model calls.
+    assert elapsed < 0.45, f"reads did not overlap: {elapsed:.3f}s"
+
+
+@pytest.mark.asyncio
+async def test_tool_results_keep_the_model_call_order(tmp_path):
+    """Some providers pair tool results to calls positionally, so completion
+    order would corrupt the next request."""
+    for index in range(4):
+        (tmp_path / f"f{index}.py").write_text(f"x = {index}\n", encoding="utf-8")
+
+    class ReversedCompletionOrder(DefaultToolRuntime):
+        async def run(self, name, arguments, context):
+            # Later calls finish first.
+            index = int(str(arguments.get("path", "f0.py"))[1])
+            await asyncio.sleep(0.02 * (4 - index))
+            return await super().run(name, arguments, context)
+
+    turns = [
+        multi_tool_turn([(f"tc_{i}", "read_file", {"path": f"f{i}.py"}) for i in range(4)]),
+        text_turn("Done."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    runtime.tools = ReversedCompletionOrder()
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    tool_ids = [m["tool_call_id"] for m in session.messages if m.get("role") == "tool"]
+    assert tool_ids == ["tc_0", "tc_1", "tc_2", "tc_3"]
+
+
+@pytest.mark.asyncio
+async def test_writes_are_not_overlapped_and_reads_keep_their_place_around_them(tmp_path):
+    """Only *consecutive* read-only calls group, so a read the model placed after
+    an edit still observes that edit."""
+    target = tmp_path / "calc.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    turns = [
+        multi_tool_turn(
+            [
+                ("tc_a", "read_file", {"path": "calc.py"}),
+                ("tc_b", "edit_file", {"path": "calc.py", "old_text": "value = 1", "new_text": "value = 2"}),
+                ("tc_c", "read_file", {"path": "calc.py"}),
+            ]
+        ),
+        text_turn("Edited and re-read."),
+        # An applied edit makes the loop inject the verify note and ask once more.
+        text_turn("Verified."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    tools = SlowToolRuntime(delay=0.02)
+    runtime.tools = tools
+    session = make_session(tmp_path)
+
+    async def approve_pending():
+        for _ in range(300):
+            pending = [a for a in session.approvals.values() if a.accepted is None]
+            if pending:
+                session.resolve_approval(pending[0].approval_id, accepted=True)
+                return
+            await asyncio.sleep(0.01)
+
+    approver = asyncio.create_task(approve_pending())
+    await run_turn(session, Request(tmp_path), runtime)
+    await approver
+
+    assert tools.peak_concurrent == 1, "a write must never overlap with anything"
+    tool_messages = [m for m in session.messages if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["tc_a", "tc_b", "tc_c"]
+    # The read placed after the edit sees the edited content.
+    assert "value = 1" in tool_messages[0]["content"]
+    assert "value = 2" in tool_messages[2]["content"]
+
+
+def test_tool_grouping_only_batches_consecutive_read_only_calls(tmp_path):
+    runtime, _fake = make_runtime([text_turn("noop")], tmp_path)
+    calls = [
+        ToolCallRequest(id="1", name="read_file", arguments={}),
+        ToolCallRequest(id="2", name="search", arguments={}),
+        ToolCallRequest(id="3", name="bash", arguments={}),
+        ToolCallRequest(id="4", name="read_file", arguments={}),
+        ToolCallRequest(id="5", name="list_files", arguments={}),
+        ToolCallRequest(id="6", name="edit_file", arguments={}),
+    ]
+
+    groups = [[call.id for call in group] for group in consecutive_tool_groups(calls, runtime)]
+
+    assert groups == [["1", "2"], ["3"], ["4", "5"], ["6"]]
+
+
+def test_unknown_tools_are_never_grouped(tmp_path):
+    """An unregistered name has no spec, so it cannot be assumed side-effect free."""
+    runtime, _fake = make_runtime([text_turn("noop")], tmp_path)
+    calls = [
+        ToolCallRequest(id="1", name="read_file", arguments={}),
+        ToolCallRequest(id="2", name="mystery_tool", arguments={}),
+        ToolCallRequest(id="3", name="read_file", arguments={}),
+    ]
+
+    groups = [[call.id for call in group] for group in consecutive_tool_groups(calls, runtime)]
+
+    assert groups == [["1"], ["2"], ["3"]]
