@@ -543,10 +543,18 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
     header = f"{label} has {len(lines)} lines; showing {offset}-{end}"
     if end < len(lines):
         header += f" (more available; continue with offset={end + 1})"
-    if context.session is not None and not workspace_name:
-        # Only the primary workspace is editable, so only its reads unlock edits.
-        context.session.record_read(display_path(root, target), file_hash(target))
-    return ToolResult(success=True, text=f"{header}\n{shown}", data={"path": label, "total_lines": len(lines), "offset": offset, "shown": len(chunk)})
+    data: dict[str, Any] = {"path": label, "total_lines": len(lines), "offset": offset, "shown": len(chunk)}
+    if not workspace_name:
+        # Only the primary workspace is editable, so only its reads unlock edits
+        # — and only its paths are resolvable against the session workspace, which
+        # is what makes the hash re-checkable later.
+        rel = display_path(root, target)
+        content_hash = file_hash(target)
+        data["read_path"] = rel
+        data["content_hash"] = content_hash
+        if context.session is not None:
+            context.session.record_read(rel, content_hash)
+    return ToolResult(success=True, text=f"{header}\n{shown}", data=data)
 
 
 async def run_search(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:

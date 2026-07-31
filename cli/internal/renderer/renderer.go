@@ -658,12 +658,23 @@ func contextBudgetLine(event map[string]any) string {
 		if purpose == "" {
 			purpose = "model"
 		}
-		return fmt.Sprintf(
+		line := fmt.Sprintf(
 			"Context budget: %s %v -> %v tokens\n",
 			purpose,
 			event["before_tokens"],
 			event["after_tokens"],
 		)
+		// Named explicitly because it changes what the summary can be trusted to
+		// say: these files changed after they were read, so their contents were
+		// dropped from the summary rather than compressed into it.
+		if stale := sliceValue(event["stale_reads"]); len(stale) > 0 {
+			paths := make([]string, 0, len(stale))
+			for _, item := range stale {
+				paths = append(paths, stringValue(item))
+			}
+			line += fmt.Sprintf("  dropped stale file content: %s (re-read if needed)\n", strings.Join(paths, ", "))
+		}
+		return line
 	}
 	var out strings.Builder
 	purpose := stringValue(event["purpose"])

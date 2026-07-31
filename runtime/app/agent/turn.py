@@ -72,9 +72,19 @@ def assistant_message(result: CompletionResult) -> dict[str, Any]:
     return message
 
 
-def tool_message(tool_call_id: str, content: str) -> dict[str, Any]:
-    return {
+MESSAGE_META_KEY = "aicode_meta"
+
+
+def tool_message(tool_call_id: str, content: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    message: dict[str, Any] = {
         "role": "tool",
         "tool_call_id": tool_call_id,
         "content": redact_known_environment_secrets(content),
     }
+    if meta:
+        # Runtime-private provenance, persisted with the message but stripped
+        # before the history is handed to a provider. Kept on the message rather
+        # than in a side table so it cannot drift out of sync with the message it
+        # describes, and so it survives a daemon restart with the session.
+        message[MESSAGE_META_KEY] = meta
+    return message

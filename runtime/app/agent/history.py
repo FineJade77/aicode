@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.agent.session import COMPACTION_SCHEMA_VERSION, AgentSession, CompactionEntry
+from app.agent.turn import MESSAGE_META_KEY
 from app.models.provider import ModelCapability, ProviderError
 from app.security import redact_known_environment_secrets
 
@@ -63,6 +66,24 @@ class ContextManager:
 
 
 def load_history(session: AgentSession) -> list[dict[str, Any]]:
+    return strip_message_meta(_history_with_meta(session))
+
+
+def strip_message_meta(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop Runtime-private message metadata before a provider sees it.
+
+    Providers reject unknown message keys, so a leak here is an outage rather
+    than a cosmetic problem. Applied at every point history is handed outward.
+    """
+    cleaned: list[dict[str, Any]] = []
+    for message in messages:
+        if MESSAGE_META_KEY in message:
+            message = {key: value for key, value in message.items() if key != MESSAGE_META_KEY}
+        cleaned.append(message)
+    return cleaned
+
+
+def _history_with_meta(session: AgentSession) -> list[dict[str, Any]]:
     messages, ids = _normalized_messages(session)
     compaction = latest_valid_compaction(session)
     if compaction is None:
@@ -131,7 +152,7 @@ async def prepare_history_for_model(
     max_tokens: int,
     force: bool = False,
 ) -> list[dict[str, Any]]:
-    history = load_history(session)
+    history = _history_with_meta(session)
     capability = _capability(runtime, purpose, max_tokens, model=model)
     context_settings = getattr(getattr(runtime.model_runtime, "settings", None), "context", None)
     chars_per_token = float(getattr(capability, "chars_per_token", getattr(context_settings, "chars_per_token", 3.5)))
@@ -143,7 +164,7 @@ async def prepare_history_for_model(
     input_limit = min(hard_input_limit, proactive_limit)
     before = estimate_prompt_tokens(system, history, tools, chars_per_token)
     if not force and before <= input_limit:
-        return history
+        return strip_message_meta(history)
 
     compacted = await _persist_compaction(
         runtime=runtime,
@@ -158,7 +179,7 @@ async def prepare_history_for_model(
         tools=tools,
         force=force,
     )
-    return compacted
+    return strip_message_meta(compacted)
 
 
 async def _persist_compaction(
@@ -228,6 +249,7 @@ async def _persist_compaction(
         )
         return current_history
 
+    covered_messages, stale_reads = invalidate_stale_reads(covered_messages, session)
     summary, summary_provider, summary_model, summary_error = await _summarize(
         covered_messages,
         runtime=runtime,
@@ -270,8 +292,76 @@ async def _persist_compaction(
         compaction_id=stored.compaction_id,
         summary_mode="fallback" if summary_error else "model",
         summary_error=summary_error,
+        stale_reads=stale_reads,
     )
     return projected
+
+
+
+STALE_READ_NOTE = (
+    "[stale: {path} was modified after this read, so the content shown here is no longer current. "
+    "Re-read the file if its contents matter.]"
+)
+DELETED_READ_NOTE = (
+    "[stale: {path} no longer exists, so the content shown here is no longer current.]"
+)
+
+
+def invalidate_stale_reads(
+    messages: list[dict[str, Any]],
+    session: AgentSession,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Strip file content the summary would otherwise assert as current.
+
+    Compaction treats `read_file` output as fact. If the file changed after that
+    read, the summary bakes in outdated content stated as present-tense truth,
+    and the model has no way to tell — it never sees the raw message again.
+    `base_hash` does not help: it fires when an edit is applied, not when history
+    is summarized.
+
+    The comparison is against the hash recorded *at that specific read*, not
+    against the session's rolling `read_files` record. That distinction is the
+    whole point: `read_files` is updated on write as well as on read, so after
+    the agent edits a file its rolling entry already matches disk, and comparing
+    against it would miss the agent's own edits — which is the common case this
+    exists to catch, not the rare external one.
+    """
+    workspace = Path(session.workspace)
+    updated: list[dict[str, Any]] = []
+    stale: list[str] = []
+    for message in messages:
+        read = (message.get(MESSAGE_META_KEY) or {}).get("read") if isinstance(message, dict) else None
+        if not isinstance(read, dict):
+            updated.append(message)
+            continue
+        path = str(read.get("path") or "")
+        recorded = str(read.get("hash") or "")
+        if not path or not recorded:
+            updated.append(message)
+            continue
+        note = _stale_note(workspace, path, recorded)
+        if note is None:
+            updated.append(message)
+            continue
+        stale.append(path)
+        replacement = dict(message)
+        replacement["content"] = note
+        updated.append(replacement)
+    return updated, stale
+
+
+def _stale_note(workspace: Path, path: str, recorded_hash: str) -> str | None:
+    target = workspace / path
+    try:
+        if not target.is_file():
+            return DELETED_READ_NOTE.format(path=path)
+        current = hashlib.sha256(target.read_bytes()).hexdigest()
+    except OSError:
+        # Unreadable now but readable when it was read: treat as changed rather
+        # than as unchanged. Guessing "unchanged" is the one answer that lets a
+        # wrong fact into the summary.
+        return STALE_READ_NOTE.format(path=path)
+    return None if current == recorded_hash else STALE_READ_NOTE.format(path=path)
 
 
 async def _summarize(
@@ -380,6 +470,7 @@ async def _emit_budget_event(
     compaction_id: int | None = None,
     summary_mode: str | None = None,
     summary_error: str | None = None,
+    stale_reads: list[str] | None = None,
 ) -> None:
     event: dict[str, Any] = {
         "type": "context.budget",
@@ -399,6 +490,10 @@ async def _emit_budget_event(
         event["summary_mode"] = summary_mode
     if summary_error is not None:
         event["summary_error"] = summary_error
+    if stale_reads:
+        # Surfaced because it changes what the summary can be trusted to say:
+        # these files' contents were dropped from it rather than summarized.
+        event["stale_reads"] = stale_reads
     await session.events.put(event)
 
 
@@ -431,6 +526,10 @@ def _normalized_messages(session: AgentSession) -> tuple[list[dict[str, Any]], l
         if not isinstance(raw, dict):
             continue
         if "role" in raw:
+            # Provenance is deliberately *not* stripped here: compaction reads it
+            # to decide which file content has gone stale, and this function feeds
+            # compaction as well as the provider. `strip_message_meta` removes it
+            # at the outward boundary instead.
             history.append(redact_known_environment_secrets(dict(raw)))
         elif "message" in raw:
             history.append(

@@ -784,7 +784,7 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - 测试策略：`without_verification()` 让主题不是验证的测试（审批流、批量编辑、并行）显式关闭该闸门，而不是给每个编辑测试都补一条通过命令。写测试时踩到一个自己的坑：用 `exit 1` 当失败命令会因不在 allow list 而**卡在审批上永久挂起**，改用 `cat missing_file.txt`。
 - 验证：Python 451 项 + 1 skip、Go 全量、gofmt、go vet、ruff、compileall、eval-smoke PASS、clean-home install E2E 通过。
 
-### `[ ]` T-038 文件状态跟踪与压缩失效
+### `[x]` T-038 文件状态跟踪与压缩失效
 
 对应：评审 C1（正确性）
 
@@ -793,6 +793,15 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 范围：复用 T-034 的已读记录；压缩时比对当前 hash，不符者其读取内容**不进入摘要**，代之以"该文件已变更，需要时重新读取"；已删除文件同样标记失效。
 
 验收：读→编辑→压缩后摘要不含旧内容且含重读提示；未变更文件正常进入摘要。
+
+完成记录（2026-07-31）：
+
+- 每条 `read_file` 结果消息上持久化 Runtime 私有 provenance（`aicode_meta.read = {path, hash}`）；compaction 前 `invalidate_stale_reads` 按该 hash 与磁盘比对，不符者内容替换为重读提示，已删除的单独标记，并在 `context.budget` 事件以 `stale_reads` 列出、CLI 渲染出来。
+- **任务原定的做法（"复用 T-034 的已读记录，压缩时比对当前 hash"）不成立，已改**：`session.read_files` 在写入时也由 `record_written_file` 更新，所以 Agent 自己编辑过文件之后该记录与磁盘一致，用它比对只能发现**外部**修改，恰好漏掉背景里写的"该文件可能已被编辑"这一主因。必须比对的是**那一次读取当时**的 hash，因此改为按读取记录 provenance 而不是复用滚动记录。`test_the_agents_own_edit_counts_as_a_change` 专门钉这条。
+- provenance 放在消息上而不是旁路表：不会与它描述的消息脱节，且随 session 持久化跨 daemon 重启存活。
+- **实现中踩到一个真实的顺序错误**：最初把剥离放在 `_normalized_messages`，但那个函数同时喂给 compaction 和 provider，于是 compaction 拿到的消息已经没有 provenance，失效判定完全不生效（集成测试直接抓到，单元测试全绿）。改为保留到管线末端，由 `strip_message_meta` 在交付给 provider 的边界统一剥离。
+- 无法覆盖的一种情况已知并留给 T-039：连续压缩时上一轮摘要是自由文本，其中的过期内容无法再判定——这正是 T-039 结构化摘要要解决的问题。
+- 验证：Python 474 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（无 baseline 变更）。
 
 ### `[ ]` T-039 结构化压缩摘要
 

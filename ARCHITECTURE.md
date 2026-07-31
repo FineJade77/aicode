@@ -490,6 +490,12 @@ Runtime 持久化以下内容：
 
 compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
+**失效读取不进入摘要。** compaction 把 `read_file` 输出当作事实写进摘要，如果该文件此后被改动，摘要里就留下一段被表述为当前内容的过期内容——而模型再也看不到原始消息，无从察觉。因此每条 `read_file` 结果消息上持久化一份 Runtime 私有 provenance（`aicode_meta.read = {path, hash}`），compaction 时按该 hash 与磁盘现状比对，不符者其内容替换为"该文件已变更，需要时重新读取"，已删除的同样标记，并在 `context.budget` 事件中以 `stale_reads` 列出。
+
+比对的是**那一次读取当时的 hash**，不是 session 的滚动 `read_files` 记录。这个区别就是这条机制的全部要点：`read_files` 在写入时也会更新，所以 Agent 自己编辑过文件之后该记录已与磁盘一致，拿它比对会漏掉 Agent 自己的编辑——而那正是读取失效最常见的原因，外部修改反而是少数情况。
+
+provenance 持久化在消息上而非旁路表中，因此不会与它描述的消息脱节，也随 session 一起跨 daemon 重启存活；它在 `strip_message_meta` 处被剥离，绝不进入发给 provider 的 payload——provider 会拒绝未知消息字段，泄漏在这里是故障而非瑕疵。
+
 ### 14.0 读取形态与保留策略
 
 `GET /v1/sessions` 与 `SessionStore.list()` 只返回摘要（metadata + `message_count` + agent run state），并支持 `limit` / `offset`。此前每次调用都会 hydrate 所有 session 的所有 messages 与 compactions——50 × 40 实测 69.4ms、每行约 82KB，且随使用时间单调增长，而唯一的消费者 `aicode session list` 只是展示一个列表。改后为 1.2ms、每行 438 字符。单个 session 的完整历史仍由 `get(session_id)` 提供。

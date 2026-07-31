@@ -144,7 +144,10 @@
       "purpose": "history",
       "compacted": true,
       "before_tokens": 100,
-      "after_tokens": 50
+      "after_tokens": 50,
+      "stale_reads": [
+        "calc.py"
+      ]
     },
     {
       "event_id": 17,

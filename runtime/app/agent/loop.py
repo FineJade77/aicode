@@ -324,6 +324,9 @@ class ToolCallResult:
     # rendered text: failures are wrapped with an `[error] ` prefix, so any
     # parse of the output string is guessing at a format meant for the model.
     exit_code: int | None = None
+    # Runtime-private provenance persisted with the tool message; stripped before
+    # the history reaches a provider.
+    meta: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -388,7 +391,7 @@ async def execute_tool_calls(
                 # its test in one assistant message are still ordered correctly.
                 outcome.verifications.append(verification_from_result(call, call_result))
             edits_so_far += call_result.applied_edits
-            persist_message(session, tool_message(call.id, call_result.output))
+            persist_message(session, tool_message(call.id, call_result.output, call_result.meta))
     return outcome
 
 
@@ -408,6 +411,22 @@ async def _execute_with_limit(
     """
     async with semaphore:
         return await execute_gated(session, request, call, runtime, policy, context)
+
+
+def tool_call_meta(tool_name: str, result: Any) -> dict[str, Any] | None:
+    """Provenance the compaction path needs but the model must never see.
+
+    Recorded per read rather than derived later from `session.read_files`: that
+    record is updated on write too, so after the agent edits a file it already
+    matches disk and could no longer show that an earlier read went stale.
+    """
+    if tool_name != "read_file" or not isinstance(getattr(result, "data", None), dict):
+        return None
+    path = result.data.get("read_path")
+    content_hash = result.data.get("content_hash")
+    if not path or not content_hash:
+        return None
+    return {"read": {"path": str(path), "hash": str(content_hash)}}
 
 
 def tool_exit_code(result: Any) -> int | None:
@@ -630,7 +649,7 @@ async def execute_gated(
                 duration_ms=result.duration_ms,
             )
         )
-        return ToolCallResult(output, exit_code=tool_exit_code(result))
+        return ToolCallResult(output, exit_code=tool_exit_code(result), meta=tool_call_meta(call.name, result))
     if runtime.trace is not None:
         runtime.trace.record(
             "tool.finished",
