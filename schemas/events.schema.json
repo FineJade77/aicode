@@ -19,6 +19,7 @@
         "run.steer.applied",
         "run.cancelled",
         "run.budget.exceeded",
+        "plan.updated",
         "mcp.server.failed",
         "mcp.server.started",
         "assistant.delta",

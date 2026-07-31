@@ -20,6 +20,10 @@ class ToolContext:
     review_max_findings: int = 50
     execution: Any = None
     session_id: str = ""
+    # The live session, for tools whose effect *is* session state (update_plan).
+    # Typed as Any so the tool layer does not import the session implementation;
+    # only the AgentSession protocol surface is used.
+    session: Any = None
     run_id: str = ""
     tool_call_id: str = ""
     trust_level: str = "trusted"

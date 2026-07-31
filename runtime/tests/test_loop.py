@@ -59,6 +59,20 @@ def make_session(tmp_path):
     return session
 
 
+def mark_read(session, tmp_path, *names):
+    """Record files as already read.
+
+    The loop now enforces read-before-write. These tests exercise the approval
+    and edit-application paths, so they seed the read record instead of adding a
+    read turn to every script; the enforcement itself is covered end to end in
+    test_read_before_write.py.
+    """
+    from app.tools.edit import file_hash
+
+    for name in names:
+        session.record_read(name, file_hash(tmp_path / name))
+
+
 def events_of(session, event_type):
     return [e for e in session.events.events_after(0) if e.get("type") == event_type]
 
@@ -352,6 +366,7 @@ async def test_edit_approval_flow_applies_after_accept(tmp_path):
         tmp_path,
     )
     session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
 
     async def approve_soon():
         for _ in range(100):
@@ -386,6 +401,7 @@ async def test_edit_rejected_reported_to_model(tmp_path):
         tmp_path,
     )
     session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
 
     async def reject_soon():
         for _ in range(100):
@@ -415,6 +431,7 @@ async def test_accept_all_skips_approval(tmp_path):
         tmp_path,
     )
     session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
     session.auto_accept_edits = True
     await run_turn(session, Request(tmp_path), runtime)
     assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 2\n"
@@ -435,6 +452,7 @@ async def test_verification_note_injected_after_edit(tmp_path):
         tmp_path,
     )
     session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
     session.auto_accept_edits = True
     await run_turn(session, Request(tmp_path), runtime)
     assert len(fake.calls) == 3
@@ -599,6 +617,7 @@ async def test_approval_timeout_is_reported_to_the_model_as_not_a_refusal(tmp_pa
     # No approver task runs, so the request goes unanswered.
     runtime.approvals = SessionApprovalBroker(timeout_seconds=0.05)
     session = make_session(tmp_path)
+    mark_read(session, tmp_path, "calc.py")
 
     await run_turn(session, Request(tmp_path), runtime)
 
@@ -632,6 +651,7 @@ async def test_explicit_rejection_still_reads_as_a_refusal(tmp_path):
     ]
     runtime, _fake = make_runtime(turns, tmp_path)
     session = make_session(tmp_path)
+    mark_read(session, tmp_path, "calc.py")
 
     async def reject_pending():
         for _ in range(200):
@@ -805,3 +825,217 @@ def test_unknown_tools_are_never_grouped(tmp_path):
     groups = [[call.id for call in group] for group in consecutive_tool_groups(calls, runtime)]
 
     assert groups == [["1"], ["2"], ["3"]]
+
+
+@pytest.mark.asyncio
+async def test_plan_updates_reach_the_event_stream(tmp_path):
+    """The plan is only useful if the user sees it mid-task, so it must arrive as
+    its own event rather than buried in tool output."""
+    turns = [
+        tool_turn("update_plan", {"items": [{"text": "Read the file", "status": "in_progress"}]}, call_id="p1"),
+        tool_turn(
+            "update_plan",
+            {"items": [{"text": "Read the file", "status": "done"}, {"text": "Report", "status": "in_progress"}]},
+            call_id="p2",
+        ),
+        text_turn("Done."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    plan_events = events_of(session, "plan.updated")
+    assert len(plan_events) == 2
+    assert [item["status"] for item in plan_events[-1]["items"]] == ["done", "in_progress"]
+    # And it is persisted on the session, not only streamed.
+    assert [item.text for item in session.plan] == ["Read the file", "Report"]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_plan_update_emits_no_event(tmp_path):
+    turns = [
+        tool_turn("update_plan", {"items": [{"text": "x", "status": "bogus"}]}, call_id="p1"),
+        text_turn("Recovered."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert events_of(session, "plan.updated") == []
+    assert session.plan == []
+
+
+@pytest.mark.asyncio
+async def test_update_plan_never_joins_a_parallel_group(tmp_path):
+    """It mutates session state, so overlapping two updates would race."""
+    runtime, _fake = make_runtime([text_turn("noop")], tmp_path)
+    calls = [
+        ToolCallRequest(id="1", name="read_file", arguments={}),
+        ToolCallRequest(id="2", name="update_plan", arguments={}),
+        ToolCallRequest(id="3", name="read_file", arguments={}),
+    ]
+
+    groups = [[call.id for call in group] for group in consecutive_tool_groups(calls, runtime)]
+
+    assert groups == [["1"], ["2"], ["3"]]
+
+
+@pytest.mark.asyncio
+async def test_loop_refuses_an_edit_to_a_file_it_never_read(tmp_path):
+    """End-to-end proof that the guarantee holds on the production path."""
+    target = tmp_path / "calc.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    turns = [
+        tool_turn("edit_file", {"path": "calc.py", "old_text": "value = 1", "new_text": "value = 2"}, call_id="e1"),
+        text_turn("Reading it first next time."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    tool_messages = [m for m in session.messages if m.get("role") == "tool"]
+    assert "read_file has not been called" in tool_messages[-1]["content"]
+    assert target.read_text(encoding="utf-8") == "value = 1\n"
+    assert events_of(session, "edit.applied") == []
+    # No approval was requested: the edit never got that far.
+    assert events_of(session, "approval.requested") == []
+
+
+@pytest.mark.asyncio
+async def test_consecutive_edits_to_one_file_need_only_one_read(tmp_path):
+    """After a write the model has just seen the content, so demanding a re-read
+    would be pointless round-trips."""
+    target = tmp_path / "calc.py"
+    target.write_text("a = 1\nb = 1\n", encoding="utf-8")
+    turns = [
+        tool_turn("read_file", {"path": "calc.py"}, call_id="r1"),
+        tool_turn("edit_file", {"path": "calc.py", "old_text": "a = 1", "new_text": "a = 2"}, call_id="e1"),
+        tool_turn("edit_file", {"path": "calc.py", "old_text": "b = 1", "new_text": "b = 2"}, call_id="e2"),
+        text_turn("Both edits applied."),
+        text_turn("Verified."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+
+    async def approve_all():
+        for _ in range(400):
+            pending = [a for a in session.approvals.values() if a.accepted is None]
+            if pending:
+                session.resolve_approval(pending[0].approval_id, accepted=True)
+            await asyncio.sleep(0.005)
+
+    approver = asyncio.create_task(approve_all())
+    await run_turn(session, Request(tmp_path), runtime)
+    approver.cancel()
+
+    assert target.read_text(encoding="utf-8") == "a = 2\nb = 2\n"
+    assert len(events_of(session, "edit.applied")) == 2
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_file_clears_its_read_record(tmp_path):
+    """A recreated file is new content the model has not seen."""
+    target = tmp_path / "gone.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "gone.py")
+    runtime, _fake = make_runtime(
+        [tool_turn("edit_file", {"path": "gone.py", "delete": True}, call_id="d1"), text_turn("Deleted."), text_turn("Done.")],
+        tmp_path,
+    )
+
+    async def approve_all():
+        for _ in range(400):
+            pending = [a for a in session.approvals.values() if a.accepted is None]
+            if pending:
+                session.resolve_approval(pending[0].approval_id, accepted=True)
+            await asyncio.sleep(0.005)
+
+    approver = asyncio.create_task(approve_all())
+    await run_turn(session, Request(tmp_path), runtime)
+    approver.cancel()
+
+    assert not target.exists()
+    assert session.read_hash("gone.py") is None
+
+
+@pytest.mark.asyncio
+async def test_batch_edit_applies_several_changes_under_one_approval(tmp_path):
+    """The point of batching: three changes to one file used to cost three model
+    calls and three approval round-trips."""
+    target = tmp_path / "m.py"
+    target.write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+    turns = [
+        tool_turn(
+            "edit_file",
+            {
+                "path": "m.py",
+                "edits": [
+                    {"old_text": "a = 1", "new_text": "a = 10"},
+                    {"old_text": "b = 2", "new_text": "b = 20"},
+                    {"old_text": "c = 3", "new_text": "c = 30"},
+                ],
+            },
+            call_id="e1",
+        ),
+        text_turn("Applied all three."),
+        text_turn("Verified."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "m.py")
+
+    approvals: list[str] = []
+
+    async def approve_all():
+        for _ in range(400):
+            pending = [a for a in session.approvals.values() if a.accepted is None]
+            if pending:
+                approvals.append(pending[0].approval_id)
+                session.resolve_approval(pending[0].approval_id, accepted=True)
+            await asyncio.sleep(0.005)
+
+    approver = asyncio.create_task(approve_all())
+    await run_turn(session, Request(tmp_path), runtime)
+    approver.cancel()
+
+    assert target.read_text(encoding="utf-8") == "a = 10\nb = 20\nc = 30\n"
+    assert len(approvals) == 1, "three changes must cost one approval, not three"
+    applied = events_of(session, "edit.applied")
+    assert len(applied) == 1
+    # A single patch hash: the audit records one atomic change.
+    assert applied[0]["patch_hash"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_batch_leaves_the_file_untouched_in_the_loop(tmp_path):
+    target = tmp_path / "m.py"
+    original = "a = 1\nb = 2\n"
+    target.write_text(original, encoding="utf-8")
+    turns = [
+        tool_turn(
+            "edit_file",
+            {
+                "path": "m.py",
+                "edits": [
+                    {"old_text": "a = 1", "new_text": "a = 10"},
+                    {"old_text": "missing", "new_text": "x"},
+                ],
+            },
+            call_id="e1",
+        ),
+        text_turn("Recovered."),
+    ]
+    runtime, _fake = make_runtime(turns, tmp_path)
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "m.py")
+
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert target.read_text(encoding="utf-8") == original
+    assert events_of(session, "edit.applied") == []
+    # It never reached approval: the proposal failed to build.
+    assert events_of(session, "approval.requested") == []

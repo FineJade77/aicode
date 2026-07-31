@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.ports import ToolSpec
+from app.agent.session import MAX_PLAN_ITEMS, PLAN_ITEM_STATUSES, PlanItem
 from app.config import settings
 from app.execution.docker import docker_available, missing_image_hint
 from app.execution.models import ResourceLimits
@@ -23,6 +24,7 @@ from app.tools.base import (
     ToolContext,
     ToolError,
     ToolResult,
+    display_path,
     is_protected_path,
     is_within_workspace,
     reject_protected_path,
@@ -31,7 +33,9 @@ from app.tools.base import (
     scoped_display_path,
 )
 from app.tools.command import run_command, run_shell_command
+from app.tools.edit import file_hash
 from app.tools.file import ListFilesTool
+from app.tools.glob import DEFAULT_GLOB_RESULTS, MAX_GLOB_RESULTS, GlobTool
 from app.tools.related import RelatedFilesTool
 from app.tools.review import ReviewDiffTool
 
@@ -59,6 +63,53 @@ class FunctionTool:
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         return await self.handler(args, context)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdatePlanTool:
+    """Externalises the model's plan into session state.
+
+    The plan serves two purposes: it shows the user what the agent believes it is
+    doing during a long task, and it gives the model something to check itself
+    against between steps.
+    """
+
+    spec: ToolSpec
+
+    async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        if context.session is None:
+            return ToolResult(success=False, error="update_plan requires an active session", risk_level="low")
+        raw_items = args.get("items")
+        if not isinstance(raw_items, list):
+            return ToolResult(success=False, error="items must be an array", risk_level="low")
+        items: list[PlanItem] = []
+        for entry in raw_items:
+            if not isinstance(entry, dict):
+                return ToolResult(success=False, error="each plan item must be an object", risk_level="low")
+            text = str(entry.get("text") or "").strip()
+            status = str(entry.get("status") or "pending")
+            if not text:
+                return ToolResult(success=False, error="each plan item needs non-empty text", risk_level="low")
+            if status not in PLAN_ITEM_STATUSES:
+                return ToolResult(
+                    success=False,
+                    error=f"unknown plan status {status!r}; use pending, in_progress or done",
+                    risk_level="low",
+                )
+            items.append(PlanItem(text=text, status=status))  # type: ignore[arg-type]
+        if len(items) > MAX_PLAN_ITEMS:
+            return ToolResult(
+                success=False,
+                error=f"a plan may hold at most {MAX_PLAN_ITEMS} items; keep it to the steps that matter",
+                risk_level="low",
+            )
+        stored = context.session.set_plan(items)
+        summary = "\n".join(f"[{item.status}] {item.text}" for item in stored) or "(plan cleared)"
+        return ToolResult(
+            success=True,
+            text=f"Plan updated ({len(stored)} items):\n{summary}",
+            data={"items": [item.to_dict() for item in stored]},
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +181,24 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="glob",
+        description=(
+            "Find files by path pattern, for example '**/*.py' or 'src/**/test_*.go'. "
+            "Use this to locate files by name; use search to find files by their contents."
+        ),
+        read_only=True,
+        approval="none",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Glob pattern relative to the workspace root"},
+                "limit": {"type": "integer", "description": f"Maximum results; default {DEFAULT_GLOB_RESULTS}, maximum {MAX_GLOB_RESULTS}", "default": DEFAULT_GLOB_RESULTS},
+                "workspace": WORKSPACE_ARG,
+            },
+            "required": ["pattern"],
+        },
+    ),
+    ToolSpec(
         name="list_files",
         description="List directory structure. Use this to understand layout; use search to find specific content.",
         read_only=True,
@@ -178,8 +247,10 @@ TOOL_SPECS: list[ToolSpec] = [
         description=(
             "Edit files in the primary workspace after the user approves the diff. "
             "For replace, old_text must be an exact, unique source fragment and new_text is its replacement. "
+            "To change several places in one file, pass edits instead of old_text/new_text: all replacements are "
+            "matched against the current file and applied together under a single approval. "
             "For create, leave old_text empty and provide the complete file in new_text. "
-            "For delete, set delete to true. Each edit is approved independently."
+            "For delete, set delete to true."
         ),
         read_only=False,
         approval="diff",
@@ -190,9 +261,53 @@ TOOL_SPECS: list[ToolSpec] = [
                 "path": {"type": "string"},
                 "old_text": {"type": "string", "default": ""},
                 "new_text": {"type": "string", "default": ""},
+                "edits": {
+                    "type": "array",
+                    "description": "Several replacements in one file, applied together under one approval. Use instead of old_text/new_text.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_text": {"type": "string", "description": "Exact, unique fragment of the current file"},
+                            "new_text": {"type": "string"},
+                        },
+                        "required": ["old_text", "new_text"],
+                    },
+                },
                 "delete": {"type": "boolean", "default": False},
             },
             "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="update_plan",
+        description=(
+            "Record or update your plan for a multi-step task. Replace the whole list each time. "
+            "Write a plan before starting multi-step work, mark exactly one item in_progress while you work on it, "
+            "and mark it done before moving on. Skip this for single-step tasks."
+        ),
+        # Not read-only: it mutates session state, so it must never be run
+        # concurrently with anything. But it touches nothing outside the session,
+        # so it needs no approval.
+        read_only=False,
+        approval="none",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "description": "The complete plan, in order. Replaces any previous plan.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "description": "What this step accomplishes"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "done"]},
+                        },
+                        "required": ["text", "status"],
+                    },
+                }
+            },
+            "required": ["items"],
         },
     ),
     ToolSpec(
@@ -285,10 +400,12 @@ def build_default_registry() -> ToolRegistry:
         [
             FunctionTool(TOOL_SPECS_BY_NAME["read_file"], context_first(read_file_lines)),
             FunctionTool(TOOL_SPECS_BY_NAME["search"], context_first(run_search)),
+            GlobTool(TOOL_SPECS_BY_NAME["glob"]),
             FunctionTool(TOOL_SPECS_BY_NAME["list_files"], ListFilesTool().run),
             FunctionTool(TOOL_SPECS_BY_NAME["related_files"], RelatedFilesTool().run),
             FunctionTool(TOOL_SPECS_BY_NAME["bash"], context_first(run_bash)),
             EditFileTool(TOOL_SPECS_BY_NAME["edit_file"]),
+            UpdatePlanTool(TOOL_SPECS_BY_NAME["update_plan"]),
             FunctionTool(TOOL_SPECS_BY_NAME["review_diff"], ReviewDiffTool().run),
         ]
     )
@@ -303,6 +420,7 @@ def build_tool_context(
     session_id: str = "",
     run_id: str = "",
     trust_level: str = "trusted",
+    session: Any = None,
 ) -> ToolContext:
     project_config = load_project_config(Path(workspace))
     return ToolContext(
@@ -317,6 +435,7 @@ def build_tool_context(
         session_id=session_id,
         run_id=run_id,
         trust_level=trust_level,
+        session=session,
         bash_backend=project_config.execution.agent_bash_backend or settings.execution.agent_bash_backend,
     )
 
@@ -424,6 +543,9 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
     header = f"{label} has {len(lines)} lines; showing {offset}-{end}"
     if end < len(lines):
         header += f" (more available; continue with offset={end + 1})"
+    if context.session is not None and not workspace_name:
+        # Only the primary workspace is editable, so only its reads unlock edits.
+        context.session.record_read(display_path(root, target), file_hash(target))
     return ToolResult(success=True, text=f"{header}\n{shown}", data={"path": label, "total_lines": len(lines), "offset": offset, "shown": len(chunk)})
 
 

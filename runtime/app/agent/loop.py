@@ -19,6 +19,7 @@ from app.models.provider import (
     tool_argument_parse_error,
 )
 from app.security import stable_hash
+from app.tools.edit import file_hash
 
 
 class AgentLoop:
@@ -83,6 +84,7 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
         session_id=session.session_id,
         run_id=session.current_run_id or "",
         trust_level=str(trust_status["level"]),
+        session=session,
     )
     purpose = "reviewer" if request.mode == "review" else "main"
     model = str(getattr(request, "model", "") or "").strip() or None
@@ -522,6 +524,10 @@ async def execute_gated(
     # and execution records.
     call_context = replace(context, tool_call_id=call.id)
     result = await runtime.tools.run(call.name, call.arguments, call_context)
+    if call.name == "update_plan" and result.success:
+        # Surfaced as its own event so the CLI can render a progress list rather
+        # than a wall of tool output.
+        await session.events.put({"type": "plan.updated", "items": result.data.get("items") or []})
     if result.success:
         output = truncate_tool_output(call.name, result.text)
         if runtime.trace is not None:
@@ -574,7 +580,7 @@ async def execute_edit(
     started = runtime.clock.monotonic()
     workspace = Path(request.workspace)
     try:
-        proposal = runtime.tools.build_edit_proposal(workspace, call.arguments, context.protected_paths)
+        proposal = runtime.tools.build_edit_proposal(context, call.arguments)
     except Exception as exc:
         await session.events.put(
             tool_event(
@@ -613,6 +619,9 @@ async def execute_edit(
 
     try:
         runtime.tools.apply_edit(workspace, proposal)
+        # The model has just seen this content, so keep the read record current;
+        # otherwise a second edit to the same file would demand a pointless re-read.
+        record_written_file(session, workspace, proposal)
     except Exception as exc:
         await session.events.put(
             tool_event(
@@ -722,6 +731,14 @@ async def request_approval(
         kind=kind,
         payload=payload,
     )
+
+
+def record_written_file(session: AgentSession, workspace: Path, proposal: Any) -> None:
+    target = workspace / proposal.path
+    if proposal.kind == "delete" or not target.is_file():
+        session.forget_read(proposal.path)
+        return
+    session.record_read(proposal.path, file_hash(target))
 
 
 def approval_failure_text(decision: ApprovalDecision, action: str) -> str:

@@ -6,6 +6,7 @@
 
 - [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md)（T-001 ~ T-012）
 - [docs/review/2026-07-29-architecture-review.md](docs/review/2026-07-29-architecture-review.md) 与 [docs/plans/2026-07-29-production-agent-hardening.md](docs/plans/2026-07-29-production-agent-hardening.md)（T-013 ~ T-032）
+- [docs/review/2026-07-31-agent-architecture-gaps.md](docs/review/2026-07-31-agent-architecture-gaps.md) 与 [docs/plans/2026-07-31-agent-architecture-plan.md](docs/plans/2026-07-31-agent-architecture-plan.md)（T-033 ~ T-048）
 
 状态：
 
@@ -21,7 +22,7 @@
 3. Agent 行为变更必须说明评测覆盖；没有覆盖时不能宣称质量提升。
 4. 每次只保留一个主任务为 `[~]`，完成验收后再启动下一项。
 5. **新增 SSE event 必须三处同步登记**：`runtime/app/events.py` 的 `EVENT_TYPES`、`schemas/events.schema.json` 的 enum、`schemas/fixtures/sse-events.v2.json` 与 Go renderer 分支。漏登记会在 `SessionEvents.put` 处直接抛 `ValueError`。
-6. **改动 policy / prompt / tool schema 必须重新生成 eval baseline**：`evals/baselines/deterministic-smoke.v1.json` 的 `source_versions` 固定了 `policy_sha256`、`prompt_sha256`、`tool_schema_sha256` 等 digest，任何字节级改动都会让 `make eval-smoke` 失败。更新 baseline 前必须确认 `minimum_metrics` / `maximum_metrics` 仍然满足；若 `safety_rate` 下降或 `dangerous_command_execution_rate` 上升，按任务失败处理，不得放宽基线。
+6. **改动 policy / prompt / 工具声明必须重新生成 eval baseline**：`evals/baselines/deterministic-smoke.v1.json` 的 `source_versions` 固定了 `policy_sha256`、`prompt_sha256`、`tool_specs_sha256` 等 digest，任何字节级改动都会让 `make eval-smoke` 失败。`tool_specs_sha256` 覆盖每个工具的 `description` / `input_schema` / `read_only` / `approval` / `hidden_in_modes`——即一切能改变模型行为或闸门判定的声明（2026-07-31 修复；此前它只 hash 元 schema 文件，逐工具声明不在覆盖内）。更新 baseline 前必须确认 `minimum_metrics` / `maximum_metrics` 仍然满足；若 `safety_rate` 下降或 `dangerous_command_execution_rate` 上升，按任务失败处理，不得放宽基线。
 
 > **包结构说明（2026-07-30）**：Runtime 已完成一次包重组——`app/core/`、`app/adapters/`、`app/config/`、`app/contracts/` 不再存在，port 与 domain 类型并入 `app/agent/`，adapter 实现按领域就近放置，composition root 为 `app/bootstrap.py`。本台账中指向**现存文件**的路径已按新结构更新；T-001~T-012 的完成记录描述的是当时的产物，保留原路径并在需要处注明新位置。`docs/review/` 与 `docs/plans/` 下带日期的快照文档整体保留当时的路径，不做改写。当前结构见 [ARCHITECTURE.md](ARCHITECTURE.md) 第 3.3 节与第 20 节。
 
@@ -326,7 +327,7 @@
 
 来源：2026-07-29 架构评审 A1 / A3 / A5，以及实施期补充发现的 N1 / N4。
 
-**优先级调整（2026-07-29）**：目标由"简历项目完备度"改为"生产可用"后，真实模型评测（T-016）与 prompt caching（T-014）从第一梯队降级到 M7；SQLite 写入路径（T-020）与新发现的审计可靠性（T-028）、认证 fail-closed（T-029）升入第一梯队。判据换成：**别人装上能天天用，几周不出事，出事能查，升级不炸。**
+**优先级调整（2026-07-29）**：目标由"简历项目完备度"改为"生产可用"后，真实模型评测（T-016）与 prompt caching（T-014）从第一梯队降级到 M11（原 M7）；SQLite 写入路径（T-020）与新发现的审计可靠性（T-028）、认证 fail-closed（T-029）升入第一梯队。判据换成：**别人装上能天天用，几周不出事，出事能查，升级不炸。**
 
 本梯队五项已全部完成。实现细节见 [实现计划](docs/plans/2026-07-29-production-agent-hardening.md)。
 
@@ -678,7 +679,164 @@
 - **两处偏离原计划**：(1) 未把 `AgentRuntime` 字段改必填、未删 loop 的 assert——计划假设这些字段只有一个消费者，但 `ContextManager` 与 `run_turn` 要求不同（前者只需 session，`model_runtime` 缺失时降级为确定性摘要，8 项测试依赖这一点），一律改必填会误述 `ContextManager` 的契约；正确做法是引入校验后的 `TurnDependencies` 视图，但那要改 loop 全部 helper 签名，不适合作为本任务尾部的顺带改动，已在 ARCHITECTURE 写明并留作独立任务。(2) 保留 `registry.py` 的 `edit_file` 分支——实测它是有意义的守卫而非占位。
 - 验证：Python 371 项、Go 全量、go vet、gofmt、ruff、compileall、eval-smoke PASS、clean-home install E2E 通过。
 
-## M7：增效与评测触发项
+## M8：Agent 能力补齐（第一梯队）
+
+来源：[2026-07-31 Agent 架构缺口评审](docs/review/2026-07-31-agent-architecture-gaps.md)，实现细节见 [实现计划](docs/plans/2026-07-31-agent-architecture-plan.md)。
+
+**排期判据**：这四项**不需要真实评测数据即可判断该做**——它们补齐的是已知缺失的**机制**（计划表示、写前读、批量写、路径查找），而不是"可能有用的能力"。四项彼此独立；T-034 与 T-035 同改 `tools/edit.py`，建议相邻落地。
+
+四项都会改动 `TOOL_SPECS`，因此 `tool_schema_sha256` 必变，按执行规则 6 重新生成 baseline。
+
+### `[x]` T-033 显式计划状态
+
+对应：评审 L1
+
+背景：`run_turn` 是纯线性 `for _step in range(max_steps)`，模型意图在 Runtime 内**没有任何外部表示**。`mark_agent_progress` 只能回答"正在调用哪个工具"，回答不了"它认为自己在做什么、还剩几步"。显式计划有两个作用：用户可见性，以及模型对照计划自纠（外部化工作记忆）。
+
+范围：
+
+- 新增 `update_plan` 工具，`read_only=False` / `approval="none"`（只写 session 状态，不碰文件系统与网络）。
+- 计划随 session 持久化并进入 `SessionSnapshot`；新增 `plan.updated` 事件（按规则 5 三处登记 + Go renderer 渲染为进度清单）。
+- 采用**整体替换**而非增量修改：增量接口要求模型维护稳定 id，实践中出错率高于收益。
+
+验收：计划跨 daemon 重启可见；非法 status 被拒；多步任务中 `plan.updated` 次数 ≥ 计划条目数（机制正确性先在脚本 eval 验，可见性效果留待 T-016）。
+
+完成记录（2026-07-31）：
+
+- 新增 `update_plan` 工具与 `PlanItem`（`app/agent/session.py`），计划随 session 持久化并进入 `SessionSnapshot`；`plan.updated` 按规则 5 三处登记 + Go renderer 渲染为进度清单。
+- 采纳整体替换而非增量：增量接口要求模型维护稳定 id，出错率高于收益。非法 status 与超过 `MAX_PLAN_ITEMS` 均被拒。
+- `approval="none"` 这条路径需要在 policy 里新开一个分支，**位置有讲究**：它放在 read-only-mode 检查之后，否则一个 `read_only=False` 的工具会因为声明了 `approval="none"` 而在 review/explain/commit_message 模式下获得执行权。顺序本身就是约束，注释已写明。
+- 只有内置 registry 能声明 `approval="none"`，MCP 工具一律强制 `approval="gate"`——外部服务器不能自我豁免审批。
+
+### `[x]` T-034 read-before-write 强制
+
+对应：评审 T3（正确性）
+
+背景：`base_hash` 防的是"读过之后文件被外部改了"，**防不住"根本没读就编辑"**。模型可以凭空捏造 `old_text`，只有匹配失败才发现——而那个报错对模型而言与"文件内容不同"无法区分。
+
+范围：session 维护已读文件集合（path → 内容 hash）；`replace` / `delete` 要求目标已读，未读即拒绝并指明先 `read_file`；`create` 不受限（文件不存在时无可读）；编辑成功后更新记录 hash，连续编辑无需重读。
+
+验收：未读即 replace 被拒且文案可操作；读→编辑→再编辑无需重读；既有 stale 检测测试不改断言即通过。
+
+完成记录（2026-07-31）：
+
+- session 维护 path → 内容 hash 的已读集合；`replace` / `delete` 要求目标已读，`create` 豁免（文件不存在时无可读）；编辑成功后更新记录，连续编辑无需重读；删除文件会清除其记录。
+- **这是正确性问题而非效率问题**：`base_hash` 只能发现"读过之后被外部改了"，发现不了"根本没读就编辑"。模型可以凭空编造 `old_text`，而那个不匹配报错对它而言与"文件内容确实不同"无法区分——强制先读把猜测变成一条明确的"去看一眼"指令。
+- 仅在存在 session 时强制：Agent Loop 总会提供，而直接驱动编辑工具的嵌入方没有 session 级状态可依据。这条豁免写在 `require_prior_read` 的 docstring 里。
+- `EditPort.build_edit_proposal` 签名由 `(workspace, arguments, protected_paths)` 改为 `(context, arguments)`——三者本就同源，而已读记录也在 context 上。
+
+### `[x]` T-035 批量编辑
+
+对应：评审 T2
+
+背景：改同一文件三处 = 三轮模型调用 + 三次审批往返。T-019 解决了只读工具并发，**写入侧的往返成本没有动过**，这是当前延迟结构里最大的一块。
+
+范围：`edit_file` 增加 `edits: [{old_text, new_text}]`，与单次形式并存；全部替换在同一份原文上按序应用；**任一处不匹配则整体失败，不允许部分应用**——半应用的编辑比失败更难恢复；一次 diff、一次审批。
+
+验收：多处替换一次审批成功；任一不匹配则文件字节不变；重叠区间被拒；既有单次编辑测试不改断言即通过。
+
+完成记录（2026-07-31）：
+
+- `edit_file` 增加 `edits: [{old_text, new_text}]`，与单次形式并存；`resolve_edits` 把单次形式归一化为长度 1 的列表，管线下游只处理列表。
+- **全部替换都对同一份原文定位**，不是在逐步更新的文本上连续 `str.replace`：后者会让靠后的 `old_text` 匹配到由前一次替换产生的、模型从未见过的内容，可能静默改错地方。实现改为先在原文中定位全部区间、检查重叠、再一次性拼接。
+- 任一处不匹配即整体失败，落盘前抛出，绝不半应用——半应用的编辑比被拒绝的编辑更难恢复。
+- 写测试时自己踩了一次坑：最初断言长度为 1 的批量形式会带 `edit 1:` 前缀，但该标签只在 `len(edits) > 1` 时出现。改成断言真实契约——长度 1 的批量与单次形式报错完全一致。
+
+### `[x]` T-036 `glob` 工具
+
+对应：评审 T1
+
+背景：`search(query, glob)` 是"内容正则 + 路径过滤"，而"**找出名字符合某模式的文件**"是独立且高频的需求，现在只能用 `list_files` 配深度或拿正则撞路径。业界（Claude Code、Aider）都把 Grep 与 Glob 分开，因为检索意图不同。T-017 之后新增工具只需一次 `register`，边际成本近乎为零。
+
+验收：模式匹配正确；protected path 不出现在结果；越界模式被拒；结果有上限。
+
+完成记录（2026-07-31）：
+
+- 新增 `app/tools/glob.py`。与 `search` 分开而不是合并：`search` 回答"哪些文件含这段文本"，`glob` 回答"哪些文件叫这个名字"，把后者表达成路径正则对模型别扭且更慢。
+- 越界模式做**语法前置拒绝**（绝对路径、盘符、`~`、`..`），因为 `Path.glob` 对这类模式会直接枚举到工作区之外；但语法检查不足以保证安全，树内的 symlink 仍可指向外部，所以每个候选再做一次 `is_within_workspace` 实检。
+- protected path 与 `IGNORED_DIRS` 从结果中剔除；结果有上限并在截断时提示收窄模式。
+
+## M9：循环与上下文正确性（第二梯队）
+
+来源：同上。需要设计，但**仍不依赖评测数据**。其中 T-038 是正确性问题，其余是效率与保真度。
+
+T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘要 schema 才能表达"哪些文件内容已作废"；中间层的折叠策略又复用同一套失效判定。
+
+### `[ ]` T-037 验证循环机制化
+
+对应：评审 L2
+
+背景：`VERIFY_NOTE` 文案里写着"stop and report after 3 consecutive failed attempts"，但**没有任何代码执行这个 3**——它是一句 prompt 里的话，不是机制。当前验证是一次性提示后完全交给模型自觉。
+
+范围：Loop 跟踪验证尝试次数与结果；达上限后走既有收尾路径（与预算闸门同一条）产出总结；失败输出结构化提取（失败用例名、首个错误行）避免整段 stderr 挤占上下文；新增 `verify.attempt` 事件。
+
+验收：连续失败达上限必定收尾且 `final` 非空；一次成功即退出；上限为 0 时行为回到当前实现。
+
+### `[ ]` T-038 文件状态跟踪与压缩失效
+
+对应：评审 C1（正确性）
+
+背景：压缩把 `read_file` 输出**当作事实**写进摘要，而该文件可能已被编辑。摘要里于是留下**过期内容被表述为当前内容**，模型据此推理且无从知道它已失效。`base_hash` 只在 apply 时检测外部修改，防不住这条路径。
+
+范围：复用 T-034 的已读记录；压缩时比对当前 hash，不符者其读取内容**不进入摘要**，代之以"该文件已变更，需要时重新读取"；已删除文件同样标记失效。
+
+验收：读→编辑→压缩后摘要不含旧内容且含重读提示；未变更文件正常进入摘要。
+
+### `[ ]` T-039 结构化压缩摘要
+
+对应：评审 C3
+
+背景：摘要要求 `Return concise Markdown bullets`。连续压缩（对压缩结果再压缩）时自由文本降解很快，且无法程序化检查完整性。
+
+范围：改为结构化 schema（`goal` / `constraints` / `done` / `pending` / `files_touched` / `open_failures`）；`CompactionEntry` 存结构化结果并升 `COMPACTION_SCHEMA_VERSION`，旧条目仍可读（既有版本校验已支持忽略不兼容版本）。
+
+验收：连续两次压缩后 `pending` 与 `open_failures` 不丢失（当前自由文本无法断言这一点）；模型返回非法结构时降级到确定性摘要并标注 `summary_mode=fallback`。
+
+### `[ ]` T-040 中间压缩层
+
+对应：评审 C2
+
+背景：当前只有两档——写入时按工具截断，以及触发阈值后的整组有损摘要。中间缺一层，导致过早触发有损压缩。被删除的 `compact_if_needed` 粗糙地做过这件事，方向对、实现不对（无组边界意识、无持久化）。
+
+范围：保留最近 K 组 tool 输出原文，更早的折叠为一行引用；以完整消息组为边界（复用 `_message_groups`），不跨越未闭合的 tool_call 组。
+
+验收：达中间阈值时只折叠不摘要，token 下降且 `pending` 类信息零损失；仅当折叠后仍超限才触发全量摘要。
+
+### `[ ]` T-041 打转检测
+
+对应：评审 L4
+
+背景：`max_steps = 40` 对"改一行"和"跨六文件重构"是同一个数。比调整这个数更有价值的是无进展检测。
+
+范围：跟踪连续"相同工具 + 相同参数"或"相同失败"；达阈值注入明确 note；再达上限走收尾路径。
+
+验收：构造反复调用同一失败命令的脚本模型，验证在耗尽 `max_steps` 之前被拦下并产出总结。
+
+## M10：交互与执行环境（第三梯队）
+
+来源：同上。彼此独立，按需推进。
+
+### `[ ]` T-042 `ask_user` 工具
+
+对应：评审 L3。模型当前只有两个出口——继续猜或结束；审批只能回答"这个操作可不可以"，回答不了"你想要哪种方案"。范围：turn 中途提问并等待，复用 approval broker 的等待/超时/取消语义（含 T-032 的四态终结），超时按"未回答"处理并明确区别于"用户拒绝"。
+
+### `[ ]` T-043 后台与长时命令
+
+对应：评审 T4。`bash` 最多阻塞 600 秒，dev server / watch / 长构建做不了。范围：background 模式返回句柄，配套读取输出与终止工具，复用 `ExecutionService` 的进程组终止与 daemon 停止清理。
+
+### `[ ]` T-044 OS 级沙箱
+
+对应：评审 E1。Codex 用 seatbelt / landlock，启动毫秒级、无镜像依赖。当前 trusted workspace 只能裸跑，正是因为容器太重（T-015 因此要求显式预拉镜像）。OS 级沙箱能让"默认沙箱"对 trusted 也成立。契约已就绪，属新增 backend 而非改结构。
+
+### `[ ]` T-045 hooks
+
+对应：评审 E2。范围：允许在工具事件上挂命令（写入后 format、提交前 lint 门禁）。**hook 命令必须与 Agent 命令走同一执行与审计路径**，否则等于开了一个绕过 policy 的旁路。
+
+### `[ ]` T-046 session fork
+
+对应：评审 E3。"从这里换个方案试试"当前只能重跑整轮。范围：从指定 message id 派生新 session，复用既有 append-only messages + compaction projection 结构。
+
+## M11：增效与评测触发项
 
 **T-014（prompt caching）与 T-016（真实模型评测）已从第一梯队降级至此**（2026-07-29 目标切换为生产可用）；两者都不阻塞生产可用。T-023 / T-024 / T-026 三项**在 T-016 产出真实评测数字之前不启动**，届时按数据决定取舍。此纪律沿用 [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md) 第 536 行：索引、subagent、自动规划框架只由评测结果触发。
 
@@ -739,6 +897,18 @@
 对应：评审 D2 / D3 | 依赖：T-016
 
 范围：同一 live 任务集跑 3 个模型产出成本–成功率曲线；消融 `compact_threshold` 0.8 vs 0.6、有无 `related_files`。指标 `with_compaction_success_rate` / `without_compaction_success_rate` 已实现，只需喂真实数据。结论写入评审文档与 README。
+
+### `[ ]` T-047 repo map / 符号索引
+
+对应：评审 T5 | 触发条件：T-016 的失败归因中"定位失败"占比显著
+
+背景：`related_files` 是启发式黑箱（前三轮评审均提到），模型无法理解它为何给出这些结果。业界更有效的是 repo map（Aider：tree-sitter 抽符号签名按图排序注入），这是大仓库上下文效率最大的单项收益。**但值不值得取决于失败模式**——若失败集中在别处，投入索引是浪费。
+
+范围：tree-sitter 抽符号签名按引用关系排序注入；同时评估 `related_files` 是否应被取代。
+
+### `[ ]` T-048 subagent
+
+触发条件：T-016 显示主上下文被探索过程显著污染。沿用 [LOCAL_AGENT_ROADMAP.md](LOCAL_AGENT_ROADMAP.md) 第 536 行纪律。任何 subagent 必须复用预算、Policy、ExecutionBackend、approval 与 trace。
 
 ## 后续候选
 

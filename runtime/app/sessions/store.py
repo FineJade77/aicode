@@ -14,7 +14,14 @@ from typing import Any
 
 from app.agent.ports import Clock, IdGenerator
 from app.agent.session import COMPACTION_SCHEMA_VERSION as CORE_COMPACTION_SCHEMA_VERSION
-from app.agent.session import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ApprovalDecision, CompactionEntry
+from app.agent.session import (
+    DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+    MAX_PLAN_ITEMS,
+    PLAN_ITEM_STATUSES,
+    ApprovalDecision,
+    CompactionEntry,
+    PlanItem,
+)
 from app.events import validate_event
 from app.security import redact_known_environment_secrets
 from app.system import SystemClock, UuidGenerator
@@ -24,6 +31,32 @@ MAX_TRANSIENT_RETAINED_EVENTS = 200
 EVENT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_SESSION_CACHE_LIMIT = 200
 COMPACTION_SCHEMA_VERSION = CORE_COMPACTION_SCHEMA_VERSION
+
+
+def parse_plan(raw: Any) -> list[PlanItem]:
+    """Rebuild a persisted plan, dropping anything malformed.
+
+    A plan is model-authored display state, not a correctness-critical record, so
+    an unreadable entry is skipped rather than failing the whole session load.
+    """
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    items: list[PlanItem] = []
+    for entry in payload[:MAX_PLAN_ITEMS]:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        status = str(entry.get("status") or "pending")
+        if not text or status not in PLAN_ITEM_STATUSES:
+            continue
+        items.append(PlanItem(text=text, status=status))  # type: ignore[arg-type]
+    return items
 
 
 def _parsed_timestamp(value: str) -> datetime:
@@ -259,6 +292,13 @@ class Session:
     current_run_started_at: datetime | None = None
     current_run_last_progress_at: datetime | None = None
     auto_accept_edits: bool = False
+    plan: list[PlanItem] = field(default_factory=list)
+    # Files this session has read, and the content hash seen at read time.
+    # Deliberately in-memory only: the guarantee being enforced is "the model has
+    # seen this file's current content in this conversation". After a restart the
+    # safe default is to re-read, so persisting the record would weaken it.
+    read_files: dict[str, str] = field(default_factory=dict)
+    plan_writer: Callable[[list[PlanItem]], None] | None = field(default=None, repr=False)
     message_appender: Callable[[dict[str, Any]], int | None] | None = field(default=None, repr=False)
     compaction_appender: Callable[[CompactionEntry], CompactionEntry] | None = field(default=None, repr=False)
     clock: Clock = field(default_factory=SystemClock, repr=False)
@@ -272,6 +312,7 @@ class Session:
             "updated_at": self.updated_at.isoformat(),
             "messages": self.messages,
             "approvals": [approval.to_dict() for approval in self.approvals.values()],
+            "plan": [item.to_dict() for item in self.plan],
             "agent": self.agent_state(),
         }
 
@@ -320,6 +361,27 @@ class Session:
                 self.steer_queue.task_done()
             except asyncio.QueueEmpty:
                 return messages
+
+    def record_read(self, path: str, content_hash: str) -> None:
+        self.read_files[path] = content_hash
+
+    def read_hash(self, path: str) -> str | None:
+        return self.read_files.get(path)
+
+    def forget_read(self, path: str) -> None:
+        self.read_files.pop(path, None)
+
+    def set_plan(self, items: list[PlanItem]) -> list[PlanItem]:
+        """Replace the whole plan.
+
+        Whole replacement rather than incremental edits: an incremental API would
+        require the model to maintain stable item ids across turns, which in
+        practice goes wrong more often than the saved tokens are worth.
+        """
+        self.plan = list(items[:MAX_PLAN_ITEMS])
+        if self.plan_writer is not None:
+            self.plan_writer(self.plan)
+        return self.plan
 
     def append_message(self, message: dict[str, Any]) -> int | None:
         if self.message_appender is not None:
@@ -495,7 +557,7 @@ class SessionStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "select session_id, workspace, created_at, updated_at from sessions where session_id = ?",
+                "select session_id, workspace, created_at, updated_at, plan from sessions where session_id = ?",
                 (session_id,),
             ).fetchone()
             if row is None:
@@ -637,7 +699,7 @@ class SessionStore:
 
         with self._connect() as conn:
             row = conn.execute(
-                "select rowid, session_id, workspace, created_at, updated_at from sessions order by updated_at desc, rowid desc limit 1"
+                "select rowid, session_id, workspace, created_at, updated_at, plan from sessions order by updated_at desc, rowid desc limit 1"
             ).fetchone()
             if row is None:
                 return None
@@ -648,6 +710,14 @@ class SessionStore:
             self._touch(session)
             self._last_session_id = session.session_id
             return session
+
+    def write_plan(self, session: Session, items: list[PlanItem]) -> None:
+        self._ensure_schema()
+        with self._connect() as conn:
+            conn.execute(
+                "update sessions set plan = ? where session_id = ?",
+                (json.dumps([item.to_dict() for item in items], ensure_ascii=False), session.session_id),
+            )
 
     def append_message(self, session: Session, message: dict[str, Any]) -> int:
         self._ensure_schema()
@@ -808,6 +878,7 @@ class SessionStore:
             workspace=str(row["workspace"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            plan=parse_plan(row["plan"] if "plan" in row.keys() else None),
             clock=self.clock,
             ids=self.ids,
         )
@@ -819,6 +890,7 @@ class SessionStore:
             max_events=self.event_limit,
         )
         session.message_appender = lambda message: self.append_message(session, message)
+        session.plan_writer = lambda items: self.write_plan(session, items)
         session.compaction_appender = lambda entry: self.append_compaction(session, entry)
 
     def _append_event(self, session_id: str, event: dict[str, Any]) -> None:
@@ -1157,10 +1229,19 @@ def _migration_003_drop_sessions_language(conn: sqlite3.Connection) -> None:
 
 # Ordered ladder. Append only: never renumber or edit a shipped migration, since
 # databases in the field record how far they have already been advanced.
+def _migration_004_sessions_plan(conn: sqlite3.Connection) -> None:
+    """Add `sessions.plan`, holding the model's externalised plan as JSON."""
+    columns = {row["name"] for row in conn.execute("pragma table_info(sessions)").fetchall()}
+    if "plan" in columns:
+        return
+    conn.execute("alter table sessions add column plan text")
+
+
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migration_001_base_schema),
     (2, _migration_002_sessions_updated_at),
     (3, _migration_003_drop_sessions_language),
+    (4, _migration_004_sessions_plan),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

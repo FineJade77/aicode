@@ -206,6 +206,25 @@
     },
     {
       "event_id": 24,
+      "type": "plan.updated",
+      "items": [
+        {
+          "text": "Locate the failing assertion",
+          "status": "done"
+        },
+        {
+          "text": "Fix the off-by-one",
+          "status": "in_progress"
+        },
+        {
+          "text": "Run the test suite",
+          "status": "pending"
+        }
+      ],
+      "message": "Plan updated (3 items)."
+    },
+    {
+      "event_id": 25,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

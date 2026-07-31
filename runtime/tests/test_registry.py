@@ -21,11 +21,11 @@ def make_context(tmp_path) -> ToolContext:
 
 def test_schema_names_and_modes():
     names = {schema["name"] for schema in TOOL_SCHEMAS}
-    assert names == {"read_file", "search", "list_files", "related_files", "bash", "edit_file", "review_diff"}
+    assert names == {"read_file", "search", "glob", "list_files", "related_files", "bash", "edit_file", "update_plan", "review_diff"}
     review_names = {schema["name"] for schema in tool_schemas_for_mode("review")}
-    assert review_names == {"read_file", "search", "list_files", "related_files", "review_diff"}
+    assert review_names == {"read_file", "search", "glob", "list_files", "related_files", "review_diff"}
     explain_names = {schema["name"] for schema in tool_schemas_for_mode("explain")}
-    assert explain_names == {"read_file", "search", "list_files", "related_files", "review_diff"}
+    assert explain_names == {"read_file", "search", "glob", "list_files", "related_files", "review_diff"}
     assert tool_schemas_for_mode("commit_message") == []
     for schema in TOOL_SCHEMAS:
         assert schema["description"]
@@ -460,7 +460,7 @@ def test_specs_are_the_single_source_of_read_only_truth():
 
     assert not hasattr(policy_module, "READ_ONLY_TOOLS_V2")
     read_only = {spec.name for spec in DEFAULT_REGISTRY.specs() if spec.read_only}
-    assert read_only == {"read_file", "search", "list_files", "related_files", "review_diff"}
+    assert read_only == {"read_file", "search", "glob", "list_files", "related_files", "review_diff"}
 
 
 def test_edit_file_declares_diff_approval():

@@ -41,6 +41,7 @@ class DefaultToolRuntime:
         session_id: str = "",
         run_id: str = "",
         trust_level: str = "trusted",
+        session: Any = None,
     ) -> ToolContext:
         return build_tool_context(
             workspace,
@@ -49,6 +50,7 @@ class DefaultToolRuntime:
             session_id=session_id,
             run_id=run_id,
             trust_level=trust_level,
+            session=session,
         )
 
     def validate_arguments(self, name: str, arguments: dict[str, Any]) -> str | None:
@@ -57,13 +59,8 @@ class DefaultToolRuntime:
     async def run(self, name: str, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         return await self.registry.run(name, arguments, context)
 
-    def build_edit_proposal(
-        self,
-        workspace: Path,
-        arguments: dict[str, Any],
-        protected_paths: list[str],
-    ) -> Any:
-        return build_edit_proposal(workspace, arguments, protected_paths)
+    def build_edit_proposal(self, context: ToolContext, arguments: dict[str, Any]) -> Any:
+        return build_edit_proposal(context, arguments)
 
     def apply_edit(self, workspace: Path, proposal: Any) -> None:
         apply_edit(workspace, proposal)

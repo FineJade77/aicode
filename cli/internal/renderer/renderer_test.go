@@ -428,3 +428,31 @@ func TestRenderExplicitEditRejectionStillReadsAsRejection(t *testing.T) {
 		t.Fatalf("expected an explicit rejection label, got %q", text)
 	}
 }
+
+func TestRenderPlanAsChecklist(t *testing.T) {
+	// The user-visible payoff of externalising the plan: a checklist instead of
+	// a stream of tool names.
+	var out bytes.Buffer
+	RenderEventTo(&out, map[string]any{
+		"type": "plan.updated",
+		"items": []any{
+			map[string]any{"text": "Locate the bug", "status": "done"},
+			map[string]any{"text": "Fix it", "status": "in_progress"},
+			map[string]any{"text": "Run tests", "status": "pending"},
+		},
+	})
+	text := out.String()
+	for _, want := range []string{"[x] Locate the bug", "[~] Fix it", "[ ] Run tests"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in output, got %q", want, text)
+		}
+	}
+}
+
+func TestRenderEmptyPlanSaysCleared(t *testing.T) {
+	var out bytes.Buffer
+	RenderEventTo(&out, map[string]any{"type": "plan.updated", "items": []any{}})
+	if text := out.String(); !strings.Contains(text, "Plan cleared") {
+		t.Fatalf("expected a cleared notice, got %q", text)
+	}
+}

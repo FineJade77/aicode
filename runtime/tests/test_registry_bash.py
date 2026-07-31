@@ -1,4 +1,4 @@
-import asyncio
+import shlex
 
 import pytest
 
@@ -6,6 +6,7 @@ from app.tools import registry
 from app.tools.base import ToolContext
 from app.tools.command import CommandResult
 from app.tools.registry import resolve_bash_backend, run_tool
+from tests.process_helpers import assert_process_exits, grandchild_pid
 
 
 @pytest.mark.asyncio
@@ -36,18 +37,22 @@ async def test_bash_timeout(tmp_path):
 
 @pytest.mark.asyncio
 async def test_bash_timeout_kills_grandchild_process(tmp_path):
-    # A subprocess spawned by sh -c, such as the sleep in this subshell, is a
-    # grandchild of run_bash. Killing only the direct child on timeout lets the
-    # reparented grandchild finish. The delayed marker proves that the whole
-    # process group is killed: the marker must never appear.
-    marker = tmp_path / "grandchild_marker"
-    command = f"echo start && (sleep 2 && touch {marker})"
-    result = await run_tool("bash", {"command": command, "timeout": 1}, ToolContext(workspace=tmp_path))
+    """A process spawned by `sh -c` is a grandchild of run_bash.
+
+    Killing only the direct child on timeout would let the reparented grandchild
+    keep running. The pid is recorded so this asserts the process is actually
+    gone, rather than inferring it from a marker file that would also be absent
+    if the grandchild had never started.
+    """
+    pid_path = tmp_path / "grandchild.pid"
+    command = f"sleep 60 & echo $! > {shlex.quote(str(pid_path))} ; sleep 60"
+    result = await run_tool(
+        "bash", {"command": command, "timeout": 1}, ToolContext(workspace=tmp_path)
+    )
+
     assert not result.success
     assert "timed out" in result.error
-
-    await asyncio.sleep(2.5)
-    assert not marker.exists(), "grandchild process leaked past the tool timeout"
+    await assert_process_exits(grandchild_pid(pid_path), "grandchild process leaked past the tool timeout")
 
 
 @pytest.mark.asyncio

@@ -444,6 +444,8 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		}
 	case "run.budget.exceeded":
 		fmt.Fprint(out, budgetExceededLine(event))
+	case "plan.updated":
+		fmt.Fprint(out, planLines(event))
 	case "mcp.server.started":
 		fmt.Fprintf(out, "MCP server %q ready (%d tools)\n", stringValue(event["server"]), countValue(event["tools"]))
 	case "mcp.server.failed":
@@ -563,6 +565,37 @@ func countValue(value any) int {
 		return len(items)
 	}
 	return 0
+}
+
+// planLines renders the agent's plan as a checklist. This is the whole point of
+// externalising the plan: during a long task the user can see what the agent
+// believes it is doing, instead of a stream of tool names.
+func planLines(event map[string]any) string {
+	items, ok := event["items"].([]any)
+	if !ok || len(items) == 0 {
+		return "\nPlan cleared.\n"
+	}
+	var out strings.Builder
+	out.WriteString("\nPlan:\n")
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		out.WriteString(fmt.Sprintf("  %s %s\n", planMarker(stringValue(item["status"])), stringValue(item["text"])))
+	}
+	return out.String()
+}
+
+func planMarker(status string) string {
+	switch status {
+	case "done":
+		return "[x]"
+	case "in_progress":
+		return "[~]"
+	default:
+		return "[ ]"
+	}
 }
 
 func budgetExceededLine(event map[string]any) string {

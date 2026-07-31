@@ -110,7 +110,7 @@ def test_session_store_migrates_old_schema(tmp_path: Path) -> None:
     assert session.compactions == []
     with sqlite3.connect(db_path) as conn:
         columns = {row[1] for row in conn.execute("pragma table_info(sessions)").fetchall()}
-        assert columns == {"session_id", "workspace", "created_at", "updated_at"}
+        assert columns == {"session_id", "workspace", "created_at", "updated_at", "plan"}
         assert conn.execute(
             "select count(*) from sqlite_master where type = 'table' and name = 'compactions'"
         ).fetchone()[0] == 1

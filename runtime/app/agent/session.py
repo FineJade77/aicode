@@ -5,9 +5,30 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 COMPACTION_SCHEMA_VERSION = 1
+
+PlanItemStatus = Literal["pending", "in_progress", "done"]
+PLAN_ITEM_STATUSES: frozenset[str] = frozenset(("pending", "in_progress", "done"))
+MAX_PLAN_ITEMS = 40
+
+
+@dataclass(frozen=True, slots=True)
+class PlanItem:
+    """One step of the model's externalised plan.
+
+    Deliberately minimal: the more state a plan item carries, the more ways a
+    model has to use it wrongly. Text plus a three-value status is enough for
+    both purposes the plan serves — showing the user what the agent thinks it is
+    doing, and giving the model something to check itself against.
+    """
+
+    text: str
+    status: PlanItemStatus = "pending"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"text": self.text, "status": self.status}
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 
 
@@ -98,6 +119,8 @@ class AgentSession(Protocol):
     current_run_id: str | None
     current_run_stage: str | None
     auto_accept_edits: bool
+    plan: list[PlanItem]
+    read_files: dict[str, str]
 
     def to_dict(self) -> dict[str, Any]: ...
 
@@ -118,6 +141,14 @@ class AgentSession(Protocol):
     def agent_runner_active(self) -> bool: ...
 
     def append_message(self, message: dict[str, Any]) -> int | None: ...
+
+    def set_plan(self, items: list[PlanItem]) -> list[PlanItem]: ...
+
+    def record_read(self, path: str, content_hash: str) -> None: ...
+
+    def read_hash(self, path: str) -> str | None: ...
+
+    def forget_read(self, path: str) -> None: ...
 
     def append_compaction(self, entry: CompactionEntry) -> CompactionEntry: ...
 

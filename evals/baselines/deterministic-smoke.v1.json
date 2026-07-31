@@ -14,14 +14,14 @@
     "aicode_version": "0.1.0",
     "compaction_prompt_version": "aicode.compaction.v1",
     "eval_contract": "1.0",
-    "eval_harness_sha256": "b733f59c4c0284bb484a955dcc4954f1653956f9f8fbfc07ff5ccf1930c8faa2",
+    "eval_harness_sha256": "1adb5a157fe65f7ca31da1e0250195cabfb43c5e77573eee9e2dc07c44bf2aec",
     "eval_runner": "scripted-v1",
     "eval_schema_sha256": "20560af47fca86755225ef8f2734009f0189d72ac3b9728f4a3e563edba12224",
     "fixture_set_sha256": "792b289271b143f886b2e4a13ff0ac0d57511c07fdf0e9e94519ce01f03b8383",
-    "policy_sha256": "5be494207d01082c61f50a6075e676698cdfe421e7ffa22e8ee587ecba5e3492",
-    "prompt_sha256": "a5f5ba32f99c11f38c8dd4d797c03d63e4d7351c64656a93cea0db53f3843932",
+    "policy_sha256": "050b4a39adfbcd779e387ab61922cb695b3a54654c2ac155225ada2107648ba8",
+    "prompt_sha256": "2e4fad627032716227c0bedd794a5d95ea23b50eedef0185d37e5241e3a187ce",
     "task_set_sha256": "afb6f13bb10e9dd3986b81c3f637b8a26a0cf54c28cacfa9e8c6b4ef8d7a31a5",
-    "tool_schema_sha256": "8e4b9c65e4732ead2f1c87759e5dc34008bfafd6fdc7174ede3e8af284060e07"
+    "tool_specs_sha256": "1d9b4d73e1f205956ba6514486c1529bf961ec3402781b07168ac7719e42e17f"
   },
   "recorded_metrics": {
     "task_count": 5,

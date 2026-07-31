@@ -159,6 +159,7 @@ class SessionSnapshot:
     messages: tuple[dict[str, Any], ...]
     approvals: tuple[dict[str, Any], ...]
     agent: AgentRunState
+    plan: tuple[dict[str, Any], ...] = ()
     # Populated by listings, which report history size without hydrating it.
     # Full snapshots leave it None; use len(messages) there.
     message_count: int | None = None
@@ -180,6 +181,7 @@ class SessionSnapshot:
             messages=tuple(dict(item) for item in messages or () if isinstance(item, Mapping)),
             approvals=tuple(dict(item) for item in approvals or () if isinstance(item, Mapping)),
             agent=AgentRunState.from_mapping(agent if isinstance(agent, Mapping) else {}),
+            plan=tuple(dict(item) for item in (value.get("plan") or ()) if isinstance(item, Mapping)),
             message_count=_optional_int(value.get("message_count")),
         )
 
@@ -192,6 +194,7 @@ class SessionSnapshot:
             "messages": [dict(item) for item in self.messages],
             "approvals": [dict(item) for item in self.approvals],
             "agent": self.agent.to_dict(),
+            "plan": [dict(item) for item in self.plan],
         }
         if self.message_count is not None:
             payload["message_count"] = self.message_count

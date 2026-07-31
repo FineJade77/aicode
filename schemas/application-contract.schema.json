@@ -6,7 +6,11 @@
   "$defs": {
     "turnRequest": {
       "type": "object",
-      "required": ["message", "mode", "workspace"],
+      "required": [
+        "message",
+        "mode",
+        "workspace"
+      ],
       "properties": {
         "message": {
           "type": "string"
@@ -18,17 +22,26 @@
           "type": "string"
         },
         "model": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
     },
     "runReceipt": {
       "type": "object",
-      "required": ["status", "run_id"],
+      "required": [
+        "status",
+        "run_id"
+      ],
       "properties": {
         "status": {
-          "enum": ["accepted", "queued"]
+          "enum": [
+            "accepted",
+            "queued"
+          ]
         },
         "run_id": {
           "type": "string"
@@ -38,13 +51,23 @@
     },
     "runControl": {
       "type": "object",
-      "required": ["status", "run_id", "queued"],
+      "required": [
+        "status",
+        "run_id",
+        "queued"
+      ],
       "properties": {
         "status": {
-          "enum": ["cancelled", "idle"]
+          "enum": [
+            "cancelled",
+            "idle"
+          ]
         },
         "run_id": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "queued": {
           "type": "integer",
@@ -55,7 +78,11 @@
     },
     "steerReceipt": {
       "type": "object",
-      "required": ["status", "run_id", "pending"],
+      "required": [
+        "status",
+        "run_id",
+        "pending"
+      ],
       "properties": {
         "status": {
           "const": "queued"
@@ -72,13 +99,22 @@
     },
     "compactionReceipt": {
       "type": "object",
-      "required": ["status", "compaction"],
+      "required": [
+        "status",
+        "compaction"
+      ],
       "properties": {
         "status": {
-          "enum": ["compacted", "unchanged"]
+          "enum": [
+            "compacted",
+            "unchanged"
+          ]
         },
         "compaction": {
-          "type": ["object", "null"]
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -109,23 +145,41 @@
           "minimum": 0
         },
         "current_run_id": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "stage": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "started_at": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "last_progress_at": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "elapsed_seconds": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0
         },
         "stalled_seconds": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0
         }
       },
@@ -169,6 +223,30 @@
         },
         "agent": {
           "$ref": "#/$defs/agentRunState"
+        },
+        "plan": {
+          "type": "array",
+          "description": "The model's externalised plan for the current task; replaced wholesale by update_plan.",
+          "items": {
+            "type": "object",
+            "required": [
+              "text",
+              "status"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "done"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

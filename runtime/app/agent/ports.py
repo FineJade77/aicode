@@ -134,6 +134,7 @@ class ToolRuntime(Protocol):
         session_id: str = "",
         run_id: str = "",
         trust_level: str = "trusted",
+        session: Any = None,
     ) -> Any: ...
 
     def spec_for(self, name: str) -> ToolSpec | None: ...
@@ -144,12 +145,7 @@ class ToolRuntime(Protocol):
 
     async def run(self, name: str, arguments: dict[str, Any], context: Any) -> Any: ...
 
-    def build_edit_proposal(
-        self,
-        workspace: Path,
-        arguments: dict[str, Any],
-        protected_paths: list[str],
-    ) -> Any: ...
+    def build_edit_proposal(self, context: Any, arguments: dict[str, Any]) -> Any: ...
 
     def apply_edit(self, workspace: Path, proposal: Any) -> None: ...
 

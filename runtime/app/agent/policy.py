@@ -126,6 +126,12 @@ class PolicyEngine:
                 "high",
                 f"{mode} mode only permits read-only tools",
             )
+        if spec.approval == "none":
+            # Declared to need no gate. Only the built-in registry can say this —
+            # MCP tools are forced to approval="gate" — and it is reached only
+            # after the read-only-mode check above, so a non-read-only tool still
+            # cannot run in review/explain/commit_message mode.
+            return GateDecision("allow", "low")
         if spec.approval == "diff":
             return GateDecision("ask", "medium", "file writes require inline diff confirmation")
         if tool_name == "bash":

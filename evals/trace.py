@@ -180,10 +180,48 @@ def source_versions(repository_root: Path) -> dict[str, str]:
         "eval_harness_sha256": harness_digest.hexdigest(),
         "eval_schema_sha256": eval_schema_digest.hexdigest(),
         "prompt_sha256": sha256_file(repository_root / "runtime/app/agent/prompts.py"),
-        "tool_schema_sha256": sha256_file(repository_root / "schemas/tools.schema.json"),
+        "tool_specs_sha256": tool_specs_digest(repository_root),
         "policy_sha256": sha256_file(repository_root / "runtime/app/agent/policy.py"),
         "compaction_prompt_version": COMPACTION_PROMPT_VERSION,
     }
+
+
+def tool_specs_digest(repository_root: Path) -> str:
+    """Digest everything about the tools that can change agent behaviour.
+
+    Replaces a digest of `schemas/tools.schema.json`, which turned out to cover
+    much less than its name suggested: that file is a *meta*-schema describing
+    the shape of a tool definition plus an enum of names, so a tool's own
+    description or argument schema could change without the baseline noticing —
+    even though both directly steer the model.
+
+    It also closes a gap opened by the registry refactor: `read_only` and
+    `approval` used to live in the policy engine and were covered by
+    `policy_sha256`. Moving them onto `ToolSpec` left them covered by nothing, so
+    flipping a tool to read-only — which makes the gate allow it without asking —
+    would not have tripped any guard.
+
+    The canonical schema file is folded in as well, since it is the published
+    contract for external consumers.
+    """
+    from app.tools.registry import TOOL_SPECS
+
+    specs = [
+        {
+            "name": spec.name,
+            "description": spec.description,
+            "input_schema": spec.input_schema,
+            "read_only": spec.read_only,
+            "approval": spec.approval,
+            "hidden_in_modes": sorted(spec.hidden_in_modes),
+        }
+        for spec in sorted(TOOL_SPECS, key=lambda item: item.name)
+    ]
+    digest = hashlib.sha256()
+    digest.update(canonical_digest(specs).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update((repository_root / "schemas/tools.schema.json").read_bytes())
+    return digest.hexdigest()
 
 
 def canonical_digest(value: Any) -> str:
