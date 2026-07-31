@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-COMPACTION_SCHEMA_VERSION = 1
+# v2 stores a structured summary. Bumping this makes `latest_valid_compaction`
+# ignore v1 entries rather than read them: a free-text summary cannot be merged
+# with a structured one, and mixing the two reintroduces exactly the degradation
+# the structure exists to prevent. Ignoring is safe — `messages` is the
+# append-only source of truth, so an ignored compaction only costs one re-run.
+COMPACTION_SCHEMA_VERSION = 2
 
 PlanItemStatus = Literal["pending", "in_progress", "done"]
 PLAN_ITEM_STATUSES: frozenset[str] = frozenset(("pending", "in_progress", "done"))
@@ -86,6 +91,10 @@ class CompactionEntry:
     after_tokens: int
     context_window: int
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # The structured form `summary` was rendered from. Absent when the summary
+    # came from the deterministic fallback, which is why the merge on the next
+    # compaction treats None as "nothing to carry forward".
+    structured: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +111,7 @@ class CompactionEntry:
             "after_tokens": self.after_tokens,
             "context_window": self.context_window,
             "created_at": self.created_at.isoformat(),
+            "structured": self.structured.to_dict() if self.structured is not None else None,
         }
 
 

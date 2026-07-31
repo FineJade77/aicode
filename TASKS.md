@@ -803,7 +803,7 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - 无法覆盖的一种情况已知并留给 T-039：连续压缩时上一轮摘要是自由文本，其中的过期内容无法再判定——这正是 T-039 结构化摘要要解决的问题。
 - 验证：Python 474 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（无 baseline 变更）。
 
-### `[ ]` T-039 结构化压缩摘要
+### `[x]` T-039 结构化压缩摘要
 
 对应：评审 C3
 
@@ -812,6 +812,15 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 范围：改为结构化 schema（`goal` / `constraints` / `done` / `pending` / `files_touched` / `open_failures`）；`CompactionEntry` 存结构化结果并升 `COMPACTION_SCHEMA_VERSION`，旧条目仍可读（既有版本校验已支持忽略不兼容版本）。
 
 验收：连续两次压缩后 `pending` 与 `open_failures` 不丢失（当前自由文本无法断言这一点）；模型返回非法结构时降级到确定性摘要并标注 `summary_mode=fallback`。
+
+完成记录（2026-07-31）：
+
+- 新增 `app/agent/summary.py`：六字段 schema、容错解析（去围栏、从散文中抽 JSON、单字符串归一为列表、去重与上限）、确定性渲染。`CompactionEntry` 增加 `structured` 列（migration 005），`COMPACTION_SCHEMA_VERSION` 升到 2。
+- **验收里的"不丢失"靠代码保证，不靠模型自觉**：`pending` 与 `open_failures` 由 `merge_summaries` 程序化续接，模型只有把条目显式列进新的 `done` 才能移除它。匹配是文本比对，确实模糊，但偏差方向是安全的——认错只会让已完成项多留一轮（重复劳动），不会丢掉未完成项（静默放弃工作）。`test_pending_survives_two_consecutive_compactions` 里第二次摘要故意完全不提这两个字段，正是自由文本降解的样子。
+- 非法结构降级到确定性摘要并标 `summary_mode=fallback` / `summary_error=invalid_structure`，同时**不把自由文本存成 structured**——否则下一轮续接会静默变成空操作。
+- 任务描述里"旧条目仍可读"不准确：版本校验是**忽略**不兼容版本，不是读取它。升级后 v1 条目不再用于投影，会退回原始历史重新压缩一次。这是安全的（messages 是 source of truth），但代价不是零，已在 ARCHITECTURE 写明。SQL 行本身不受影响，`test_a_v4_database_gains_the_structured_column_without_losing_compactions` 覆盖。
+- **顺手补掉一个 eval 覆盖漏洞**：`COMPACTION_SYSTEM_PROMPT` 此前只由手工维护的 `compaction_prompt_version` 字符串"覆盖"，而 `prompt_sha256` 只哈希 `prompts.py`——改了压缩提示词却不改版本号，没有任何闸门会发现。新增 `compaction_prompt_sha256` 直接哈希提示词文本，并实测验证：改一个词即 FAIL，改回即 PASS。这与之前 `tool_schema_sha256` 是同一类问题。
+- 验证：Python 505 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
 ### `[ ]` T-040 中间压缩层
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.session import COMPACTION_SCHEMA_VERSION, AgentSession, CompactionEntry
+from app.agent.summary import StructuredSummary, merge_summaries, parse_structured_summary
 from app.agent.turn import MESSAGE_META_KEY
 from app.models.provider import ModelCapability, ProviderError
 from app.security import redact_known_environment_secrets
@@ -17,7 +18,7 @@ HARD_BUDGET_FACTOR = 1.5
 KEEP_RECENT_MESSAGES = 8
 KEEP_RECENT_GROUPS = 6
 FORCED_KEEP_RECENT_GROUPS = 1
-COMPACTION_PROMPT_VERSION = "aicode.compaction.v1"
+COMPACTION_PROMPT_VERSION = "aicode.compaction.v2"
 COMPACTION_SUMMARY_MAX_CHARS = 8_000
 
 TOOL_OUTPUT_LIMITS = {"bash": 8_000, "run_tests": 8_000, "read_file": 0, "default": 6_000}
@@ -26,7 +27,17 @@ COMPACTION_SYSTEM_PROMPT = """\
 You compress coding-agent history into a factual summary that is sufficient to continue the task. Do not speculate.
 Preserve the user's goal and latest constraints, unfinished work, key decisions, recent file changes, validation results
 and failures, approval or rejection outcomes, important paths, commands, errors, and tool results needed to continue.
-Do not copy long tool output. Keep conclusions and clues for retrieving details again. Return concise Markdown bullets."""
+Do not copy long tool output. Keep conclusions and clues for retrieving details again.
+
+Reply with a single JSON object and nothing else, using exactly these keys:
+{"goal": "<one sentence>", "constraints": [], "done": [], "pending": [], "files_touched": [], "open_failures": []}
+- goal: the user's current objective.
+- constraints: instructions and limits that still apply.
+- done: work already completed. Move an item here verbatim from pending once it is finished.
+- pending: work that still remains. Never drop an item unless it is now listed in done.
+- files_touched: workspace-relative paths that were read or modified.
+- open_failures: failing tests, commands, or errors that are not yet resolved.
+Every list holds short plain strings. Use an empty list rather than omitting a key."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,11 +261,13 @@ async def _persist_compaction(
         return current_history
 
     covered_messages, stale_reads = invalidate_stale_reads(covered_messages, session)
-    summary, summary_provider, summary_model, summary_error = await _summarize(
+    previous_structured = previous.structured if previous is not None else None
+    structured, summary, summary_provider, summary_model, summary_error = await _summarize(
         covered_messages,
         runtime=runtime,
         session=session,
         chars_per_token=chars_per_token,
+        previous=previous_structured,
     )
     first_positive_id = next((message_id for message_id in ids if message_id > 0), end_message_id)
     start_message_id = previous.start_message_id if previous is not None else first_positive_id
@@ -272,6 +285,7 @@ async def _persist_compaction(
         start_message_id=start_message_id,
         end_message_id=end_message_id,
         summary=summary,
+        structured=structured,
         provider=summary_provider,
         model=summary_model,
         prompt_version=COMPACTION_PROMPT_VERSION,
@@ -370,10 +384,11 @@ async def _summarize(
     runtime: Any,
     session: AgentSession,
     chars_per_token: float,
-) -> tuple[str, str, str, str | None]:
+    previous: StructuredSummary | None = None,
+) -> tuple[StructuredSummary | None, str, str, str, str | None]:
     router = getattr(runtime, "model_runtime", None)
     if router is None:
-        return _deterministic_summary(messages), "builtin", "deterministic", "model_router_unavailable"
+        return None, _deterministic_summary(messages), "builtin", "deterministic", "model_router_unavailable"
 
     capability = router.capability_for_purpose("summarizer")
     context_settings = router.settings.context
@@ -396,10 +411,13 @@ async def _summarize(
             temperature=0.0,
         )
     except ProviderError as exc:
-        return _deterministic_summary(messages), "builtin", "deterministic", exc.__class__.__name__
-    summary = result.text.strip()
-    if not summary:
-        return _deterministic_summary(messages), "builtin", "deterministic", "empty_summary"
+        return None, _deterministic_summary(messages), "builtin", "deterministic", exc.__class__.__name__
+    parsed = parse_structured_summary(result.text)
+    if parsed is None:
+        # The reply was not a usable object. Degrade to the deterministic summary
+        # rather than storing free text under a structured schema version, which
+        # would make the next merge silently a no-op.
+        return None, _deterministic_summary(messages), "builtin", "deterministic", "invalid_structure"
     usage = {
         "model": result.model,
         "provider": result.provider,
@@ -412,7 +430,8 @@ async def _summarize(
     if audit is not None:
         audit.record("usage.recorded", session_id=session.session_id, workspace=session.workspace, data=usage)
     await session.events.put({"type": "usage.recorded", **usage})
-    return summary[:COMPACTION_SUMMARY_MAX_CHARS], result.provider, result.model, None
+    structured = merge_summaries(previous, parsed)
+    return structured, structured.render()[:COMPACTION_SUMMARY_MAX_CHARS], result.provider, result.model, None
 
 
 def _deterministic_summary(messages: list[dict[str, Any]]) -> str:

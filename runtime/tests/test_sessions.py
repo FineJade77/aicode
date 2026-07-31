@@ -846,3 +846,80 @@ def test_prune_by_max_age_uses_updated_at(tmp_path: Path) -> None:
 
     assert result["deleted_sessions"] == 1
     assert [row["session_id"] for row in store.list()] == [recent.session_id]
+
+
+def test_a_v4_database_gains_the_structured_column_without_losing_compactions(tmp_path: Path) -> None:
+    """The pre-T-039 shape must upgrade in place.
+
+    The compaction *schema version* bump makes old entries ignored for
+    projection, but the rows themselves are still history and must survive the
+    SQL migration.
+    """
+    db = tmp_path / "s.sqlite"
+    older = sqlite3.connect(db)
+    older.executescript(
+        """
+        create table sessions (
+            session_id text primary key,
+            workspace text not null,
+            created_at text not null,
+            updated_at text not null,
+            plan text
+        );
+        create table messages (
+            id integer primary key autoincrement,
+            session_id text not null,
+            role text not null,
+            payload text not null,
+            created_at text not null
+        );
+        create table compactions (
+            id integer primary key autoincrement,
+            session_id text not null,
+            schema_version integer not null,
+            start_message_id integer not null,
+            end_message_id integer not null,
+            summary text not null,
+            provider text not null,
+            model text not null,
+            prompt_version text not null,
+            before_tokens integer not null,
+            after_tokens integer not null,
+            context_window integer not null,
+            created_at text not null
+        );
+        create table events (
+            id integer primary key autoincrement,
+            session_id text not null,
+            sequence integer not null,
+            payload text not null,
+            created_at text not null
+        );
+        insert into sessions (session_id, workspace, created_at, updated_at, plan)
+        values ('sess_v4', '/repo', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', null);
+        insert into messages (session_id, role, payload, created_at)
+        values ('sess_v4', 'user', '{"role":"user","content":"hello"}', '2026-01-01T00:00:00+00:00');
+        insert into compactions (
+            session_id, schema_version, start_message_id, end_message_id, summary,
+            provider, model, prompt_version, before_tokens, after_tokens, context_window, created_at
+        ) values ('sess_v4', 1, 1, 1, '- free text summary', 'openai', 'gpt', 'aicode.compaction.v1',
+                  100, 50, 32768, '2026-01-01T00:00:00+00:00');
+        """
+    )
+    older.execute("pragma user_version = 4")
+    older.commit()
+    older.close()
+
+    store = SessionStore(path=db)
+    session = store.get("sess_v4")
+
+    assert session is not None
+    assert [message["content"] for message in session.messages] == ["hello"]
+    assert len(session.compactions) == 1
+    legacy = session.compactions[0]
+    assert legacy.summary == "- free text summary"
+    assert legacy.structured is None, "a v1 row has no structure to load"
+    with store._connect() as conn:
+        assert conn.execute("pragma user_version").fetchone()[0] == SCHEMA_VERSION
+        columns = {row["name"] for row in conn.execute("pragma table_info(compactions)").fetchall()}
+        assert "structured" in columns

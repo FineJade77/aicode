@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from app.agent.history import COMPACTION_PROMPT_VERSION
+from app.agent.history import COMPACTION_PROMPT_VERSION, COMPACTION_SYSTEM_PROMPT
 from app.audit.redaction import redact
 from evals import EVAL_CONTRACT_VERSION, RUNNER_VERSION
 
@@ -183,6 +183,10 @@ def source_versions(repository_root: Path) -> dict[str, str]:
         "tool_specs_sha256": tool_specs_digest(repository_root),
         "policy_sha256": sha256_file(repository_root / "runtime/app/agent/policy.py"),
         "compaction_prompt_version": COMPACTION_PROMPT_VERSION,
+        # The version string alone is hand-maintained and can drift from the text
+        # it names; `prompt_sha256` covers only `prompts.py`, so without this the
+        # compaction prompt could change with no gate noticing.
+        "compaction_prompt_sha256": sha256_text(COMPACTION_SYSTEM_PROMPT),
     }
 
 

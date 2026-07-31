@@ -22,6 +22,7 @@ from app.agent.session import (
     CompactionEntry,
     PlanItem,
 )
+from app.agent.summary import StructuredSummary
 from app.events import validate_event
 from app.security import redact_known_environment_secrets
 from app.system import SystemClock, UuidGenerator
@@ -31,6 +32,31 @@ MAX_TRANSIENT_RETAINED_EVENTS = 200
 EVENT_WRITE_QUEUE_MAXSIZE = 5_000
 DEFAULT_SESSION_CACHE_LIMIT = 200
 COMPACTION_SCHEMA_VERSION = CORE_COMPACTION_SCHEMA_VERSION
+
+
+def parse_structured_column(raw: Any) -> StructuredSummary | None:
+    """Rebuild a stored structured summary, tolerating anything malformed.
+
+    A summary is derived state: `messages` remains the source of truth, so a row
+    that cannot be parsed degrades to "no structure to carry forward" rather
+    than failing the session load.
+    """
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return StructuredSummary(
+        goal=str(payload.get("goal") or ""),
+        constraints=[str(item) for item in payload.get("constraints") or [] if isinstance(item, str)],
+        done=[str(item) for item in payload.get("done") or [] if isinstance(item, str)],
+        pending=[str(item) for item in payload.get("pending") or [] if isinstance(item, str)],
+        files_touched=[str(item) for item in payload.get("files_touched") or [] if isinstance(item, str)],
+        open_failures=[str(item) for item in payload.get("open_failures") or [] if isinstance(item, str)],
+    )
 
 
 def parse_plan(raw: Any) -> list[PlanItem]:
@@ -750,8 +776,8 @@ class SessionStore:
                 insert into compactions (
                     session_id, schema_version, start_message_id, end_message_id, summary,
                     provider, model, prompt_version, before_tokens, after_tokens,
-                    context_window, created_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    context_window, created_at, structured
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -766,6 +792,7 @@ class SessionStore:
                     entry.after_tokens,
                     entry.context_window,
                     entry.created_at.isoformat(),
+                    json.dumps(entry.structured.to_dict(), ensure_ascii=False) if entry.structured is not None else None,
                 ),
             )
             stored = CompactionEntry(
@@ -782,6 +809,7 @@ class SessionStore:
                 after_tokens=entry.after_tokens,
                 context_window=entry.context_window,
                 created_at=entry.created_at,
+                structured=entry.structured,
             )
         session.compactions.append(stored)
         return stored
@@ -1008,7 +1036,7 @@ class SessionStore:
             """
             select id, session_id, schema_version, start_message_id, end_message_id,
                    summary, provider, model, prompt_version, before_tokens, after_tokens,
-                   context_window, created_at
+                   context_window, created_at, structured
             from compactions
             where session_id = ?
             order by id asc
@@ -1030,6 +1058,7 @@ class SessionStore:
                 after_tokens=int(row["after_tokens"]),
                 context_window=int(row["context_window"]),
                 created_at=datetime.fromisoformat(str(row["created_at"])),
+                structured=parse_structured_column(row["structured"]),
             )
             for row in rows
         ]
@@ -1174,6 +1203,7 @@ def _migration_001_base_schema(conn: sqlite3.Connection) -> None:
             after_tokens integer not null,
             context_window integer not null,
             created_at text not null,
+            structured text,
             foreign key (session_id) references sessions(session_id)
         );
 
@@ -1237,11 +1267,20 @@ def _migration_004_sessions_plan(conn: sqlite3.Connection) -> None:
     conn.execute("alter table sessions add column plan text")
 
 
+def _migration_005_compactions_structured(conn: sqlite3.Connection) -> None:
+    """Add `compactions.structured`, holding the structured summary as JSON."""
+    columns = {row["name"] for row in conn.execute("pragma table_info(compactions)").fetchall()}
+    if "structured" in columns:
+        return
+    conn.execute("alter table compactions add column structured text")
+
+
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migration_001_base_schema),
     (2, _migration_002_sessions_updated_at),
     (3, _migration_003_drop_sessions_language),
     (4, _migration_004_sessions_plan),
+    (5, _migration_005_compactions_structured),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

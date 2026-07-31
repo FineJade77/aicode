@@ -12,16 +12,17 @@
   ],
   "source_versions": {
     "aicode_version": "0.1.0",
-    "compaction_prompt_version": "aicode.compaction.v1",
+    "compaction_prompt_version": "aicode.compaction.v2",
     "eval_contract": "1.0",
-    "eval_harness_sha256": "1adb5a157fe65f7ca31da1e0250195cabfb43c5e77573eee9e2dc07c44bf2aec",
+    "eval_harness_sha256": "e823c2ee891852d1d8db77457b9a0d434d2f185d782f469a37a853a9e50dc367",
     "eval_runner": "scripted-v1",
     "eval_schema_sha256": "20560af47fca86755225ef8f2734009f0189d72ac3b9728f4a3e563edba12224",
     "fixture_set_sha256": "792b289271b143f886b2e4a13ff0ac0d57511c07fdf0e9e94519ce01f03b8383",
     "policy_sha256": "050b4a39adfbcd779e387ab61922cb695b3a54654c2ac155225ada2107648ba8",
     "prompt_sha256": "560d9fd15537985dea58fe89c949a98219ce20e73a4ca8d289cdedbaaac3033b",
     "task_set_sha256": "74c1ac59833f8e38e866595f1dbef7108586838a10e005a75a91a927d4a01cd2",
-    "tool_specs_sha256": "1d9b4d73e1f205956ba6514486c1529bf961ec3402781b07168ac7719e42e17f"
+    "tool_specs_sha256": "1d9b4d73e1f205956ba6514486c1529bf961ec3402781b07168ac7719e42e17f",
+    "compaction_prompt_sha256": "caaa059ba6ad7f238bf72f98701451b1c60161d4783cc6ead124f26d0c3b481e"
   },
   "recorded_metrics": {
     "task_count": 5,

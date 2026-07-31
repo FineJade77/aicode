@@ -490,6 +490,14 @@ Runtime 持久化以下内容：
 
 compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
+**摘要是结构化的。** 摘要模型被要求返回固定字段的 JSON（`goal` / `constraints` / `done` / `pending` / `files_touched` / `open_failures`），`CompactionEntry` 同时存下结构化结果与由它确定性渲染出的文本。自由文本在连续压缩（对摘要再摘要）下降解很快，且没有形状可供程序化检查——丢了什么无从判断。
+
+关键不在于字段本身，而在于**`pending` 与 `open_failures` 由代码续接，不依赖模型自觉重复**。模型在下一轮摘要里省略一条未完成工作，它就永久消失了；因此上一轮的这两个字段会被重新并入，只有当模型把该条目显式列进新的 `done` 才移除。文本匹配是模糊的，但它的偏差方向是安全的：认错会把已完成项继续留在 pending（最坏是重复劳动），而不会丢掉未完成项（最坏是静默放弃工作）。
+
+模型返回无法解析的结构时降级到确定性摘要，`context.budget` 标记 `summary_mode=fallback` 与 `summary_error=invalid_structure`，并且**不把自由文本存成结构化 schema 版本**——否则下一轮的续接会静默变成空操作。
+
+`COMPACTION_SCHEMA_VERSION` 升到 2 后，v1 条目被 `latest_valid_compaction` 忽略而非读取：自由文本摘要无法与结构化摘要合并，混用会把结构本要消除的降解重新引入。忽略是安全的——`messages` 是 append-only source of truth，被忽略的 compaction 只是多跑一次压缩。
+
 **失效读取不进入摘要。** compaction 把 `read_file` 输出当作事实写进摘要，如果该文件此后被改动，摘要里就留下一段被表述为当前内容的过期内容——而模型再也看不到原始消息，无从察觉。因此每条 `read_file` 结果消息上持久化一份 Runtime 私有 provenance（`aicode_meta.read = {path, hash}`），compaction 时按该 hash 与磁盘现状比对，不符者其内容替换为"该文件已变更，需要时重新读取"，已删除的同样标记，并在 `context.budget` 事件中以 `stale_reads` 列出。
 
 比对的是**那一次读取当时的 hash**，不是 session 的滚动 `read_files` 记录。这个区别就是这条机制的全部要点：`read_files` 在写入时也会更新，所以 Agent 自己编辑过文件之后该记录已与磁盘一致，拿它比对会漏掉 Agent 自己的编辑——而那正是读取失效最常见的原因，外部修改反而是少数情况。
