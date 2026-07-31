@@ -456,3 +456,32 @@ func TestRenderEmptyPlanSaysCleared(t *testing.T) {
 		t.Fatalf("expected a cleared notice, got %q", text)
 	}
 }
+
+func TestRenderFoldedContextBudget(t *testing.T) {
+	// A fold is not a compaction: no summary was produced and nothing that
+	// drives the next step was lost, but the prompt changed, so it must show.
+	var out bytes.Buffer
+	RenderEventTo(&out, map[string]any{
+		"type":                "context.budget",
+		"purpose":             "history",
+		"compacted":           false,
+		"reason":              "folded",
+		"before_tokens":       100,
+		"after_tokens":        40,
+		"folded_tool_outputs": 3,
+	})
+	text := out.String()
+	for _, want := range []string{"folded 3", "100", "40", "no summary needed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in output, got %q", want, text)
+		}
+	}
+}
+
+func TestUncompactedContextBudgetStaysSilent(t *testing.T) {
+	var out bytes.Buffer
+	RenderEventTo(&out, map[string]any{"type": "context.budget", "compacted": false})
+	if text := out.String(); text != "" {
+		t.Fatalf("expected no output for a no-op budget event, got %q", text)
+	}
+}

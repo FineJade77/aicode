@@ -822,7 +822,7 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - **顺手补掉一个 eval 覆盖漏洞**：`COMPACTION_SYSTEM_PROMPT` 此前只由手工维护的 `compaction_prompt_version` 字符串"覆盖"，而 `prompt_sha256` 只哈希 `prompts.py`——改了压缩提示词却不改版本号，没有任何闸门会发现。新增 `compaction_prompt_sha256` 直接哈希提示词文本，并实测验证：改一个词即 FAIL，改回即 PASS。这与之前 `tool_schema_sha256` 是同一类问题。
 - 验证：Python 505 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
-### `[ ]` T-040 中间压缩层
+### `[x]` T-040 中间压缩层
 
 对应：评审 C2
 
@@ -831,6 +831,16 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 范围：保留最近 K 组 tool 输出原文，更早的折叠为一行引用；以完整消息组为边界（复用 `_message_groups`），不跨越未闭合的 tool_call 组。
 
 验收：达中间阈值时只折叠不摘要，token 下降且 `pending` 类信息零损失；仅当折叠后仍超限才触发全量摘要。
+
+完成记录（2026-07-31）：
+
+- `fold_old_tool_output` 把较早的 tool 结果换成一行引用（含工具名与原字符数），`_fold_to_fit` 让 `keep` 从 `FOLD_KEEP_RECENT_GROUPS` 往下试，只折叠到刚好装得下为止——只超出一点点的历史几乎全部保留原文。
+- "零损失"的依据是**只折叠 `role == "tool"`**：用户约束与助手推理一字不改。`test_only_tool_messages_are_folded` 直接钉这一条。边界复用 `_message_groups`，未闭合的 tool_call 组整体跳过。
+- 折叠是**纯投影**，不写回 `session.messages`，每轮从原始消息确定性重算。这正是与被删掉的 `compact_if_needed` 的差别：后者改内存副本，与持久化的 source of truth 漂移。确定性重算既不需要持久化，也不可能漂移——所以任务背景里提的"无持久化"问题在这个实现下不存在，而不是被绕过。
+- 短输出不折叠（引用比原文还长时得不偿失）。`context.budget` 增加 `reason="folded"` 与 `folded_tool_outputs`，CLI 渲染为"折叠了几条、token 从多少降到多少、无需摘要"。
+- **改了一个既有测试而不是删它**：`test_compaction_boundary_keeps_tool_call_and_result_together` 原先靠 8 组 40KB 的 tool 输出触发摘要，现在被折叠吸收了。把体量移到 assistant 消息上——折叠不碰这一类——于是它仍然走到摘要、仍然在验证边界规则。
+- fold 变体没有进 SSE fixture：该 fixture 契约要求每种事件类型恰好一条，重复的 `context.budget` 会破坏它；变体改由 Go 单测覆盖。
+- 验证：Python 515 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
 ### `[ ]` T-041 打转检测
 

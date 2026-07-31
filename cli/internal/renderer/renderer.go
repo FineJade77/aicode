@@ -650,6 +650,16 @@ func verificationExhaustedLine(event map[string]any) string {
 }
 
 func contextBudgetLine(event map[string]any) string {
+	// A fold is not a compaction — no summary was produced and nothing was lost —
+	// but it did change the prompt, so it still has to be visible.
+	if stringValue(event["reason"]) == "folded" && !boolValue(event["compacted"]) {
+		return fmt.Sprintf(
+			"Context budget: folded %v earlier tool outputs, %v -> %v tokens (no summary needed)\n",
+			event["folded_tool_outputs"],
+			event["before_tokens"],
+			event["after_tokens"],
+		)
+	}
 	if !boolValue(event["compacted"]) {
 		return ""
 	}

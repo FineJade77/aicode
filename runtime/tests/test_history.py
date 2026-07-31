@@ -109,8 +109,11 @@ async def test_compaction_boundary_keeps_tool_call_and_result_together(tmp_path)
         store.append_message(
             sess,
             {
+                # Bulk lives on the assistant messages, which the fold tier never
+                # touches, so this still reaches summarization and exercises the
+                # boundary rule rather than being absorbed by folding.
                 "role": "assistant",
-                "content": "",
+                "content": "y" * 40_000,
                 "tool_calls": [{"id": f"tc_{index}", "name": "bash", "arguments": {"command": "true"}}],
             },
         )

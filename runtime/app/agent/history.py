@@ -17,6 +17,10 @@ HISTORY_TOKEN_BUDGET = 60_000
 HARD_BUDGET_FACTOR = 1.5
 KEEP_RECENT_MESSAGES = 8
 KEEP_RECENT_GROUPS = 6
+# How many trailing message groups keep their tool output verbatim when folding.
+# Tried from this value downwards, so the fold is only ever as aggressive as it
+# needs to be.
+FOLD_KEEP_RECENT_GROUPS = 4
 FORCED_KEEP_RECENT_GROUPS = 1
 COMPACTION_PROMPT_VERSION = "aicode.compaction.v2"
 COMPACTION_SUMMARY_MAX_CHARS = 8_000
@@ -177,6 +181,35 @@ async def prepare_history_for_model(
     if not force and before <= input_limit:
         return strip_message_meta(history)
 
+    # Middle tier. Between per-tool truncation at write time and a lossy summary
+    # of the whole history there was nothing, so exceeding the threshold by a
+    # little spent a model call and discarded detail that folding alone could
+    # have recovered. Folding drops only bulk tool output; user constraints and
+    # assistant decisions stay verbatim, so nothing that drives the next step is
+    # lost.
+    history, folded_count = _fold_to_fit(
+        history,
+        system=system,
+        tools=tools,
+        chars_per_token=chars_per_token,
+        input_limit=input_limit,
+        stop_when_fits=not force,
+    )
+    if folded_count and not force:
+        after = estimate_prompt_tokens(system, history, tools, chars_per_token)
+        if after <= input_limit:
+            await _emit_budget_event(
+                session,
+                capability,
+                before_tokens=before,
+                after_tokens=after,
+                compacted=False,
+                forced=False,
+                reason="folded",
+                folded_tool_outputs=folded_count,
+            )
+            return strip_message_meta(history)
+
     compacted = await _persist_compaction(
         runtime=runtime,
         session=session,
@@ -191,6 +224,95 @@ async def prepare_history_for_model(
         force=force,
     )
     return strip_message_meta(compacted)
+
+
+
+FOLDED_TOOL_OUTPUT = "[earlier {tool} output folded to save context ({chars} characters); re-run it if the detail matters]"
+
+
+def _fold_to_fit(
+    messages: list[dict[str, Any]],
+    *,
+    system: str,
+    tools: list[dict[str, Any]] | tuple[Any, ...],
+    chars_per_token: float,
+    input_limit: int,
+    stop_when_fits: bool,
+) -> tuple[list[dict[str, Any]], int]:
+    """Fold as little tool output as gets the history under the limit.
+
+    Walks `keep` downwards so a history that only just overflows keeps almost
+    everything verbatim. When nothing fits, the most-folded attempt is returned
+    anyway: summarization is next, and it may as well start from less bulk.
+    """
+    best: list[dict[str, Any]] = messages
+    best_count = 0
+    for keep in range(FOLD_KEEP_RECENT_GROUPS, 0, -1):
+        candidate, count = fold_old_tool_output(messages, keep_recent_groups=keep)
+        if not count:
+            continue
+        best, best_count = candidate, count
+        if stop_when_fits and estimate_prompt_tokens(system, candidate, tools, chars_per_token) <= input_limit:
+            return candidate, count
+    return best, best_count
+
+
+def fold_old_tool_output(
+    messages: list[dict[str, Any]],
+    *,
+    keep_recent_groups: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Replace older tool results with a one-line reference.
+
+    Only `role == "tool"` messages are folded. That is what makes this tier
+    lossless for the information that decides the next step: the user's goal and
+    constraints and the assistant's own reasoning are never touched, only the
+    bulk output they were derived from.
+
+    Incomplete groups are left alone. An unresolved tool call and its result must
+    stay together and intact, the same boundary rule compaction uses.
+    """
+    groups = _message_groups(messages)
+    if len(groups) <= keep_recent_groups:
+        return messages, 0
+    foldable = groups[: len(groups) - keep_recent_groups] if keep_recent_groups else groups
+
+    folded: dict[int, str] = {}
+    for group in foldable:
+        if not group.complete:
+            continue
+        names = _tool_call_names(messages[group.start])
+        for index in range(group.start, group.end + 1):
+            message = messages[index]
+            if message.get("role") != "tool":
+                continue
+            content = str(message.get("content") or "")
+            tool = names.get(str(message.get("tool_call_id") or "")) or "tool"
+            replacement = FOLDED_TOOL_OUTPUT.format(tool=tool, chars=len(content))
+            if len(replacement) >= len(content):
+                # Folding a short result would cost more than it saves.
+                continue
+            folded[index] = replacement
+    if not folded:
+        return messages, 0
+
+    updated: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        if index not in folded:
+            updated.append(message)
+            continue
+        replacement = {key: value for key, value in message.items() if key != MESSAGE_META_KEY}
+        replacement["content"] = folded[index]
+        updated.append(replacement)
+    return updated, len(folded)
+
+
+def _tool_call_names(message: dict[str, Any]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for call in message.get("tool_calls") or []:
+        if isinstance(call, dict) and call.get("id"):
+            names[str(call["id"])] = str(call.get("name") or "tool")
+    return names
 
 
 async def _persist_compaction(
@@ -490,6 +612,7 @@ async def _emit_budget_event(
     summary_mode: str | None = None,
     summary_error: str | None = None,
     stale_reads: list[str] | None = None,
+    folded_tool_outputs: int = 0,
 ) -> None:
     event: dict[str, Any] = {
         "type": "context.budget",
@@ -509,6 +632,8 @@ async def _emit_budget_event(
         event["summary_mode"] = summary_mode
     if summary_error is not None:
         event["summary_error"] = summary_error
+    if folded_tool_outputs:
+        event["folded_tool_outputs"] = folded_tool_outputs
     if stale_reads:
         # Surfaced because it changes what the summary can be trusted to say:
         # these files' contents were dropped from it rather than summarized.
