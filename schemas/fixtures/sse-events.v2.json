@@ -225,6 +225,27 @@
     },
     {
       "event_id": 25,
+      "type": "verify.attempt",
+      "round": 1,
+      "limit": 3,
+      "passed": false,
+      "exit_code": 1,
+      "summary": "FAILED tests/test_math.py::test_add",
+      "message": "Verification attempt 1 of 3 failed (exit 1)."
+    },
+    {
+      "event_id": 26,
+      "type": "run.verification.exhausted",
+      "run_id": "run_fixture",
+      "rounds": 3,
+      "limit": 3,
+      "command": "pytest -q",
+      "exit_code": 1,
+      "summary": "FAILED tests/test_math.py::test_add",
+      "message": "Verification did not pass in 3 attempts; wrapping up with a report instead of continuing to edit."
+    },
+    {
+      "event_id": 27,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

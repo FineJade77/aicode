@@ -444,6 +444,10 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		}
 	case "run.budget.exceeded":
 		fmt.Fprint(out, budgetExceededLine(event))
+	case "verify.attempt":
+		fmt.Fprint(out, verifyAttemptLine(event))
+	case "run.verification.exhausted":
+		fmt.Fprint(out, verificationExhaustedLine(event))
 	case "plan.updated":
 		fmt.Fprint(out, planLines(event))
 	case "mcp.server.started":
@@ -610,6 +614,39 @@ func budgetExceededLine(event map[string]any) string {
 		event["total_cost"],
 		event["limit"],
 	)
+}
+
+func verifyAttemptLine(event map[string]any) string {
+	if boolValue(event["passed"]) {
+		return "Verification passed.\n"
+	}
+	line := fmt.Sprintf(
+		"Verification attempt %v of %v failed (exit %v).",
+		event["round"],
+		event["limit"],
+		event["exit_code"],
+	)
+	if summary := stringValue(event["summary"]); summary != "" {
+		line += " " + summary
+	}
+	return line + "\n"
+}
+
+func verificationExhaustedLine(event map[string]any) string {
+	// The extracted summary is repeated here on purpose: this is the line the
+	// user sees when the run gives up, and scrolling back for the reason is
+	// exactly what the structured extraction exists to avoid.
+	line := fmt.Sprintf(
+		"\nTurn stopped: verification still failing after %v attempts.",
+		event["rounds"],
+	)
+	if command := stringValue(event["command"]); command != "" {
+		line += fmt.Sprintf(" Last command: %s (exit %v).", command, event["exit_code"])
+	}
+	if summary := stringValue(event["summary"]); summary != "" {
+		line += " " + summary
+	}
+	return line + " Wrapping up with a report.\n"
 }
 
 func contextBudgetLine(event map[string]any) string {

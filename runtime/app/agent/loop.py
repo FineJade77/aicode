@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from app.agent.history import ContextManager, persist_message, truncate_tool_output
 from app.agent.policy import PolicyEngine
-from app.agent.prompts import VERIFY_NOTE, budget_note, build_system_prompt
+from app.agent.prompts import build_system_prompt, verify_note, wind_down_note
 from app.agent.session import AgentSession, ApprovalDecision
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRequest, AgentRuntime
+from app.agent.verify import VerifyOutcome, VerifyTracker, summarize_failure
 from app.models.provider import (
     TOOL_ARGUMENT_PARSE_ERROR_KEY,
     CompletionResult,
@@ -91,14 +92,14 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
     budget = turn_budget(runtime)
     ledger = TurnLedger()
     applied_edits = 0
-    verify_note_sent = False
+    verify = VerifyTracker(limit=budget.max_verify_rounds)
     result: CompletionResult | None = None
 
     async def on_delta(text: str) -> None:
         session.mark_agent_progress("model.stream")
         await session.events.put({"type": "assistant.delta", "text": text})
 
-    budget_reason: str | None = None
+    stop_reason: str | None = None
     for _step in range(budget.max_steps):
         await apply_pending_steers(session, request, runtime)
         session.mark_agent_progress("model.request")
@@ -120,31 +121,55 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
         if await apply_pending_steers(session, request, runtime, result.tool_calls):
             continue
 
-        budget_reason = ledger.exceeded(budget)
-        if budget_reason is not None:
-            await emit_budget_exceeded(session, runtime, budget, ledger, budget_reason)
+        stop_reason = ledger.exceeded(budget)
+        if stop_reason is not None:
+            await emit_budget_exceeded(session, runtime, budget, ledger, stop_reason)
             break
 
         if not result.tool_calls:
-            if applied_edits > 0 and not verify_note_sent:
-                verify_note_sent = True
-                persist_message(session, user_note(VERIFY_NOTE))
+            if verify.exhausted(applied_edits):
+                # Bounded, and it ends in the shared wind-down rather than in
+                # silently exhausting the step budget.
+                stop_reason = "verification"
+                await emit_verification_exhausted(session, runtime, verify)
+                break
+            if verify.should_request_verification(applied_edits):
+                round_number = verify.begin_round()
+                session.mark_agent_progress(f"verify.round({round_number})")
+                persist_message(
+                    session,
+                    user_note(verify_note(round_number, verify.limit, verify.failure_digest())),
+                )
                 continue
             session.mark_agent_progress("finalizing")
             break
 
-        applied_edits += await execute_tool_calls(session, request, result.tool_calls, runtime, policy, context)
+        step = await execute_tool_calls(
+            session,
+            request,
+            result.tool_calls,
+            runtime,
+            policy,
+            context,
+            edits_applied_before=applied_edits,
+        )
+        if step.applied_edits:
+            verify.note_edit_applied()
+        applied_edits += step.applied_edits
+        for outcome in step.verifications:
+            verify.record(outcome)
+            await session.events.put(outcome.to_event(verify.rounds + 1, verify.limit))
 
     else:
-        budget_reason = "steps"
-        await emit_budget_exceeded(session, runtime, budget, ledger, budget_reason)
+        stop_reason = "steps"
+        await emit_budget_exceeded(session, runtime, budget, ledger, stop_reason)
 
-    if budget_reason is not None:
-        # One shared wind-down for every exhausted budget dimension, so the user
+    if stop_reason is not None:
+        # One shared wind-down for every early stop, so the user
         # always receives a summary rather than a truncated transcript. This call
         # is outside the loop and its usage is never re-gated, which is what stops
         # the wind-down from recursing into another budget stop.
-        persist_message(session, user_note(budget_note(budget_reason)))
+        persist_message(session, user_note(wind_down_note(stop_reason)))
         session.mark_agent_progress("model.request")
         _prompt, result = await complete_with_compaction(
             session=session,
@@ -283,6 +308,32 @@ async def apply_pending_steers(
 MAX_PARALLEL_TOOL_CALLS = 8
 
 
+@dataclass(frozen=True, slots=True)
+class ToolCallResult:
+    """One tool call's outcome as the loop needs it.
+
+    `ok` is carried explicitly rather than re-derived from `output`: every
+    failure path formats its own `[...]` string, and pattern-matching those
+    prefixes would silently misclassify the moment one of them is reworded.
+    """
+
+    output: str
+    applied_edits: int = 0
+    ok: bool = True
+    # The tool's own exit code where it has one, not scraped back out of the
+    # rendered text: failures are wrapped with an `[error] ` prefix, so any
+    # parse of the output string is guessing at a format meant for the model.
+    exit_code: int | None = None
+
+
+@dataclass(slots=True)
+class StepOutcome:
+    """What one batch of tool calls produced, beyond their text results."""
+
+    applied_edits: int = 0
+    verifications: list[VerifyOutcome] = field(default_factory=list)
+
+
 async def execute_tool_calls(
     session: AgentSession,
     request: AgentRequest,
@@ -290,7 +341,9 @@ async def execute_tool_calls(
     runtime: AgentRuntime,
     policy: PolicyEngine,
     context: Any,
-) -> int:
+    *,
+    edits_applied_before: int = 0,
+) -> StepOutcome:
     """Run one turn's tool calls, overlapping consecutive read-only ones.
 
     Models routinely return several `read_file`/`search` calls at once; running
@@ -306,7 +359,8 @@ async def execute_tool_calls(
     completion order; tool results are paired to calls positionally by some
     providers, so completion order would corrupt the next request.
     """
-    applied_edits = 0
+    outcome = StepOutcome()
+    edits_so_far = edits_applied_before
     for group in consecutive_tool_groups(calls, runtime):
         if len(group) > 1:
             session.mark_agent_progress(f"tool.parallel({len(group)})")
@@ -323,10 +377,19 @@ async def execute_tool_calls(
             session.mark_agent_progress(f"tool.{group[0].name}")
             outcomes = [await execute_gated(session, request, group[0], runtime, policy, context)]
 
-        for call, (output, applied) in zip(group, outcomes, strict=True):
-            applied_edits += applied
-            persist_message(session, tool_message(call.id, output))
-    return applied_edits
+        for call, call_result in zip(group, outcomes, strict=True):
+            outcome.applied_edits += call_result.applied_edits
+            if call.name == "bash" and edits_so_far > 0:
+                # Any shell run *after* an edit counts as an attempt to verify.
+                # Which command "really" verifies is not something the Runtime can
+                # decide for an arbitrary project, so the bound is on repair
+                # rounds rather than on command identity. Checked against the
+                # running count, not the batch's starting count, so an edit and
+                # its test in one assistant message are still ordered correctly.
+                outcome.verifications.append(verification_from_result(call, call_result))
+            edits_so_far += call_result.applied_edits
+            persist_message(session, tool_message(call.id, call_result.output))
+    return outcome
 
 
 async def _execute_with_limit(
@@ -337,7 +400,7 @@ async def _execute_with_limit(
     runtime: AgentRuntime,
     policy: PolicyEngine,
     context: Any,
-) -> tuple[str, int]:
+) -> ToolCallResult:
     """Bound how many tool calls run at once.
 
     A model can return dozens of reads in one turn; without a cap they would all
@@ -345,6 +408,26 @@ async def _execute_with_limit(
     """
     async with semaphore:
         return await execute_gated(session, request, call, runtime, policy, context)
+
+
+def tool_exit_code(result: Any) -> int | None:
+    value = result.data.get("exit_code") if isinstance(getattr(result, "data", None), dict) else None
+    return value if isinstance(value, int) else None
+
+
+def verification_from_result(call: ToolCallRequest, result: ToolCallResult) -> VerifyOutcome:
+    """Read a bash call's outcome as a verification attempt.
+
+    A command that was denied, rejected, or never parsed has no exit code at all;
+    it reports as failed with the placeholder, because it did not run and so
+    verified nothing.
+    """
+    return VerifyOutcome(
+        command=str(call.arguments.get("command") or ""),
+        passed=result.ok and result.exit_code == 0,
+        exit_code=result.exit_code if result.exit_code is not None else -1,
+        summary="" if result.ok else summarize_failure(result.output),
+    )
 
 
 def consecutive_tool_groups(
@@ -380,7 +463,7 @@ async def execute_gated(
     runtime: AgentRuntime,
     policy: PolicyEngine,
     context: Any,
-) -> tuple[str, int]:
+) -> ToolCallResult:
     parse_error = None
     if not isinstance(call.arguments, dict):
         parse_error_payload = tool_argument_parse_error(repr(call.arguments), ValueError("tool arguments JSON must be an object"))
@@ -410,7 +493,7 @@ async def execute_gated(
                 duration_ms=0,
             )
         )
-        return f"[tool argument parse failed] {message}", 0
+        return ToolCallResult(f"[tool argument parse failed] {message}", ok=False)
 
     if runtime.tools is None:
         raise RuntimeError("AgentRuntime is missing a tool runtime adapter")
@@ -442,7 +525,7 @@ async def execute_gated(
                 duration_ms=0,
             )
         )
-        return f"[tool argument validation failed] {message}", 0
+        return ToolCallResult(f"[tool argument validation failed] {message}", ok=False)
 
     spec = runtime.tools.spec_for(call.name)
     gate = policy.gate(
@@ -490,7 +573,7 @@ async def execute_gated(
                 "risk_level": gate.risk_level,
             }
         )
-        return f"[denied by policy] {gate.reason}", 0
+        return ToolCallResult(f"[denied by policy] {gate.reason}", ok=False)
 
     if spec is not None and spec.approval == "diff":
         # Declared behaviour, not a hardcoded tool name: any future tool that
@@ -516,7 +599,7 @@ async def execute_gated(
                     "resolution": str(decision),
                 }
             )
-            return f"[{reason}]", 0
+            return ToolCallResult(f"[{reason}]", ok=False)
 
     session.mark_agent_progress(f"tool.{call.name}")
     # A per-call copy rather than assigning onto the shared context: overlapping
@@ -547,7 +630,7 @@ async def execute_gated(
                 duration_ms=result.duration_ms,
             )
         )
-        return output, 0
+        return ToolCallResult(output, exit_code=tool_exit_code(result))
     if runtime.trace is not None:
         runtime.trace.record(
             "tool.finished",
@@ -565,7 +648,11 @@ async def execute_gated(
             duration_ms=result.duration_ms,
         )
     )
-    return f"[error] {truncate_tool_output(call.name, result.error)}", 0
+    return ToolCallResult(
+        f"[error] {truncate_tool_output(call.name, result.error)}",
+        ok=False,
+        exit_code=tool_exit_code(result),
+    )
 
 
 async def execute_edit(
@@ -574,7 +661,7 @@ async def execute_edit(
     call: ToolCallRequest,
     runtime: AgentRuntime,
     context: Any,
-) -> tuple[str, int]:
+) -> ToolCallResult:
     if runtime.tools is None or runtime.clock is None:
         raise RuntimeError("AgentRuntime is missing a tool runtime or clock adapter")
     started = runtime.clock.monotonic()
@@ -591,7 +678,7 @@ async def execute_edit(
                 duration_ms=elapsed_ms(started, runtime),
             )
         )
-        return f"[edit failed] {exc}", 0
+        return ToolCallResult(f"[edit failed] {exc}", ok=False)
 
     auto = session.auto_accept_edits and not runtime.tools.is_protected_path(proposal.path, context.protected_paths)
     if auto:
@@ -615,7 +702,7 @@ async def execute_edit(
                 "resolution": str(decision),
             }
         )
-        return f"[{reason}] {proposal.path}", 0
+        return ToolCallResult(f"[{reason}] {proposal.path}", ok=False)
 
     try:
         runtime.tools.apply_edit(workspace, proposal)
@@ -633,7 +720,7 @@ async def execute_edit(
             )
         )
         marker = " stale" if "Stale" in exc.__class__.__name__ else ""
-        return f"[edit failed{marker}] {exc}", 0
+        return ToolCallResult(f"[edit failed{marker}] {exc}", ok=False)
     duration_ms = elapsed_ms(started, runtime)
     patch_hash = stable_hash(proposal.diff)
     if runtime.trace is not None:
@@ -660,7 +747,7 @@ async def execute_edit(
             "duration_ms": duration_ms,
         }
     )
-    return f"Applied edit to {proposal.path}:\n{proposal.diff}", 1
+    return ToolCallResult(f"Applied edit to {proposal.path}:\n{proposal.diff}", applied_edits=1)
 
 
 def tool_event(
@@ -772,6 +859,7 @@ def turn_budget(runtime: AgentRuntime) -> TurnBudget:
     return TurnBudget(
         max_total_tokens=settings.max_total_tokens,
         max_total_cost=settings.max_total_cost,
+        max_verify_rounds=settings.max_verify_rounds,
     )
 
 
@@ -800,6 +888,44 @@ async def emit_budget_exceeded(
         {
             "type": "run.budget.exceeded",
             "message": f"The {reason} budget for this turn is exhausted; wrapping up without further tool calls.",
+            **payload,
+        }
+    )
+
+
+async def emit_verification_exhausted(
+    session: AgentSession,
+    runtime: AgentRuntime,
+    verify: VerifyTracker,
+) -> None:
+    """Report that the repair loop hit its bound with verification still failing.
+
+    Carries the extracted failure summary rather than the raw command output: the
+    point of the bound is that the user learns *why* it is still failing without
+    reading the whole transcript.
+    """
+    latest = verify.failures[-1] if verify.failures else None
+    payload = {
+        "rounds": verify.rounds,
+        "limit": verify.limit,
+        "command": latest.command if latest is not None else "",
+        "exit_code": latest.exit_code if latest is not None else 0,
+        "summary": latest.summary if latest is not None else "",
+    }
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "run.verification.exhausted",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"run_id": session.current_run_id, **payload},
+        )
+    await session.events.put(
+        {
+            "type": "run.verification.exhausted",
+            "message": (
+                f"Verification did not pass in {verify.rounds} attempts; wrapping up with a report "
+                "instead of continuing to edit."
+            ),
             **payload,
         }
     )

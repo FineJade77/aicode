@@ -2,17 +2,42 @@ from __future__ import annotations
 
 from typing import Any
 
-VERIFY_NOTE = "Edits applied. Run relevant tests to verify; keep fixing on failure, stop and report after 3 consecutive failed attempts."
 BUDGET_NOTE = "Step limit reached. Stop calling tools now and summarize what is done and what remains."
-BUDGET_NOTES = {
+# Every reason the loop can stop early on. Both budget exhaustion and an unmet
+# verification bound end in the same wind-down call, so the user always gets a
+# summary rather than a truncated transcript.
+WIND_DOWN_NOTES = {
     "steps": BUDGET_NOTE,
     "tokens": "Token budget for this turn is exhausted. Stop calling tools now and summarize what is done and what remains.",
     "cost": "Cost budget for this turn is exhausted. Stop calling tools now and summarize what is done and what remains.",
+    "verification": (
+        "Verification did not pass within the allowed attempts. Stop editing and calling tools now. "
+        "Report exactly what you changed, what the verification command reported, and what you would try next."
+    ),
 }
 
 
-def budget_note(reason: str) -> str:
-    return BUDGET_NOTES.get(reason, BUDGET_NOTE)
+def wind_down_note(reason: str) -> str:
+    return WIND_DOWN_NOTES.get(reason, BUDGET_NOTE)
+
+
+def verify_note(round_number: int, limit: int, failure_digest: str = "") -> str:
+    """Ask for verification, stating the attempt count the loop actually enforces.
+
+    The count is rendered from the tracker rather than written into a fixed
+    sentence: the old note promised to stop "after 3 consecutive failed attempts"
+    while nothing in the loop counted anything, so the number was decoration.
+    """
+    if round_number <= 1 and not failure_digest:
+        lead = "Edits applied but not yet verified."
+    else:
+        lead = "Verification has not passed yet."
+        if failure_digest:
+            lead += f" Last run: {failure_digest}."
+    return (
+        f"{lead} Run the project's tests or checks and fix what fails "
+        f"(attempt {round_number} of {limit}; after that the run stops and reports)."
+    )
 
 MODE_INSTRUCTIONS = {
     "review": "Review mode: you only have read-only tools. Do not write files or take actions beyond review suggestions. Review the current git diff (use review_diff for deterministic findings) and return structured findings.",

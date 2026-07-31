@@ -16,6 +16,10 @@ class TurnBudget:
     # every step re-sends the whole history. 0 disables a cap.
     max_total_tokens: int = 1_000_000
     max_total_cost: float = 5.0
+    # How many times the loop pushes an unverified model back before winding down
+    # and reporting. 0 disables the check, restoring "finish whenever the model
+    # says it is done".
+    max_verify_rounds: int = 3
 
 
 @dataclass(slots=True)

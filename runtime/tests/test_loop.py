@@ -35,9 +35,22 @@ class Request:
         self.model = model
 
 
-def make_runtime(turns, tmp_path):
+def without_verification():
+    """Settings with the post-edit verification bound switched off.
+
+    Used by tests whose subject is something else — approval flow, batching,
+    parallelism — so they script only the turns they are actually about. The
+    bound itself is covered by the verification tests below; leaving it on here
+    would mean every edit test also had to script a passing command.
+    """
+    settings = Settings()
+    settings.budget.max_verify_rounds = 0
+    return settings
+
+
+def make_runtime(turns, tmp_path, settings=None):
     fake = FakeProvider(turns)
-    router = ModelRouter(primary=fake, settings=Settings())
+    router = ModelRouter(primary=fake, settings=settings or Settings())
     audit = AuditLogger(path=tmp_path / "audit.jsonl")
     return (
         AgentRuntime(
@@ -364,6 +377,7 @@ async def test_edit_approval_flow_applies_after_accept(tmp_path):
             text_turn("Complete"),
         ],
         tmp_path,
+        settings=without_verification(),
     )
     session = make_session(tmp_path)
     mark_read(session, tmp_path, "a.py")
@@ -429,6 +443,7 @@ async def test_accept_all_skips_approval(tmp_path):
             text_turn("Complete"),
         ],
         tmp_path,
+        settings=without_verification(),
     )
     session = make_session(tmp_path)
     mark_read(session, tmp_path, "a.py")
@@ -447,6 +462,7 @@ async def test_verification_note_injected_after_edit(tmp_path):
         [
             tool_turn("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}),
             text_turn("Edit complete"),  # Attempted finish should trigger the verification note.
+            tool_turn("bash", {"command": "ls"}, call_id="tc_v"),
             text_turn("Verified"),
         ],
         tmp_path,
@@ -455,9 +471,168 @@ async def test_verification_note_injected_after_edit(tmp_path):
     mark_read(session, tmp_path, "a.py")
     session.auto_accept_edits = True
     await run_turn(session, Request(tmp_path), runtime)
-    assert len(fake.calls) == 3
-    last_call = fake.calls[2]
-    assert any("[system note]" in str(m.get("content")) for m in last_call.messages if m.get("role") == "user")
+    assert len(fake.calls) == 4
+    note_call = fake.calls[2]
+    notes = [
+        str(m.get("content")) for m in note_call.messages
+        if m.get("role") == "user" and "[system note]" in str(m.get("content"))
+    ]
+    assert notes
+    # The note states the bound the loop actually enforces, rather than a fixed
+    # sentence that no code backed.
+    assert "attempt 1 of 3" in notes[-1]
+
+
+@pytest.mark.asyncio
+async def test_claiming_done_does_not_satisfy_verification(tmp_path):
+    """The core of T-037.
+
+    The old implementation used a one-shot flag, so a model could claim it was
+    finished, absorb a single note, and claim it again to exit — verification was
+    effectively optional. The bound now holds regardless of what the model says.
+    """
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    runtime, fake = make_runtime(
+        [
+            tool_turn("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}),
+            text_turn("Edit complete"),
+            text_turn("Really, it is done"),
+            text_turn("Truly done"),
+            text_turn("Done, honestly"),
+            text_turn("Changed a.py; verification never ran."),  # forced wind-down
+        ],
+        tmp_path,
+    )
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
+    session.auto_accept_edits = True
+    await run_turn(session, Request(tmp_path), runtime)
+
+    exhausted = events_of(session, "run.verification.exhausted")
+    assert exhausted and exhausted[0]["rounds"] == 3
+    finals = events_of(session, "final")
+    assert finals and finals[0]["summary"], "the wind-down must still produce a summary"
+    # The wind-down asks for a report with no tools available, so the model
+    # cannot answer it by editing again.
+    assert fake.calls[-1].tools == []
+
+
+@pytest.mark.asyncio
+async def test_one_passing_command_ends_the_verification_loop(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    runtime, fake = make_runtime(
+        [
+            tool_turn("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}),
+            tool_turn("bash", {"command": "ls"}, call_id="tc_v"),
+            text_turn("Edited and verified."),
+        ],
+        tmp_path,
+    )
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
+    session.auto_accept_edits = True
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert len(fake.calls) == 3, "a passing run must not trigger any push-back"
+    assert not events_of(session, "run.verification.exhausted")
+    attempts = events_of(session, "verify.attempt")
+    assert len(attempts) == 1 and attempts[0]["passed"] is True
+    finals = events_of(session, "final")
+    assert finals and "verified" in finals[0]["summary"].lower()
+
+
+@pytest.mark.asyncio
+async def test_failing_verification_is_reported_with_an_extracted_summary(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    failing = "cat missing_file.txt"
+    runtime, _fake = make_runtime(
+        [
+            tool_turn("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}),
+            tool_turn("bash", {"command": failing}, call_id="tc_v1"),
+            text_turn("I give up"),
+            tool_turn("bash", {"command": failing}, call_id="tc_v2"),
+            text_turn("Still stuck"),
+            tool_turn("bash", {"command": failing}, call_id="tc_v3"),
+            text_turn("Cannot fix it"),
+            text_turn("Out of ideas"),
+            text_turn("Edited a.py; cat still cannot find the file."),
+        ],
+        tmp_path,
+    )
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
+    session.auto_accept_edits = True
+    await run_turn(session, Request(tmp_path), runtime)
+
+    attempts = events_of(session, "verify.attempt")
+    assert len(attempts) == 3
+    assert all(a["passed"] is False and a["exit_code"] == 1 for a in attempts)
+    exhausted = events_of(session, "run.verification.exhausted")
+    assert exhausted and exhausted[0]["command"] == failing
+    assert exhausted[0]["exit_code"] == 1
+    finals = events_of(session, "final")
+    assert finals and finals[0]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_a_further_edit_invalidates_an_earlier_pass(tmp_path):
+    """A passing run only vouches for the code that produced it."""
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    runtime, fake = make_runtime(
+        [
+            tool_turn("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}),
+            tool_turn("bash", {"command": "ls"}, call_id="tc_v"),
+            tool_turn("edit_file", {"path": "a.py", "old_text": "x = 2", "new_text": "x = 3"}, call_id="tc_e2"),
+            text_turn("Done"),
+            tool_turn("bash", {"command": "ls"}, call_id="tc_v2"),
+            text_turn("Re-verified after the second edit."),
+        ],
+        tmp_path,
+    )
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
+    session.auto_accept_edits = True
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert len(fake.calls) == 6, "the edit after a passing run must be verified again"
+    assert not events_of(session, "run.verification.exhausted")
+
+
+@pytest.mark.asyncio
+async def test_zero_verify_rounds_restores_the_previous_behaviour(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    settings = Settings()
+    settings.budget.max_verify_rounds = 0
+    runtime, fake = make_runtime(
+        [
+            tool_turn("edit_file", {"path": "a.py", "old_text": "x = 1", "new_text": "x = 2"}),
+            text_turn("Edit complete"),
+        ],
+        tmp_path,
+        settings=settings,
+    )
+    session = make_session(tmp_path)
+    mark_read(session, tmp_path, "a.py")
+    session.auto_accept_edits = True
+    await run_turn(session, Request(tmp_path), runtime)
+
+    assert len(fake.calls) == 2, "with the check disabled the model finishes when it says so"
+    assert not events_of(session, "verify.attempt")
+    assert not events_of(session, "run.verification.exhausted")
+
+
+@pytest.mark.asyncio
+async def test_a_command_run_before_any_edit_is_not_a_verification(tmp_path):
+    runtime, _fake = make_runtime(
+        [
+            tool_turn("bash", {"command": "ls"}),
+            text_turn("Nothing needed changing."),
+        ],
+        tmp_path,
+    )
+    session = make_session(tmp_path)
+    await run_turn(session, Request(tmp_path), runtime)
+    assert not events_of(session, "verify.attempt")
 
 
 @pytest.mark.asyncio
@@ -769,10 +944,8 @@ async def test_writes_are_not_overlapped_and_reads_keep_their_place_around_them(
             ]
         ),
         text_turn("Edited and re-read."),
-        # An applied edit makes the loop inject the verify note and ask once more.
-        text_turn("Verified."),
     ]
-    runtime, _fake = make_runtime(turns, tmp_path)
+    runtime, _fake = make_runtime(turns, tmp_path, settings=without_verification())
     tools = SlowToolRuntime(delay=0.02)
     runtime.tools = tools
     session = make_session(tmp_path)
@@ -917,7 +1090,7 @@ async def test_consecutive_edits_to_one_file_need_only_one_read(tmp_path):
         text_turn("Both edits applied."),
         text_turn("Verified."),
     ]
-    runtime, _fake = make_runtime(turns, tmp_path)
+    runtime, _fake = make_runtime(turns, tmp_path, settings=without_verification())
     session = make_session(tmp_path)
 
     async def approve_all():
@@ -945,6 +1118,7 @@ async def test_deleting_a_file_clears_its_read_record(tmp_path):
     runtime, _fake = make_runtime(
         [tool_turn("edit_file", {"path": "gone.py", "delete": True}, call_id="d1"), text_turn("Deleted."), text_turn("Done.")],
         tmp_path,
+        settings=without_verification(),
     )
 
     async def approve_all():
@@ -982,9 +1156,8 @@ async def test_batch_edit_applies_several_changes_under_one_approval(tmp_path):
             call_id="e1",
         ),
         text_turn("Applied all three."),
-        text_turn("Verified."),
     ]
-    runtime, _fake = make_runtime(turns, tmp_path)
+    runtime, _fake = make_runtime(turns, tmp_path, settings=without_verification())
     session = make_session(tmp_path)
     mark_read(session, tmp_path, "m.py")
 
@@ -1029,7 +1202,7 @@ async def test_a_failed_batch_leaves_the_file_untouched_in_the_loop(tmp_path):
         ),
         text_turn("Recovered."),
     ]
-    runtime, _fake = make_runtime(turns, tmp_path)
+    runtime, _fake = make_runtime(turns, tmp_path, settings=without_verification())
     session = make_session(tmp_path)
     mark_read(session, tmp_path, "m.py")
 

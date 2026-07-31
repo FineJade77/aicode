@@ -84,7 +84,6 @@ class LocalProviderFixture:
                     ),
                     3: tool_chunk("tc_verify", "bash", {"command": "python3 -m py_compile calc.py"}),
                     4: text_chunk("The fix is complete."),
-                    5: text_chunk("Verified with py_compile."),
                 }
                 self._sse(responses[fixture.agent_calls])
 
@@ -226,7 +225,9 @@ async def test_no_auth_localhost_profile_probe_and_full_edit_flow(tmp_path: Path
     event_types = [event["type"] for event in session.events.events_after(0)]
     for expected in ("approval.requested", "edit.applied", "final"):
         assert expected in event_types
-    assert fixture.agent_calls == 5
+    # Four, not five: py_compile ran after the edit and passed, so the loop has
+    # no reason to push the model back for verification it already did.
+    assert fixture.agent_calls == 4
     assert fixture.requests
     assert all(request["authorization"] is None for request in fixture.requests)
     assert all(

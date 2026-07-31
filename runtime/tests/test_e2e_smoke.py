@@ -32,7 +32,6 @@ async def test_full_fix_flow(tmp_path):
         tool_turn("edit_file", {"path": "calc.py", "old_text": "return a - b", "new_text": "return a + b"}, call_id="tc_2"),
         tool_turn("bash", {"command": "cat calc.py"}, call_id="tc_3", text="Verify the change"),
         text_turn("Fixed the add function"),
-        text_turn("Verification complete"),  # The model responds again after verify-note injection.
     ]
     fake = FakeProvider(turns)
     router = ModelRouter(primary=fake, settings=Settings())
@@ -75,10 +74,13 @@ async def test_full_fix_flow(tmp_path):
     for expected in ["tool.started", "approval.requested", "edit.applied", "usage.recorded", "final"]:
         assert expected in types, f"missing event {expected}"
 
-    # The final summary must come from the verification turn after verify-note
-    # injection, not from the edit turn. This catches premature finalization.
+    # The model ran a command after editing and it passed, so the loop lets it
+    # finish. The old implementation injected its verification note regardless of
+    # whether verification had actually happened, costing an extra model call on
+    # every successful edit turn.
+    assert "verify.attempt" in types
     finals = [e for e in events if e["type"] == "final"]
-    assert finals and finals[-1]["summary"] == "Verification complete"
+    assert finals and finals[-1]["summary"] == "Fixed the add function"
 
     # Multi-turn memory: the next message should include the prior turn.
     fake.turns.append(text_turn("Continue from the prior turn"))

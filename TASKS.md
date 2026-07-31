@@ -762,7 +762,7 @@
 
 T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘要 schema 才能表达"哪些文件内容已作废"；中间层的折叠策略又复用同一套失效判定。
 
-### `[ ]` T-037 验证循环机制化
+### `[x]` T-037 验证循环机制化
 
 对应：评审 L2
 
@@ -771,6 +771,18 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 范围：Loop 跟踪验证尝试次数与结果；达上限后走既有收尾路径（与预算闸门同一条）产出总结；失败输出结构化提取（失败用例名、首个错误行）避免整段 stderr 挤占上下文；新增 `verify.attempt` 事件。
 
 验收：连续失败达上限必定收尾且 `final` 非空；一次成功即退出；上限为 0 时行为回到当前实现。
+
+完成记录（2026-07-31）：
+
+- 新增 `app/agent/verify.py`：`VerifyTracker` 记账 +（`summarize_failure`）失败摘要抽取。`max_verify_rounds` 作为 `TurnBudget` 第四维（默认 3，`AICODE_BUDGET_MAX_VERIFY_ROUNDS`），与其余预算同源、同样不可被 `.aicode/config.json` 覆盖。
+- **原实现比"没有执行那个 3"更弱**：`verify_note_sent` 是一次性布尔，模型说"做完了"→被推回一次→再说一次"做完了"，循环就退出。也就是说**验证在原实现里事实上是可选的**，不是"上限没被执行"，而是"根本没有上限"。`test_claiming_done_does_not_satisfy_verification` 专门钉住这一点。
+- 同时修掉一个反向浪费：原实现只看"有没有发过 note"，**模型明明已经跑过验证也照样被推回一轮**，每个成功的编辑轮都白花一次 model call。两个既有测试（`test_e2e_smoke`、`test_local_provider_profile`）的期望值因此下降一次调用——不是回归，是少做一次无意义往返。
+- `execute_gated` 的返回值由 `tuple[str, int]` 换成 `ToolCallResult`（带 `ok` 与 `exit_code`）。**第一版是从输出文本里正则抓 `exit=`，是错的**：失败路径会包上 `[error] ` 前缀，锚定失效；而且那是给模型看的渲染格式，拿来做控制流判断等于猜。退出码现在从 `result.data` 直接携带。
+- 判定口径写在代码注释里并在此重申：编辑之后的任何 bash 都算一次验证尝试。Runtime **无法**对任意仓库判断模型跑的是不是"正确的"验证命令，因此闸门只保证"修复循环有界且必定收尾"，不冒充它保证不了的东西。
+- 事件按规则 5 三处注册 + Go 渲染：`verify.attempt`、`run.verification.exhausted`。`budget_note` → `wind_down_note`，因为这条收尾路径现在服务两类原因。
+- **eval 按规则 6 处理**：首跑 `success_rate` 1.0 → 0.8，安全指标未动。查因是 `single_file_fix` 的第 5 条脚本（"Verification complete"）只为应答旧的一次性 note 而存在，模型其实已经跑过 `unittest` 并通过。**没有下调断言**：删掉那条脚本，并把 `final_contains` 换成实质内容、加 `required_events: verify.attempt` 与 `forbidden_events: run.verification.exhausted`——比原先"断言一句脚本台词出现过"更强。重跑全部指标回到 1.0/0.0 后才只 rebase `prompt_sha256` 与 `task_set_sha256` 两个 digest。
+- 测试策略：`without_verification()` 让主题不是验证的测试（审批流、批量编辑、并行）显式关闭该闸门，而不是给每个编辑测试都补一条通过命令。写测试时踩到一个自己的坑：用 `exit 1` 当失败命令会因不在 allow list 而**卡在审批上永久挂起**，改用 `cat missing_file.txt`。
+- 验证：Python 451 项 + 1 skip、Go 全量、gofmt、go vet、ruff、compileall、eval-smoke PASS、clean-home install E2E 通过。
 
 ### `[ ]` T-038 文件状态跟踪与压缩失效
 

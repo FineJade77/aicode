@@ -74,6 +74,7 @@ class BudgetSettings(BaseModel):
 
     max_total_tokens: int = Field(default=1_000_000, ge=0)
     max_total_cost: float = Field(default=5.0, ge=0)
+    max_verify_rounds: int = Field(default=3, ge=0)
 
 
 class ExecutionSettings(BaseModel):
@@ -160,6 +161,7 @@ class Settings(BaseModel):
             budget=BudgetSettings(
                 max_total_tokens=_non_negative_int_env("AICODE_BUDGET_MAX_TOTAL_TOKENS", 1_000_000),
                 max_total_cost=_non_negative_float_env("AICODE_BUDGET_MAX_TOTAL_COST", 5.0),
+                max_verify_rounds=_non_negative_int_env("AICODE_BUDGET_MAX_VERIFY_ROUNDS", 3),
             ),
             session_retention=SessionRetentionSettings(
                 max_sessions=_non_negative_int_env("AICODE_SESSION_RETENTION_MAX_SESSIONS", 0),

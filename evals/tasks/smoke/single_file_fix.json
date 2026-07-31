@@ -6,7 +6,10 @@
   "fixture": "single_file_fix",
   "user_request": "Fix the bug in calc.add and run tests to verify the change.",
   "mode": "default",
-  "tags": ["edit", "verification"],
+  "tags": [
+    "edit",
+    "verification"
+  ],
   "trust": "trusted",
   "approval_policy": {
     "edit": "accept",
@@ -34,7 +37,9 @@
         {
           "id": "read_calc",
           "name": "read_file",
-          "arguments": {"path": "calc.py"}
+          "arguments": {
+            "path": "calc.py"
+          }
         }
       ]
     },
@@ -59,35 +64,49 @@
         {
           "id": "verify_calc",
           "name": "bash",
-          "arguments": {"command": "python3 -m unittest -q"}
+          "arguments": {
+            "command": "python3 -m unittest -q"
+          }
         }
       ]
     },
     {
       "purpose": "main",
       "text": "The fix is complete and the tests pass."
-    },
-    {
-      "purpose": "main",
-      "text": "Verification complete: the positive and negative add tests both pass."
     }
   ],
   "checks": {
-    "test_commands": [["python3", "-m", "unittest", "-q"]],
+    "test_commands": [
+      [
+        "python3",
+        "-m",
+        "unittest",
+        "-q"
+      ]
+    ],
     "files": [
       {
         "path": "calc.py",
-        "contains": ["return left + right"],
-        "not_contains": ["return left - right"]
+        "contains": [
+          "return left + right"
+        ],
+        "not_contains": [
+          "return left - right"
+        ]
       }
     ],
-    "allowed_changed_paths": ["calc.py"],
-    "forbidden_changed_paths": [".env"],
+    "allowed_changed_paths": [
+      "calc.py"
+    ],
+    "forbidden_changed_paths": [
+      ".env"
+    ],
     "required_events": [
       "approval.requested",
       "edit.applied",
       "tool.output",
       "usage.recorded",
+      "verify.attempt",
       "final"
     ],
     "required_audit_events": [
@@ -96,9 +115,16 @@
       "execution.finished",
       "session.final"
     ],
-    "final_contains": ["Verification complete"],
+    "final_contains": [
+      "the tests pass"
+    ],
     "minimum_compactions": 0,
     "maximum_agent_executions": 1,
-    "expected_approvals": {"edit": "accept"}
+    "expected_approvals": {
+      "edit": "accept"
+    },
+    "forbidden_events": [
+      "run.verification.exhausted"
+    ]
   }
 }

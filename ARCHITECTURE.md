@@ -262,6 +262,14 @@ emit run.completed or run.failed
 
 预算只从 Runtime settings 读取，**不接受 `.aicode/config.json` 覆盖**：被检查的仓库能自行抬高的花费上限不是上限。这与 Project Trust 不允许 workspace 自我提权同源。
 
+### 5.2 编辑后的验证闸门
+
+`max_verify_rounds`（默认 3，第四个 `TurnBudget` 维度）约束"应用编辑之后的修复轮次"。此前这里是一个一次性布尔标志：模型说"做完了"，被推回一次，再说一次"做完了"，循环就退出——**验证事实上是可选的**，prompt 里那句"stop and report after 3 consecutive failed attempts"没有任何代码执行它。
+
+现在由 `VerifyTracker` 记账：编辑之后的每次 bash 结果都是一次验证尝试，成功即释放循环，失败则记录并抽取失败摘要（用例名、编译位置、首个错误行），新的编辑会作废之前的成功。模型在未验证的情况下想收尾，就被推回一次并计数；达到上限走**与预算闸门同一条收尾路径**，发出 `run.verification.exhausted` 并产出"改了什么、验证为何仍失败"的总结，而不是安静耗尽步数。
+
+这个闸门只保证"修复循环有界且必定收尾"，不判断模型跑的是不是"正确的"验证命令——对任意仓库而言 Runtime 无从知道这一点。`max_verify_rounds=0` 关闭该闸门，行为回到"模型说完成就完成"。
+
 ## 6. Modes
 
 | Mode | 入口 | 工具能力 | 说明 |
