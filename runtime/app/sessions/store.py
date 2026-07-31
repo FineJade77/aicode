@@ -513,7 +513,7 @@ class SessionStore:
         Deliberately does not load messages, compactions or events. The previous
         implementation hydrated every message of every session on each call —
         50 sessions x 40 messages measured 69ms and ~82KB per row, growing
-        without bound — even though the only consumer (`aicode sessions`) shows a
+        without bound — even though the only consumer (`aicode session list`) shows a
         listing. Full history is available from `get(session_id)`.
 
         Summaries are also not written into the in-memory cache: listing is a

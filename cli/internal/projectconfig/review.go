@@ -16,7 +16,7 @@ func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool, kno
 		return "", nil, errors.New("rule id must not be empty")
 	}
 	if !knownRuleSet(knownRules)[rule] {
-		return "", nil, fmt.Errorf("unknown review rule: %s; run aicode review-rules for supported rules", rule)
+		return "", nil, fmt.Errorf("unknown review rule: %s; run aicode project review list for supported rules", rule)
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")

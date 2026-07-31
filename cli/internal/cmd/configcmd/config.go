@@ -1,28 +1,31 @@
-// Package configcmd implements `aicode config ...` and `aicode review-rules`.
+// Package configcmd manages global CLI and Runtime configuration.
 package configcmd
 
 import (
-	"context"
 	"fmt"
-	"net/url"
 	"os"
-	"sort"
-	"strconv"
-	"strings"
 	"text/tabwriter"
 
-	"github.com/FineJade77/aicode/cli/internal/client"
-	"github.com/FineJade77/aicode/cli/internal/cmd/runtimeio"
+	"github.com/FineJade77/aicode/cli/internal/cmd/projectcmd"
 	"github.com/FineJade77/aicode/cli/internal/config"
-	"github.com/FineJade77/aicode/cli/internal/daemon"
-	"github.com/FineJade77/aicode/cli/internal/projectconfig"
-	"github.com/FineJade77/aicode/cli/internal/renderer"
-	"github.com/FineJade77/aicode/cli/internal/workspace"
 )
 
+const HelpText = `Usage:
+  aicode config init
+  aicode config show
+  aicode config list
+  aicode config get <key>
+  aicode config set <key> <value>
+  aicode config unset <key>
+  aicode config docs
+
+Project-scoped settings live under ` + "`aicode project`" + `.
+`
+
 func Run(cfg config.Config, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: aicode config <init|show|list|get|docs|set|unset|protected|review|test|workspace>")
+	if len(args) == 0 || isHelp(args[0]) {
+		fmt.Print(HelpText)
+		return nil
 	}
 
 	switch args[0] {
@@ -79,27 +82,18 @@ func Run(cfg config.Config, args []string) error {
 		}
 		fmt.Printf("%s is not explicitly set in the user configuration (%s)\n", args[1], path)
 		return nil
+	// Hidden compatibility aliases for project-scoped configuration.
 	case "protected":
-		return runConfigProtectedCommand(args[1:])
+		return projectcmd.RunProtected(args[1:])
 	case "review":
-		return runConfigReviewCommand(cfg, args[1:])
+		return projectcmd.RunReview(cfg, args[1:])
 	case "test":
-		return runConfigTestCommand(args[1:])
+		return projectcmd.RunTestCommand(args[1:])
 	case "workspace":
-		return runConfigWorkspaceCommand(args[1:])
+		return projectcmd.RunWorkspace(args[1:])
 	default:
 		return fmt.Errorf("unknown config command: %s", args[0])
 	}
-}
-
-// ReviewRules implements the top-level `aicode review-rules` command.
-func ReviewRules(cfg config.Config) error {
-	value, err := fetchReviewRules(cfg)
-	if err != nil {
-		return err
-	}
-	renderer.PrintJSON(value)
-	return nil
 }
 
 func runConfigList(cfg config.Config) error {
@@ -131,434 +125,6 @@ func runConfigGet(cfg config.Config, key string) error {
 	return nil
 }
 
-func runConfigReviewCommand(cfg config.Config, args []string) error {
-	if len(args) == 1 && args[0] == "list" {
-		return runConfigReviewList(cfg)
-	}
-	if len(args) == 1 && args[0] == "docs" {
-		return runConfigReviewDocs(cfg)
-	}
-	if len(args) == 1 && args[0] == "prune" {
-		return runConfigReviewPrune(cfg)
-	}
-	if len(args) == 2 && args[0] == "unset" {
-		return runConfigReviewUnset(args[1])
-	}
-	if len(args) == 3 && args[0] == "set" {
-		return runConfigReviewSet(args[1], args[2])
-	}
-	if len(args) != 2 {
-		return configReviewUsage()
-	}
-
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	ruleData, err := fetchReviewRulesForWorkspace(cfg, root.Path)
-	if err != nil {
-		return err
-	}
-	knownRules := reviewRuleIDs(ruleData)
-
-	action := args[0]
-	rule := args[1]
-	var disabled bool
-	switch action {
-	case "disable":
-		disabled = true
-	case "enable":
-		disabled = false
-	default:
-		return configReviewUsage()
-	}
-
-	path, rules, err := projectconfig.SetReviewRuleDisabled(root.Path, rule, disabled, knownRules)
-	if err != nil {
-		return err
-	}
-	state := "Enabled"
-	if disabled {
-		state = "Disabled"
-	}
-	fmt.Printf("%s review rule %s (%s)\n", state, rule, path)
-	if len(rules) == 0 {
-		fmt.Println("Current disabledRules: []")
-		return nil
-	}
-	fmt.Printf("Current disabledRules: %s\n", strings.Join(rules, ", "))
-	return nil
-}
-
-func runConfigReviewSet(key string, rawValue string) error {
-	value, err := strconv.Atoi(rawValue)
-	if err != nil {
-		return fmt.Errorf("%s must be an integer: %w", key, err)
-	}
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, field, saved, err := projectconfig.SetReviewNumber(root.Path, key, value)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Set review.%s = %d (%s)\n", field, saved, path)
-	return nil
-}
-
-func runConfigReviewUnset(key string) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, field, err := projectconfig.UnsetReviewNumber(root.Path, key)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Reset review.%s to its default (%s)\n", field, path)
-	return nil
-}
-
-func runConfigReviewList(cfg config.Config) error {
-	value, err := fetchReviewRules(cfg)
-	if err != nil {
-		return err
-	}
-	renderer.PrintReviewRulesTable(value)
-	return nil
-}
-
-func runConfigReviewDocs(cfg config.Config) error {
-	value, err := fetchReviewRules(cfg)
-	if err != nil {
-		return err
-	}
-	renderer.PrintReviewRulesMarkdown(value)
-	return nil
-}
-
-func runConfigReviewPrune(cfg config.Config) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	ruleData, err := fetchReviewRulesForWorkspace(cfg, root.Path)
-	if err != nil {
-		return err
-	}
-
-	path, removed, rules, err := projectconfig.PruneUnknownReviewRules(root.Path, reviewRuleIDs(ruleData))
-	if err != nil {
-		return err
-	}
-	if len(removed) == 0 {
-		fmt.Printf("No unknown review rules found (%s)\n", path)
-		return nil
-	}
-	fmt.Printf("Removed unknown review rules: %s (%s)\n", strings.Join(removed, ", "), path)
-	if len(rules) == 0 {
-		fmt.Println("Current disabledRules: []")
-		return nil
-	}
-	fmt.Printf("Current disabledRules: %s\n", strings.Join(rules, ", "))
-	return nil
-}
-
-func configReviewUsage() error {
-	return fmt.Errorf("usage: aicode config review <enable|disable> <rule_id> | set <largeDiffThreshold|maxFindings> <value> | unset <largeDiffThreshold|maxFindings> | list | docs | prune")
-}
-
-func runConfigProtectedCommand(args []string) error {
-	if len(args) == 1 && args[0] == "list" {
-		return runConfigProtectedList()
-	}
-	if len(args) == 2 && args[0] == "add" {
-		return runConfigProtectedAdd(args[1])
-	}
-	if len(args) == 2 && (args[0] == "remove" || args[0] == "rm") {
-		return runConfigProtectedRemove(args[1])
-	}
-	if len(args) == 1 && args[0] == "reset" {
-		return runConfigProtectedReset()
-	}
-	return configProtectedUsage()
-}
-
-func runConfigProtectedList() error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, values, explicit, err := projectconfig.ListProtectedPaths(root.Path)
-	if err != nil {
-		return err
-	}
-	source := "project config"
-	if !explicit {
-		source = "defaults"
-	}
-	fmt.Printf("Protected paths (%s, %s)\n", source, path)
-	printStringList(values)
-	return nil
-}
-
-func runConfigProtectedAdd(pattern string) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, values, err := projectconfig.AddProtectedPath(root.Path, pattern)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Added protected path %s (%s)\n", pattern, path)
-	printStringList(values)
-	return nil
-}
-
-func runConfigProtectedRemove(pattern string) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, removed, values, err := projectconfig.RemoveProtectedPath(root.Path, pattern)
-	if err != nil {
-		return err
-	}
-	if removed {
-		fmt.Printf("Removed protected path %s (%s)\n", pattern, path)
-	} else {
-		fmt.Printf("Protected path %s was not found (%s)\n", pattern, path)
-	}
-	printStringList(values)
-	return nil
-}
-
-func runConfigProtectedReset() error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, values, err := projectconfig.ResetProtectedPaths(root.Path)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Reset protectedPaths to defaults (%s)\n", path)
-	printStringList(values)
-	return nil
-}
-
-func printStringList(values []string) {
-	if len(values) == 0 {
-		fmt.Println("[]")
-		return
-	}
-	for _, value := range values {
-		fmt.Printf("- %s\n", value)
-	}
-}
-
-func configProtectedUsage() error {
-	return fmt.Errorf("usage: aicode config protected add <pattern> | remove <pattern> | list | reset")
-}
-
-func runConfigTestCommand(args []string) error {
-	if len(args) == 1 && (args[0] == "show" || args[0] == "get") {
-		return runConfigTestShow()
-	}
-	if len(args) == 1 && args[0] == "auto" {
-		return runConfigTestSet("auto")
-	}
-	if len(args) >= 2 && args[0] == "set" {
-		return runConfigTestSet(strings.Join(args[1:], " "))
-	}
-	if len(args) == 1 && args[0] == "unset" {
-		return runConfigTestUnset()
-	}
-	return configTestUsage()
-}
-
-func runConfigTestShow() error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, command, configured, err := projectconfig.GetTestCommand(root.Path)
-	if err != nil {
-		return err
-	}
-	if !configured {
-		fmt.Printf("commands.test is not configured and will be auto-detected (%s)\n", path)
-		return nil
-	}
-	fmt.Printf("commands.test = %s (%s)\n", command, path)
-	return nil
-}
-
-func runConfigTestSet(command string) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, saved, err := projectconfig.SetTestCommand(root.Path, command)
-	if err != nil {
-		return err
-	}
-	if saved == "auto" {
-		fmt.Printf("Set commands.test = auto; Runtime will auto-detect the test command (%s)\n", path)
-		return nil
-	}
-	fmt.Printf("Set commands.test = %s (%s)\n", saved, path)
-	return nil
-}
-
-func runConfigTestUnset() error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, removed, err := projectconfig.UnsetTestCommand(root.Path)
-	if err != nil {
-		return err
-	}
-	if removed {
-		fmt.Printf("Removed commands.test; Runtime will auto-detect the test command (%s)\n", path)
-		return nil
-	}
-	fmt.Printf("commands.test is not explicitly set in the project configuration (%s)\n", path)
-	return nil
-}
-
-func configTestUsage() error {
-	return fmt.Errorf("usage: aicode config test set <command...> | auto | show | unset")
-}
-
-func runConfigWorkspaceCommand(args []string) error {
-	if len(args) == 1 && args[0] == "list" {
-		return runConfigWorkspaceList()
-	}
-	if len(args) == 3 && args[0] == "add" {
-		return runConfigWorkspaceAdd(args[1], args[2])
-	}
-	if len(args) == 2 && (args[0] == "remove" || args[0] == "rm") {
-		return runConfigWorkspaceRemove(args[1])
-	}
-	return configWorkspaceUsage()
-}
-
-func runConfigWorkspaceAdd(name string, targetPath string) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, entries, err := projectconfig.SetWorkspace(root.Path, name, targetPath)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Added read-only workspace %s -> %s (%s)\n", name, targetPath, path)
-	printWorkspaceEntries(entries)
-	return nil
-}
-
-func runConfigWorkspaceRemove(name string) error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, removed, entries, err := projectconfig.RemoveWorkspace(root.Path, name)
-	if err != nil {
-		return err
-	}
-	if removed {
-		fmt.Printf("Removed workspace %s (%s)\n", name, path)
-	} else {
-		fmt.Printf("Workspace %s was not found (%s)\n", name, path)
-	}
-	printWorkspaceEntries(entries)
-	return nil
-}
-
-func runConfigWorkspaceList() error {
-	root, err := workspace.Detect()
-	if err != nil {
-		return err
-	}
-	path, entries, err := projectconfig.ListWorkspaces(root.Path)
-	if err != nil {
-		return err
-	}
-	if len(entries) == 0 {
-		fmt.Printf("No additional workspaces are configured (%s)\n", path)
-		return nil
-	}
-	fmt.Printf("Project workspaces (%s)\n", path)
-	printWorkspaceEntries(entries)
-	return nil
-}
-
-func printWorkspaceEntries(entries []projectconfig.WorkspaceEntry) {
-	if len(entries) == 0 {
-		fmt.Println("Current workspaces: []")
-		return
-	}
-	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tPATH\tMODE")
-	for _, entry := range entries {
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", entry.Name, entry.Path, entry.Mode)
-	}
-	writer.Flush()
-}
-
-func configWorkspaceUsage() error {
-	return fmt.Errorf("usage: aicode config workspace add <name> <path> | remove <name> | list")
-}
-
-func fetchReviewRules(cfg config.Config) (any, error) {
-	root, err := workspace.Detect()
-	if err != nil {
-		return nil, err
-	}
-	return fetchReviewRulesForWorkspace(cfg, root.Path)
-}
-
-func fetchReviewRulesForWorkspace(cfg config.Config, workspacePath string) (any, error) {
-	if err := runtimeio.EnsureDaemon(cfg); err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), runtimeio.DefaultTimeout)
-	defer cancel()
-
-	api := client.New(cfg.Runtime.URL, daemon.Token())
-	return api.GetJSON(ctx, "/v1/review/rules?workspace="+url.QueryEscape(workspacePath))
-}
-
-func reviewRuleIDs(value any) []string {
-	payload, ok := value.(map[string]any)
-	if !ok {
-		return nil
-	}
-	rawRules, ok := payload["rules"].([]any)
-	if !ok {
-		return nil
-	}
-
-	seen := map[string]bool{}
-	ids := make([]string, 0, len(rawRules))
-	for _, item := range rawRules {
-		rule, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		id, ok := rule["id"].(string)
-		id = strings.TrimSpace(id)
-		if !ok || id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
+func isHelp(value string) bool {
+	return value == "help" || value == "--help" || value == "-h"
 }

@@ -14,7 +14,7 @@ _BEARER_PREFIX = "Bearer "
 _TRUTHY = {"1", "true", "yes", "on"}
 
 NO_TOKEN_DETAIL = (
-    "runtime token is not configured; start the Runtime with `aicode daemon start` "
+    "runtime token is not configured; start the Runtime with `aicode runtime start` "
     f"(which generates one), set {TOKEN_ENV}, or set {ANONYMOUS_ENV}=1 to accept unauthenticated "
     "local requests"
 )

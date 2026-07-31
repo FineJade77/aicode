@@ -559,7 +559,7 @@ type RuntimeHTTPError struct {
 func (err *RuntimeHTTPError) Error() string {
 	if err.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf(
-			"%s failed: %s: %s\nRuntime authentication failed: the current CLI runtime.token does not match the running daemon. Run `aicode daemon stop`, make sure no stale uvicorn or daemon process owns port 8765, then run `aicode daemon start`.",
+			"%s failed: %s: %s\nRuntime authentication failed: the current CLI runtime.token does not match the running daemon. Run `aicode runtime stop`, make sure no stale uvicorn or daemon process owns port 8765, then run `aicode runtime start`.",
 			err.Operation,
 			err.Status,
 			err.Detail,

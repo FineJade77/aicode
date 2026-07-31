@@ -581,7 +581,7 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
             success=False,
             error=(
                 "This command was routed to the Docker sandbox, but the Docker CLI is not available. "
-                "Start Docker, or run `aicode trust add` to mark this workspace as trusted, "
+                "Start Docker, or run `aicode project trust add` to mark this workspace as trusted, "
                 "or set execution.agentBashBackend to \"host\" to accept host execution."
             ),
             risk_level="high",

@@ -155,4 +155,4 @@ async def test_bash_fails_loudly_when_sandbox_is_unavailable(tmp_path, monkeypat
     assert executed is False
     assert result.data["backend"] == "docker"
     assert result.data["status"] == "unavailable"
-    assert "aicode trust add" in result.error
+    assert "aicode project trust add" in result.error

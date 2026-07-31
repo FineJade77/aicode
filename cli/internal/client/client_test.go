@@ -397,7 +397,7 @@ func TestStreamUnauthorizedExplainsTokenRecovery(t *testing.T) {
 func assertRuntimeAuthHint(t *testing.T, err error) {
 	t.Helper()
 	text := err.Error()
-	for _, want := range []string{"Runtime authentication failed", "runtime.token", "aicode daemon stop", "aicode daemon start"} {
+	for _, want := range []string{"Runtime authentication failed", "runtime.token", "aicode runtime stop", "aicode runtime start"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("error %q does not contain %q", text, want)
 		}
