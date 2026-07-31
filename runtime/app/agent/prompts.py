@@ -10,6 +10,10 @@ WIND_DOWN_NOTES = {
     "steps": BUDGET_NOTE,
     "tokens": "Token budget for this turn is exhausted. Stop calling tools now and summarize what is done and what remains.",
     "cost": "Cost budget for this turn is exhausted. Stop calling tools now and summarize what is done and what remains.",
+    "no_progress": (
+        "The same action has been repeated without progress. Stop calling tools now. "
+        "Report what you were trying to do, what kept happening, and what you would try instead."
+    ),
     "verification": (
         "Verification did not pass within the allowed attempts. Stop editing and calling tools now. "
         "Report exactly what you changed, what the verification command reported, and what you would try next."
@@ -19,6 +23,24 @@ WIND_DOWN_NOTES = {
 
 def wind_down_note(reason: str) -> str:
     return WIND_DOWN_NOTES.get(reason, BUDGET_NOTE)
+
+
+STALL_NOTES = {
+    "repeated_action": (
+        "You have called the same tool with the same arguments {count} times in a row. "
+        "Repeating it again will produce the same result. Change approach, gather different "
+        "information, or stop and report what is blocking you."
+    ),
+    "repeated_failure": (
+        "The last {count} attempts produced the identical failure. Whatever is being varied is "
+        "not the cause. Investigate why it fails rather than retrying, or stop and report."
+    ),
+}
+
+
+def stall_note(reason: str, count: int) -> str:
+    template = STALL_NOTES.get(reason, STALL_NOTES["repeated_action"])
+    return template.format(count=count)
 
 
 def verify_note(round_number: int, limit: int, failure_digest: str = "") -> str:

@@ -16,6 +16,7 @@ EVENT_TYPES = frozenset(
         "run.cancelled",
         "run.budget.exceeded",
         "run.verification.exhausted",
+        "run.no_progress",
         "verify.attempt",
         "plan.updated",
         "mcp.server.started",

@@ -248,7 +248,17 @@
       "message": "Verification did not pass in 3 attempts; wrapping up with a report instead of continuing to edit."
     },
     {
-      "event_id": 27,
+      "type": "run.no_progress",
+      "run_id": "run_fixture",
+      "reason": "repeated_failure",
+      "count": 5,
+      "limit": 5,
+      "stopped": true,
+      "message": "No progress: the same action repeated 5 times; wrapping up with a report.",
+      "event_id": 27
+    },
+    {
+      "event_id": 28,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

@@ -7,7 +7,8 @@ from typing import Any
 
 from app.agent.history import ContextManager, persist_message, truncate_tool_output
 from app.agent.policy import PolicyEngine
-from app.agent.prompts import build_system_prompt, verify_note, wind_down_note
+from app.agent.progress import StallTracker
+from app.agent.prompts import build_system_prompt, stall_note, verify_note, wind_down_note
 from app.agent.session import AgentSession, ApprovalDecision
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRequest, AgentRuntime
@@ -93,6 +94,7 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
     ledger = TurnLedger()
     applied_edits = 0
     verify = VerifyTracker(limit=budget.max_verify_rounds)
+    stall = StallTracker(limit=budget.max_repeated_actions)
     result: CompletionResult | None = None
 
     async def on_delta(text: str) -> None:
@@ -159,6 +161,19 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
         for outcome in step.verifications:
             verify.record(outcome)
             await session.events.put(outcome.to_event(verify.rounds + 1, verify.limit))
+
+        for tool_name, arguments, ok, output in step.executed:
+            stall.observe(tool_name, arguments, ok=ok, output=output)
+        if stall.should_stop():
+            stop_reason = "no_progress"
+            await emit_no_progress(session, runtime, stall, stopped=True)
+            break
+        warning = stall.pending_warning()
+        if warning is not None:
+            reason, count = warning
+            session.mark_agent_progress(f"no_progress.{reason}")
+            await emit_no_progress(session, runtime, stall, stopped=False, reason=reason, count=count)
+            persist_message(session, user_note(stall_note(reason, count)))
 
     else:
         stop_reason = "steps"
@@ -335,6 +350,9 @@ class StepOutcome:
 
     applied_edits: int = 0
     verifications: list[VerifyOutcome] = field(default_factory=list)
+    # Every executed call in model order, so no-progress detection sees the same
+    # sequence the model issued rather than a per-group view.
+    executed: list[tuple[str, Any, bool, str]] = field(default_factory=list)
 
 
 async def execute_tool_calls(
@@ -391,6 +409,7 @@ async def execute_tool_calls(
                 # its test in one assistant message are still ordered correctly.
                 outcome.verifications.append(verification_from_result(call, call_result))
             edits_so_far += call_result.applied_edits
+            outcome.executed.append((call.name, call.arguments, call_result.ok, call_result.output))
             persist_message(session, tool_message(call.id, call_result.output, call_result.meta))
     return outcome
 
@@ -879,6 +898,7 @@ def turn_budget(runtime: AgentRuntime) -> TurnBudget:
         max_total_tokens=settings.max_total_tokens,
         max_total_cost=settings.max_total_cost,
         max_verify_rounds=settings.max_verify_rounds,
+        max_repeated_actions=settings.max_repeated_actions,
     )
 
 
@@ -910,6 +930,41 @@ async def emit_budget_exceeded(
             **payload,
         }
     )
+
+
+async def emit_no_progress(
+    session: AgentSession,
+    runtime: AgentRuntime,
+    stall: StallTracker,
+    *,
+    stopped: bool,
+    reason: str | None = None,
+    count: int = 0,
+) -> None:
+    """Report repetition, both the warning and the stop.
+
+    One event type for both so a consumer sees the whole escalation on a single
+    stream rather than having to correlate two.
+    """
+    payload = {
+        "reason": reason or stall.tripped_reason or "",
+        "count": count or stall.tripped_count,
+        "limit": stall.limit,
+        "stopped": stopped,
+    }
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "run.no_progress",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"run_id": session.current_run_id, **payload},
+        )
+    message = (
+        f"No progress: the same action repeated {payload['count']} times; wrapping up with a report."
+        if stopped
+        else f"No progress: the same action repeated {payload['count']} times; asking the agent to change approach."
+    )
+    await session.events.put({"type": "run.no_progress", "message": message, **payload})
 
 
 async def emit_verification_exhausted(

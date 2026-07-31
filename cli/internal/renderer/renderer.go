@@ -448,6 +448,8 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		fmt.Fprint(out, verifyAttemptLine(event))
 	case "run.verification.exhausted":
 		fmt.Fprint(out, verificationExhaustedLine(event))
+	case "run.no_progress":
+		fmt.Fprint(out, noProgressLine(event))
 	case "plan.updated":
 		fmt.Fprint(out, planLines(event))
 	case "mcp.server.started":
@@ -630,6 +632,21 @@ func verifyAttemptLine(event map[string]any) string {
 		line += " " + summary
 	}
 	return line + "\n"
+}
+
+func noProgressLine(event map[string]any) string {
+	label := "repeating the same action"
+	if stringValue(event["reason"]) == "repeated_failure" {
+		label = "hitting the same failure"
+	}
+	if !boolValue(event["stopped"]) {
+		return fmt.Sprintf("Agent is %s (%v times); asking it to change approach.\n", label, event["count"])
+	}
+	return fmt.Sprintf(
+		"\nTurn stopped: agent was %s %v times without progress. Wrapping up with a report.\n",
+		label,
+		event["count"],
+	)
 }
 
 func verificationExhaustedLine(event map[string]any) string {

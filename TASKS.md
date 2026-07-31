@@ -842,7 +842,7 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - fold 变体没有进 SSE fixture：该 fixture 契约要求每种事件类型恰好一条，重复的 `context.budget` 会破坏它；变体改由 Go 单测覆盖。
 - 验证：Python 515 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
-### `[ ]` T-041 打转检测
+### `[x]` T-041 打转检测
 
 对应：评审 L4
 
@@ -851,6 +851,17 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 范围：跟踪连续"相同工具 + 相同参数"或"相同失败"；达阈值注入明确 note；再达上限走收尾路径。
 
 验收：构造反复调用同一失败命令的脚本模型，验证在耗尽 `max_steps` 之前被拦下并产出总结。
+
+完成记录（2026-07-31）：
+
+- 新增 `app/agent/progress.py`：`StallTracker` 跟两条连续计数——相同工具+相同参数、相同失败。两条而非一条，因为它们抓不同形状的卡住：前者是原样重发，后者是微调参数却撞同一堵墙（`test_varying_arguments_still_trip_on_the_identical_failure` 单独钉这条）。参数按 key 排序序列化，顺序不同不能伪装成不同调用；不可序列化的值退回 repr 而不是抛异常——签名算不出来应当降级为"不算重复"，不应该在 loop 里炸。
+- `max_repeated_actions`（默认 5，`TurnBudget` 第五维）达上限走既有收尾路径，`warn_at = limit - 2` 先注入 note。为 0 或 1 关闭。
+- **实现中改了一处自己的设计**：最初警告按 (reason, signature) 各记一次，结果同一次卡住同时触发两条计数、连发两条警告。改为**每个 episode 只警告一次**，两条计数都掉回 `warn_at` 以下才重置；同时适用时优先报 `repeated_failure`，因为它信息量更大。
+- 阈值不从 2 起跳是刻意的：连着两次相同调用往往合法。`test_two_identical_calls_are_never_enough` 与 `test_varied_work_is_never_interrupted` 守的是误报方向。
+- **改了一个既有测试而不是删它**：`test_max_steps_forces_summary` 原先用 40 次完全相同的 `read_file` 触发步数上限，现在会先被打转检测拦下。改成每次参数不同，于是它仍然在测步数预算本身。
+- 验收测试用的是 `StuckProvider`（只要还给工具就一直重发同一失败命令），而不是定长脚本——脚本会在耗尽时"恰好"停下，证明不了是检测起的作用。
+- 未做：没有把打转检测加进 eval 任务集。单测已覆盖到收尾与总结，加 eval task 会带来 task_set digest 变更，价值增量有限；若后续 T-016 显示打转是真实失败模式，再补。
+- 验证：Python 531 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
 ## M10：交互与执行环境（第三梯队）
 

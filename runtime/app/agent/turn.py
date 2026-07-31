@@ -20,6 +20,10 @@ class TurnBudget:
     # and reporting. 0 disables the check, restoring "finish whenever the model
     # says it is done".
     max_verify_rounds: int = 3
+    # Consecutive identical actions (or identical failures) before the turn stops
+    # and reports. Catches the stuck case that `max_steps` cannot distinguish from
+    # a genuinely long task. 0 or 1 disables the check.
+    max_repeated_actions: int = 5
 
 
 @dataclass(slots=True)

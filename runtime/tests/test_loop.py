@@ -660,7 +660,12 @@ async def test_default_mode_uses_main_route(tmp_path):
 @pytest.mark.asyncio
 async def test_max_steps_forces_summary(tmp_path):
     (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
-    turns = [tool_turn("read_file", {"path": "a.py"}, call_id=f"tc_{i}") for i in range(40)]
+    # Each call differs, otherwise no-progress detection stops the turn first and
+    # this would no longer be testing the step budget at all.
+    turns = [
+        tool_turn("read_file", {"path": "a.py", "limit": i + 1}, call_id=f"tc_{i}")
+        for i in range(40)
+    ]
     turns.append(text_turn("Forced summary"))
     runtime, fake = make_runtime(turns, tmp_path)
     session = make_session(tmp_path)
