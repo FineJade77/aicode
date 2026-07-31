@@ -867,9 +867,19 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 
 来源：同上。彼此独立，按需推进。
 
-### `[ ]` T-042 `ask_user` 工具
+### `[x]` T-042 `ask_user` 工具
 
 对应：评审 L3。模型当前只有两个出口——继续猜或结束；审批只能回答"这个操作可不可以"，回答不了"你想要哪种方案"。范围：turn 中途提问并等待，复用 approval broker 的等待/超时/取消语义（含 T-032 的四态终结），超时按"未回答"处理并明确区别于"用户拒绝"。
+
+完成记录（2026-07-31）：
+
+- 新增 `app/tools/ask.py` 与 `ask_user` 工具，`SessionApprovalBroker.ask()` 复用同一套 pending 机制——等待、超时、取消、四态终结只有一份实现。差别只在答案形状：审批是布尔，提问是文本，因此 `PendingApproval` 加 `response`，并新增 `/v1/sessions/{id}/answer`；把答案塞进布尔端点会让文本无处可放。
+- **超时与拒绝的文案严格分开**：超时明说"这不是拒绝，是没有人做决定"，要求带着明确声明的假设继续或停下汇报。`test_a_timeout_is_not_a_refusal` 连"declined 不得出现在超时文案里"都断言了。
+- `read_only=False` / `approval="none"`：会阻塞整轮等人，绝不能并发成组；但提问本身就是那次交互，再套审批等于问两遍（`test_asking_needs_no_separate_approval`）。无可交互用户时直接失败，不返回看起来像答案的东西。
+- **CLI 端做完了，否则这个能力端到端不可用**：`question.asked` 触发一个接受任意文本的 pending prompt。这里有个真实的坑——必须在 y/n 解析之前拦截，否则用户回答"no"会被当成拒绝审批。`TestAnswerNoIsAnAnswerNotARejection` 专门钉这条。`/skip` 表示不回答。
+- 系统提示补一条"能靠读项目确定的事就去读"：这个能力最现实的失败模式是滥用而非不用。
+- eval 按规则 6 处理：`tool_specs_sha256` 与 `prompt_sha256` 变更，5 个 run 全通过、指标无回退后才 rebase。
+- 验证：Python 545 项 + 1 skip、Go 全量（含 4 项新增 REPL 测试）、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
 ### `[ ]` T-043 后台与长时命令
 

@@ -149,6 +149,11 @@ type ApproveRequest struct {
 	AcceptAll  bool   `json:"accept_all"`
 }
 
+type AnswerRequest struct {
+	ApprovalID string `json:"approval_id"`
+	Answer     string `json:"answer"`
+}
+
 func New(baseURL string, token string) Client {
 	return Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -349,6 +354,14 @@ func (c Client) Approve(ctx context.Context, sessionID string, approvalID string
 
 func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {
 	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+	if isApprovalAlreadyResolved(err) {
+		return nil
+	}
+	return err
+}
+
+func (c Client) Answer(ctx context.Context, sessionID string, approvalID string, answer string) error {
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/answer", AnswerRequest{ApprovalID: approvalID, Answer: answer}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}

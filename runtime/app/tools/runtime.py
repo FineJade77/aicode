@@ -42,6 +42,7 @@ class DefaultToolRuntime:
         run_id: str = "",
         trust_level: str = "trusted",
         session: Any = None,
+        approvals: Any = None,
     ) -> ToolContext:
         return build_tool_context(
             workspace,
@@ -51,6 +52,7 @@ class DefaultToolRuntime:
             run_id=run_id,
             trust_level=trust_level,
             session=session,
+            approvals=approvals,
         )
 
     def validate_arguments(self, name: str, arguments: dict[str, Any]) -> str | None:

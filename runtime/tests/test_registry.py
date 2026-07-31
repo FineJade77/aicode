@@ -21,7 +21,10 @@ def make_context(tmp_path) -> ToolContext:
 
 def test_schema_names_and_modes():
     names = {schema["name"] for schema in TOOL_SCHEMAS}
-    assert names == {"read_file", "search", "glob", "list_files", "related_files", "bash", "edit_file", "update_plan", "review_diff"}
+    assert names == {
+        "read_file", "search", "glob", "list_files", "related_files",
+        "bash", "edit_file", "update_plan", "ask_user", "review_diff",
+    }
     review_names = {schema["name"] for schema in tool_schemas_for_mode("review")}
     assert review_names == {"read_file", "search", "glob", "list_files", "related_files", "review_diff"}
     explain_names = {schema["name"] for schema in tool_schemas_for_mode("explain")}

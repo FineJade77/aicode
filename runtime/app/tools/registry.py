@@ -18,6 +18,7 @@ from app.execution.docker import docker_available, missing_image_hint
 from app.execution.models import ResourceLimits
 from app.project.config import load_project_config
 from app.security import redact_known_environment_secrets
+from app.tools.ask import AskUserTool
 from app.tools.base import (
     IGNORED_DIRS,
     Tool,
@@ -279,6 +280,37 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="ask_user",
+        description=(
+            "Ask the user a question and wait for their answer. Use this only when the requirement is "
+            "genuinely ambiguous and guessing wrong would waste the work — which framework or library to use, "
+            "whether to keep an API backward compatible, whether a new dependency is acceptable. "
+            "Do not use it for things you can determine by reading the project, and do not ask the same "
+            "question twice. Offer options when the choice is between a few known alternatives."
+        ),
+        # Not read-only: it blocks the turn on a user round trip, so it must never
+        # be batched with anything. It touches nothing outside the session, so it
+        # needs no approval of its own — the question *is* the interaction.
+        read_only=False,
+        approval="none",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question, phrased so it can be answered in one short reply.",
+                },
+                "options": {
+                    "type": "array",
+                    "description": "Optional list of concrete choices, when the answer is one of a few known alternatives.",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["question"],
+        },
+    ),
+    ToolSpec(
         name="update_plan",
         description=(
             "Record or update your plan for a multi-step task. Replace the whole list each time. "
@@ -398,6 +430,7 @@ class ToolRegistry:
 def build_default_registry() -> ToolRegistry:
     return ToolRegistry(
         [
+            AskUserTool(TOOL_SPECS_BY_NAME["ask_user"]),
             FunctionTool(TOOL_SPECS_BY_NAME["read_file"], context_first(read_file_lines)),
             FunctionTool(TOOL_SPECS_BY_NAME["search"], context_first(run_search)),
             GlobTool(TOOL_SPECS_BY_NAME["glob"]),
@@ -421,6 +454,7 @@ def build_tool_context(
     run_id: str = "",
     trust_level: str = "trusted",
     session: Any = None,
+    approvals: Any = None,
 ) -> ToolContext:
     project_config = load_project_config(Path(workspace))
     return ToolContext(
@@ -436,6 +470,7 @@ def build_tool_context(
         run_id=run_id,
         trust_level=trust_level,
         session=session,
+        approvals=approvals,
         bash_backend=project_config.execution.agent_bash_backend or settings.execution.agent_bash_backend,
     )
 

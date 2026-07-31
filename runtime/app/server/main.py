@@ -110,6 +110,11 @@ class ApprovalRequest(BaseModel):
     accept_all: bool = False
 
 
+class AnswerRequest(BaseModel):
+    approval_id: str
+    answer: str = Field(default="", max_length=4_000)
+
+
 class SandboxExecutionRequest(BaseModel):
     execution_id: str
     backend: Literal["docker"] = "docker"
@@ -316,6 +321,15 @@ async def approve(session_id: str, request: ApprovalRequest, runtime: RuntimeDep
             accepted=True,
             accept_all=request.accept_all,
         )
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/sessions/{session_id}/answer")
+async def answer(session_id: str, request: AnswerRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
+    try:
+        return runtime.approvals.answer(session, request.approval_id, answer=request.answer)
     except ApplicationError as exc:
         raise_http_error(exc)
 

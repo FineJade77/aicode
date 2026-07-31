@@ -36,6 +36,7 @@ type API interface {
 	Compact(context.Context, string) (client.CompactResponse, error)
 	Approve(context.Context, string, string, bool) error
 	Reject(context.Context, string, string) error
+	Answer(context.Context, string, string, string) error
 	GetJSON(context.Context, string) (any, error)
 }
 
@@ -187,6 +188,18 @@ func (runner *Runner) Run(parent context.Context) error {
 				continue
 			}
 			interruptArmed = false
+			if pending != nil && pending.kind == "question" && !strings.HasPrefix(line, "/") {
+				// Any text is a valid answer, so this must be handled before the
+				// y/n parser — "no" is an answer to a question, not a rejection.
+				if err := runner.answerQuestion(ctx, session.SessionID, pending, line); err != nil {
+					runner.printError(err)
+				}
+				pending = nil
+				if runner.Interactive {
+					runner.prompt(session.SessionID)
+				}
+				continue
+			}
 			if pending != nil && !strings.HasPrefix(line, "/") {
 				if isApprovalAnswer(line, pending.kind) {
 					if err := runner.resolveApproval(ctx, session.SessionID, pending, line); err != nil {
@@ -205,6 +218,18 @@ func (runner *Runner) Run(parent context.Context) error {
 				continue
 			}
 			command, argument := splitCommand(line)
+			if pending != nil && pending.kind == "question" && command == "/skip" {
+				// Declining to answer, which the agent is told is not a refusal
+				// of the underlying work.
+				if err := runner.resolveApproval(ctx, session.SessionID, pending, "n"); err != nil {
+					runner.printError(err)
+				}
+				pending = nil
+				if runner.Interactive {
+					runner.prompt(session.SessionID)
+				}
+				continue
+			}
 			if pending != nil && (command == "/approve" || command == "/reject") {
 				answer := argument
 				if command == "/reject" {
@@ -250,6 +275,16 @@ func (runner *Runner) Run(parent context.Context) error {
 			}
 		case event := <-events:
 			runner.renderEvent(event.value)
+			if stringValue(event.value["type"]) == "question.asked" {
+				approvalID := stringValue(event.value["approval_id"])
+				if approvalID == "" {
+					runner.printError(errors.New("question.asked is missing approval_id"))
+					continue
+				}
+				runner.printf("Your answer (or /skip to let the agent decide): ")
+				pending = &approvalPrompt{runID: event.runID, approvalID: approvalID, kind: "question"}
+				continue
+			}
 			if stringValue(event.value["type"]) == "approval.requested" {
 				approvalID := stringValue(event.value["approval_id"])
 				if approvalID == "" {
@@ -500,6 +535,17 @@ func (runner *Runner) resolveApproval(
 		defer cancel()
 		return runner.API.Reject(requestCtx, sessionID, prompt.approvalID)
 	}
+}
+
+func (runner *Runner) answerQuestion(
+	ctx context.Context,
+	sessionID string,
+	prompt *approvalPrompt,
+	answer string,
+) error {
+	requestCtx, cancel := withTimeout(ctx)
+	defer cancel()
+	return runner.API.Answer(requestCtx, sessionID, prompt.approvalID, answer)
 }
 
 func (runner *Runner) cancelFromSignal(ctx context.Context, sessionID string) {

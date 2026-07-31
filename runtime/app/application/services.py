@@ -306,6 +306,31 @@ class ApprovalService:
         )
         return {"status": "accepted" if accepted else "rejected", "approval_id": approval_id}
 
+    def answer(
+        self,
+        session: AgentSession,
+        approval_id: str,
+        *,
+        answer: str,
+    ) -> dict[str, str]:
+        """Resolve a pending question with the user's text.
+
+        Separate from `resolve` because the two carry different information: an
+        approval is a decision, an answer is content. Routing answers through the
+        boolean endpoint would leave no place for the text.
+        """
+        if not session.resolve_approval(approval_id, accepted=True, resolution="answered", response=answer):
+            raise NotFound("question not found or already answered")
+        self.trace.record(
+            "question.answered",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            # The answer itself is user content and is deliberately not recorded
+            # in the trace; only that one was given, and how long it was.
+            data={"approval_id": approval_id, "answer_chars": len(answer)},
+        )
+        return {"status": "answered", "approval_id": approval_id}
+
 
 class ContextService:
     def __init__(self, agent: AgentRuntime, trace: TraceSink) -> None:

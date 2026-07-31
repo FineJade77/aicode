@@ -87,6 +87,7 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
         run_id=session.current_run_id or "",
         trust_level=str(trust_status["level"]),
         session=session,
+        approvals=runtime.approvals,
     )
     purpose = "reviewer" if request.mode == "review" else "main"
     model = str(getattr(request, "model", "") or "").strip() or None

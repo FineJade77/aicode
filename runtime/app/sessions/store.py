@@ -137,6 +137,10 @@ class PendingApproval:
     # "accepted" | "rejected" | "timed_out" | "cancelled". Distinguishes an
     # explicit refusal from one nobody answered.
     resolution: str = ""
+    # The user's text for requests that ask something rather than gate something.
+    # An approval answers "may I?"; a question answers "which one?", and a bool
+    # cannot carry that.
+    response: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -462,11 +466,19 @@ class Session:
         self.approvals[approval.approval_id] = approval
         return approval
 
-    def resolve_approval(self, approval_id: str, accepted: bool, *, resolution: str = "") -> bool:
+    def resolve_approval(
+        self,
+        approval_id: str,
+        accepted: bool,
+        *,
+        resolution: str = "",
+        response: str = "",
+    ) -> bool:
         approval = self.approvals.get(approval_id)
         if approval is None or approval.accepted is not None:
             return False
         approval.accepted = accepted
+        approval.response = response
         approval.resolution = resolution or ("accepted" if accepted else "rejected")
         approval.decision_event.set()
         return True

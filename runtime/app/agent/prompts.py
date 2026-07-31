@@ -86,6 +86,7 @@ def build_system_prompt(request: Any, project: Any) -> str:
         "- If a command is blocked by policy, use a safer alternative or include the manual command in the final answer.",
         "- After applying changes, run relevant tests. If tool output is truncated, continue reading with offset.",
         "- For a task that needs several steps, call update_plan first, keep exactly one item in_progress, and mark it done before moving on. Skip the plan for single-step tasks.",
+        "- ask_user blocks the turn waiting on a person. Use it only when the requirement is genuinely ambiguous and guessing wrong would waste the work; anything you can settle by reading the project, read instead.",
         "- When the task is complete or no work remains, answer directly; do not keep calling tools.",
         f"Workspace: {request.workspace}",
         f"Shell execution: {project.bash_environment}",

@@ -21,6 +21,7 @@
         "related_files",
         "bash",
         "edit_file",
+        "ask_user",
         "update_plan",
         "review_diff"
       ]

@@ -24,6 +24,9 @@ class ToolContext:
     # Typed as Any so the tool layer does not import the session implementation;
     # only the AgentSession protocol surface is used.
     session: Any = None
+    # The approval broker, for tools whose effect is a round trip to the user
+    # (ask_user). Same reason as `session` for being typed Any.
+    approvals: Any = None
     run_id: str = ""
     tool_call_id: str = ""
     trust_level: str = "trusted"

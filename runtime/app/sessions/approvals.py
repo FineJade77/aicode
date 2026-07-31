@@ -59,6 +59,51 @@ class SessionApprovalBroker:
         return decision
 
 
+    async def ask(
+        self,
+        session: AgentSession,
+        *,
+        payload: dict[str, Any],
+    ) -> tuple[ApprovalDecision, str]:
+        """Put a question to the user mid-turn and wait for the answer.
+
+        Rides the same pending-request machinery as approvals so the wait,
+        timeout, cancellation and four-state outcome are one implementation
+        rather than two that drift. What differs is only the shape of the answer:
+        an approval is a boolean, a question is text.
+        """
+        approval = session.create_approval("question", payload)
+        session.mark_agent_progress("question.asked")
+        await session.events.put(
+            {
+                "type": "question.asked",
+                "approval_id": approval.approval_id,
+                "message": "waiting for the user to answer",
+                **payload,
+            }
+        )
+        decision = await session.wait_for_approval(
+            approval.approval_id,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if decision is ApprovalDecision.TIMED_OUT:
+            await session.events.put(
+                {
+                    "type": "approval.expired",
+                    "approval_id": approval.approval_id,
+                    "kind": "question",
+                    "reason": "timeout",
+                    "timeout_seconds": self.timeout_seconds,
+                    "message": (
+                        f"No answer was given within {self.timeout_seconds:g}s, "
+                        "so the agent continued without one."
+                    ),
+                }
+            )
+        pending = session.approvals.get(approval.approval_id)
+        return decision, str(getattr(pending, "response", "") or "")
+
+
 def default_approval_timeout_seconds() -> float:
     try:
         value = float(os.getenv("AICODE_APPROVAL_TIMEOUT_SECONDS", str(DEFAULT_APPROVAL_TIMEOUT_SECONDS)))

@@ -27,10 +27,13 @@ type fakeAPI struct {
 	compactCalls   int
 	modelCalls     int
 	approveCalls   int
+	answerCalls    int
+	lastAnswer     string
 	rejectCalls    int
 
 	blockRuns         bool
 	approvalRuns      bool
+	questionRuns      bool
 	runRelease        chan struct{}
 	approvalRelease   chan struct{}
 	approvalRequested chan struct{}
@@ -96,8 +99,29 @@ func (api *fakeAPI) StreamRunEvents(ctx context.Context, _ string, runID string,
 	block := api.blockRuns
 	release := api.runRelease
 	approval := api.approvalRuns && runID == "run_1"
+	question := api.questionRuns && runID == "run_1"
 	approvalRelease := api.approvalRelease
 	api.mu.Unlock()
+	if question {
+		if err := handle(map[string]any{
+			"type":        "question.asked",
+			"run_id":      runID,
+			"approval_id": "appr_q1",
+			"question":    "Which test framework should the new tests use?",
+			"options":     []any{"pytest", "unittest"},
+		}); err != nil {
+			return err
+		}
+		select {
+		case api.approvalRequested <- struct{}{}:
+		default:
+		}
+		select {
+		case <-approvalRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if approval {
 		if err := handle(map[string]any{
 			"type":        "approval.requested",
@@ -163,6 +187,15 @@ func (api *fakeAPI) Approve(context.Context, string, string, bool) error {
 func (api *fakeAPI) Reject(context.Context, string, string) error {
 	api.mu.Lock()
 	api.rejectCalls++
+	api.mu.Unlock()
+	api.releaseApproval()
+	return nil
+}
+
+func (api *fakeAPI) Answer(_ context.Context, _ string, _ string, answer string) error {
+	api.mu.Lock()
+	api.answerCalls++
+	api.lastAnswer = answer
 	api.mu.Unlock()
 	api.releaseApproval()
 	return nil
@@ -444,5 +477,116 @@ func TestCtrlCFirstCancelsActiveRun(t *testing.T) {
 	api.mu.Unlock()
 	if cancelCalls != 1 {
 		t.Fatalf("cancel calls = %d", cancelCalls)
+	}
+}
+
+func waitForOutput(t *testing.T, runner *Runner, out *bytes.Buffer, needle string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		runner.outputMu.Lock()
+		seen := strings.Contains(out.String(), needle)
+		runner.outputMu.Unlock()
+		if seen {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never saw %q in output", needle)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func runQuestionREPL(t *testing.T, reply string) (*fakeAPI, string) {
+	t.Helper()
+	api := newFakeAPI()
+	api.questionRuns = true
+	inputReader, inputWriter := io.Pipe()
+	defer inputReader.Close()
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := Runner{
+		API:         api,
+		In:          inputReader,
+		Out:         &out,
+		Err:         &stderr,
+		Workspace:   "/workspace",
+		Interactive: true,
+	}
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(context.Background()) }()
+	if _, err := inputWriter.Write([]byte("first task\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-api.approvalRequested:
+	case <-time.After(time.Second):
+		t.Fatal("question was not asked")
+	}
+	waitForOutput(t, &runner, &out, "Your answer")
+	if _, err := inputWriter.Write([]byte(reply + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := inputWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("REPL did not finish after the question was answered")
+	}
+	runner.outputMu.Lock()
+	text := out.String()
+	runner.outputMu.Unlock()
+	return api, text
+}
+
+func TestQuestionIsRenderedWithItsOptions(t *testing.T) {
+	_, text := runQuestionREPL(t, "pytest")
+	for _, want := range []string{"Which test framework", "1) pytest", "2) unittest"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in output, got %q", want, text)
+		}
+	}
+}
+
+func TestFreeTextAnswersTheQuestion(t *testing.T) {
+	api, _ := runQuestionREPL(t, "use pytest with fixtures")
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if api.answerCalls != 1 || api.lastAnswer != "use pytest with fixtures" {
+		t.Fatalf("answerCalls=%d lastAnswer=%q", api.answerCalls, api.lastAnswer)
+	}
+	if api.approveCalls != 0 || api.rejectCalls != 0 {
+		t.Fatalf("a question must not be resolved as an approval: approve=%d reject=%d", api.approveCalls, api.rejectCalls)
+	}
+}
+
+func TestAnswerNoIsAnAnswerNotARejection(t *testing.T) {
+	// The bug this guards: "no" is a legitimate answer to a question, and the
+	// y/n approval parser would have swallowed it as a refusal.
+	api, _ := runQuestionREPL(t, "no")
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if api.answerCalls != 1 || api.lastAnswer != "no" {
+		t.Fatalf("answerCalls=%d lastAnswer=%q", api.answerCalls, api.lastAnswer)
+	}
+	if api.rejectCalls != 0 {
+		t.Fatalf("answering \"no\" must not reject: rejectCalls=%d", api.rejectCalls)
+	}
+}
+
+func TestSkipDeclinesToAnswer(t *testing.T) {
+	api, _ := runQuestionREPL(t, "/skip")
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if api.rejectCalls != 1 {
+		t.Fatalf("rejectCalls=%d", api.rejectCalls)
+	}
+	if api.answerCalls != 0 {
+		t.Fatalf("skip must not send an answer: answerCalls=%d", api.answerCalls)
 	}
 }

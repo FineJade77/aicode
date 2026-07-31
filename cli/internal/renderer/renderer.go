@@ -468,6 +468,8 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 			detail = fmt.Sprintf("Tool failed: %s", stringValue(event["tool"]))
 		}
 		fmt.Fprintf(out, "%s (%s)\n", detail, stringValue(event["error"]))
+	case "question.asked":
+		fmt.Fprint(out, questionLines(event))
 	case "approval.requested":
 		fmt.Fprintf(out, "Approval required: %s\n", stringValue(event["message"]))
 	case "approval.expired":
@@ -647,6 +649,15 @@ func noProgressLine(event map[string]any) string {
 		label,
 		event["count"],
 	)
+}
+
+func questionLines(event map[string]any) string {
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("\nThe agent is asking: %s\n", stringValue(event["question"])))
+	for index, item := range sliceValue(event["options"]) {
+		out.WriteString(fmt.Sprintf("  %d) %s\n", index+1, stringValue(item)))
+	}
+	return out.String()
 }
 
 func verificationExhaustedLine(event map[string]any) string {

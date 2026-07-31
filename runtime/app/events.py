@@ -28,6 +28,7 @@ EVENT_TYPES = frozenset(
         "tool.error",
         "tool.rejected",
         "approval.requested",
+        "question.asked",
         "approval.expired",
         "edit.applied",
         "edit.rejected",
