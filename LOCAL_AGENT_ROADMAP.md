@@ -146,7 +146,7 @@ M0 和 M1 是发布阻塞项。M2 完成后再把项目定位为“日常可用�
   1. `AICODE_RUNTIME_DIR`，仅用于开发和诊断；
   2. 当前二进制关联的版本化安装目录；
   3. 源码 checkout fallback，仅用于开发。
-- 提供 `aicode doctor`，至少检查：
+- 提供 `aicode runtime doctor`，至少检查：
   - CLI 与 Runtime 版本是否兼容；
   - Python 版本、虚拟环境和依赖；
   - Runtime 路径、状态目录和端口；
@@ -158,17 +158,17 @@ M0 和 M1 是发布阻塞项。M2 完成后再把项目定位为“日常可用�
 
 - `Makefile`
 - `cli/internal/daemon/daemon.go`
-- `cli/internal/cmd/daemoncmd/`
-- 新增 `cli/internal/cmd/doctorcmd/`
+- `cli/internal/cmd/runtimecmd/daemon.go`
+- `cli/internal/cmd/runtimecmd/doctor.go`
 - 新增分发脚本或 release workflow
 
 验收标准：
 
-- 在不包含 aicode 源码的临时目录执行安装后的 `aicode daemon start` 成功。
+- 在不包含 aicode 源码的临时目录执行安装后的 `aicode runtime start` 成功。
 - 修改当前工作目录不会改变 Runtime 解析结果。
 - CLI/Runtime 版本不匹配时快速失败，并给出可执行修复提示。
 - 重复安装同一版本是幂等的；升级失败不会破坏已安装版本。
-- CI 在隔离的临时 home 中跑通 install → doctor → daemon start → smoke request → stop。
+- CI 在隔离的临时 home 中跑通 install → runtime doctor → runtime start → smoke request → runtime stop。
 
 ### WP0.2 统一执行、信任与审计边界
 
@@ -210,10 +210,10 @@ class ExecutionBackend(Protocol):
 
 - `runtime/app/tools/command.py`
 - `runtime/app/tools/registry.py`
-- `runtime/app/policy/engine.py`
+- `runtime/app/agent/policy.py`
 - `runtime/app/project/`
 - `runtime/app/audit/`
-- `cli/internal/cmd/sandboxcmd/`（迁移后只保留客户端入口）
+- `cli/internal/cmd/projectcmd/sandbox.go`（迁移后只保留客户端入口）
 - `schemas/config.schema.json`
 - `schemas/events.schema.json`
 
@@ -347,7 +347,7 @@ aicode chat
 
 涉及代码：
 
-- `cli/internal/cmd/agentrun/`
+- `cli/internal/cmd/taskcmd/agent.go`
 - `cli/internal/cmd/runtimeio/`
 - `cli/internal/renderer/`
 - Runtime run queue 与 event API
@@ -366,19 +366,19 @@ aicode chat
 
 - provider auth mode 支持 `required`、`optional`、`none`。
 - profile 包含 base URL、模型、context window、max output、tool calling、streaming 和 tokenizer/估算策略。
-- `aicode models probe` 执行健康检查、模型发现和最小 tools smoke test。
+- `aicode runtime models probe` 执行健康检查、模型发现和最小 tools smoke test。
 - 允许配置一个主 profile 和显式 fallback，但不在 P1 构建复杂多 provider 自动路由。
 - tool calling 不可用时快速失败；不要静默退化为从文本猜 JSON。
 - 文档提供 Ollama、llama.cpp、LM Studio 各一个最小示例，并注明经 CI/手工验证的版本。
 
 涉及代码：
 
-- `runtime/app/config/settings.py`
+- `runtime/app/config.py`
 - `runtime/app/models/openai_compatible.py`
 - `runtime/app/models/provider.py`
 - `runtime/app/models/router.py`
 - `cli/internal/config/`
-- `cli/internal/cmd/modelscmd/`
+- `cli/internal/cmd/runtimecmd/models.go`
 
 验收标准：
 
@@ -390,7 +390,7 @@ aicode chat
 
 - Provider Profile v1 已由 JSON Schema 固化，并贯通 Go config、Runtime env、doctor、router、`models` renderer。
 - no-auth 模式永不发送 Authorization；optional/required 模式分别实现按需认证与缺 key 快速失败。
-- `aicode models probe` 已覆盖配置、模型发现、SSE 和原生 tools，失败返回稳定分类；Agent 不支持文本 JSON tools fallback。
+- `aicode runtime models probe` 已覆盖配置、模型发现、SSE 和原生 tools，失败返回稳定分类；Agent 不支持文本 JSON tools fallback。
 - 真实 localhost TCP fixture 已跑通 probe → read → edit proposal → approval → verify，独立 smoke target 接入 CI。
 - Ollama、llama.cpp server、LM Studio 提供最小配置模板与官方文档链接；当前自动化验证的是 OpenAI-compatible 协议与 no-auth 全链路，不宣称未安装产品的具体版本已验证。
 - 验证：Python 283 passed / 2 skipped（受限沙箱 localhost bind、Docker），沙箱外 localhost smoke 1 passed；Go test/vet、compileall、deterministic eval baseline 与 diff check 通过。

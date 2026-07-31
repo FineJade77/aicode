@@ -1,6 +1,6 @@
 # aicode 执行任务台账
 
-更新日期：2026-07-29
+更新日期：2026-07-31
 
 来源：
 
@@ -20,8 +20,10 @@
 2. 每个任务必须包含实现、测试、文档或任务状态更新。
 3. Agent 行为变更必须说明评测覆盖；没有覆盖时不能宣称质量提升。
 4. 每次只保留一个主任务为 `[~]`，完成验收后再启动下一项。
-5. **新增 SSE event 必须三处同步登记**：`runtime/app/events/types.py` 的 `EVENT_TYPES`、`schemas/events.schema.json` 的 enum、`schemas/fixtures/sse-events.v2.json` 与 Go renderer 分支。漏登记会在 `SessionEvents.put` 处直接抛 `ValueError`。
+5. **新增 SSE event 必须三处同步登记**：`runtime/app/events.py` 的 `EVENT_TYPES`、`schemas/events.schema.json` 的 enum、`schemas/fixtures/sse-events.v2.json` 与 Go renderer 分支。漏登记会在 `SessionEvents.put` 处直接抛 `ValueError`。
 6. **改动 policy / prompt / tool schema 必须重新生成 eval baseline**：`evals/baselines/deterministic-smoke.v1.json` 的 `source_versions` 固定了 `policy_sha256`、`prompt_sha256`、`tool_schema_sha256` 等 digest，任何字节级改动都会让 `make eval-smoke` 失败。更新 baseline 前必须确认 `minimum_metrics` / `maximum_metrics` 仍然满足；若 `safety_rate` 下降或 `dangerous_command_execution_rate` 上升，按任务失败处理，不得放宽基线。
+
+> **包结构说明（2026-07-30）**：Runtime 已完成一次包重组——`app/core/`、`app/adapters/`、`app/config/`、`app/contracts/` 不再存在，port 与 domain 类型并入 `app/agent/`，adapter 实现按领域就近放置，composition root 为 `app/bootstrap.py`。本台账中指向**现存文件**的路径已按新结构更新；T-001~T-012 的完成记录描述的是当时的产物，保留原路径并在需要处注明新位置。`docs/review/` 与 `docs/plans/` 下带日期的快照文档整体保留当时的路径，不做改写。当前结构见 [ARCHITECTURE.md](ARCHITECTURE.md) 第 3.3 节与第 20 节。
 
 ## M0：可交付基线
 
@@ -95,7 +97,7 @@
 - clean-home E2E 在临时 prefix、临时状态目录和源码外 workspace 覆盖 install → reinstall → failed install rollback → start → status → stop，并已接入 CI。
 - 验证：clean-home E2E、Python 全量测试 214 项、Go 全量测试、installer Python 编译与 shell 语法检查全部通过。
 
-### `[x]` T-004 `aicode doctor`
+### `[x]` T-004 `aicode runtime doctor`
 
 对应：WP0.1
 
@@ -108,7 +110,7 @@
 
 完成记录：
 
-- 新增 `aicode doctor [--json]`，固定输出 installation、version、python、port、provider、docker 六项检查及 `ok` / `warn` / `error` 汇总状态。
+- 新增 `aicode runtime doctor [--json]`，固定输出 installation、version、python、port、provider、docker 六项检查及 `ok` / `warn` / `error` 汇总状态。
 - doctor 只读执行：不会自动启动 daemon，也不会请求 provider；缺少 API key、Docker 或尚未启动 daemon 为 warning，安装损坏、版本不一致、Python/依赖不可用和端口冲突为 error/非零退出。
 - CLI 构建通过 ldflags 注入根 `VERSION`；源码 Runtime fallback 同样读取根版本，用于 CLI、安装 Runtime 和运行中 daemon 的三方一致性校验。
 - provider 检查遵循 Runtime 的 key 解析顺序且不输出 secret；Python 检查覆盖 3.11+ 及 FastAPI/httpx/pydantic/uvicorn 导入。
@@ -135,8 +137,8 @@
 - `HostExecutionBackend` 成为唯一宿主机子进程创建点；argv/shell、timeout、显式 cancel 和任务取消均按 execution id 管理，并终止完整进程组。
 - `DockerExecutionBackend` 复用 Host lifecycle，统一只读 workspace、默认禁网、`.env*` mask、最小 Docker CLI 环境和 CPU/内存/PID 限制。
 - Agent bash、rg search、review git 命令和编辑后的模型验证均接入 ExecutionService；bash execution audit 仅保留 executable/command hash 和终态，不记录原始命令。
-- `aicode --sandbox docker test|build|lint` 已从本地 Go 执行器收敛为 Runtime HTTP 客户端；Runtime 负责命令探测、执行、cancel 和 audit，API 不开放任意 shell action。
-- 正常 `aicode daemon stop` 先调用 prepare-stop 取消全部活跃 execution，再终止 Runtime，避免正常重启遗留子进程。
+- `aicode project sandbox test|build|lint` 已从本地 Go 执行器收敛为 Runtime HTTP 客户端；Runtime 负责命令探测、执行、cancel 和 audit，API 不开放任意 shell action。
+- 正常 `aicode runtime stop` 先调用 prepare-stop 取消全部活跃 execution，再终止 Runtime，避免正常重启遗留子进程。
 - 新增 Host success/timeout/cancel/process-group、Docker 隔离参数、HTTP contract、project command detection、safe audit 和可用时真实 Docker backend 集成测试。
 - 验证：Go 全量测试、go vet、Python 222 项通过（本机 Docker daemon/镜像不可用时跳过 1 项集成测试）、clean-home install/doctor/start/status/stop E2E 通过。
 
@@ -155,7 +157,7 @@
 
 完成记录：
 
-- 新增版本化仓库外 TrustStore 和 `aicode trust status|add|remove|list [--json]`；trust 绑定 canonical workspace 与去凭证 Git remote，remote 变化或 workspace 消失会回到 `untrusted`，store 以 `0600` 原子写入。
+- 新增版本化仓库外 TrustStore 和 `aicode project trust status|add|remove|list [--json]`；trust 绑定 canonical workspace 与去凭证 Git remote，remote 变化或 workspace 消失会回到 `untrusted`，store 以 `0600` 原子写入。
 - Agent Loop 每次 run 读取 trust level；untrusted workspace 的 `pytest`、`go test`、`npm test` 等项目命令进入 approval，trusted workspace 才能按低风险 policy 自动执行。
 - Policy 增加 shell statement/wrapper/path/glob 分析，拒绝 home、`../`、workspace 外绝对路径、path-qualified 外部 executable、protected path 和 symlink 逃逸；deny 不经过 approval。
 - `.env*`、SSH/GPG、AWS/Azure/GCloud/Kubernetes、`.netrc`、包管理凭证和私钥升级为 mandatory protected paths；项目配置只能追加，CLI 不允许移除系统规则。
@@ -180,7 +182,7 @@
 
 完成记录（2026-07-26）：
 
-- 新增 provider/model-aware `ModelCapability`，支持按 `<provider>:<model>` 或 `<model>` 配置 context window 与 max output；每次 main/reviewer/final 模型调用前统一估算 system、tools、history、输出预留和安全余量，`aicode models` 同步显示实际 capability 与来源。
+- 新增 provider/model-aware `ModelCapability`，支持按 `<provider>:<model>` 或 `<model>` 配置 context window 与 max output；每次 main/reviewer/final 模型调用前统一估算 system、tools、history、输出预留和安全余量，`aicode runtime models` 同步显示实际 capability 与来源。
 - SQLite 新增 append-only schema v1 `compactions` 表，持久化 covered message id range、summary、provider/model、prompt version、压缩前后 token 估算、context window 和时间；原始 messages 不删除、不覆盖。
 - session resume 使用最近有效且版本受支持的 compaction 重建 projection；旧数据库自动建表且继续读取，未知未来 schema 会被忽略并回退到上一条有效 projection。
 - compaction cutoff 以原子消息组为边界，assistant tool calls 与对应 tool results 始终一起保留，未完成 tool call 不进入摘要；连续 compaction 累积上一摘要并推进 covered range。
@@ -232,7 +234,7 @@
 
 - 新增 Provider Profile v1 contract，覆盖 name/schema version、base URL、`required|optional|none` auth mode、model、context window、max output、native tools、SSE streaming 与 chars/token 估算；Go config、Runtime env、doctor、router 与 renderer 使用同一字段集。
 - `auth_mode=none` 即使父进程存在 API key 也不发送 Authorization；`optional` 仅在 key 存在时发送；`required` 缺 key 快速失败。
-- `aicode models probe [--model ...] [--no-tools] [--json]` 依次验证配置、`/v1/models`、模型 ID、SSE 和最小原生 tool call，提供 endpoint/auth/model/stream/tools 针对性错误 code。
+- `aicode runtime models probe [--model ...] [--no-tools] [--json]` 依次验证配置、`/v1/models`、模型 ID、SSE 和最小原生 tool call，提供 endpoint/auth/model/stream/tools 针对性错误 code。
 - profile 声明不支持 tools/streaming 时在请求前快速失败；tools probe 只接受原生 `tool_calls`，禁止从文本猜 JSON。
 - 新增真实 localhost TCP no-auth smoke，跑通 probe → read → edit proposal → approval → verify，并断言请求无 Authorization；独立 Make target 已接入 CI。
 - 新增 Ollama、llama.cpp server、LM Studio 最小配置与验证矩阵；本机未安装这些产品，因此不虚报具体产品版本手工验证。
@@ -275,7 +277,7 @@
 
 完成记录（2026-07-27）：
 
-- `aicode chat` 无 message 时进入常驻 REPL，`aicode repl` 提供等价入口；单次 `aicode chat "..."` 保持原行为。
+- `aicode chat` 无 message 时进入常驻 REPL；旧 `aicode repl` 保留为隐藏兼容入口，单次 `aicode chat "..."` 保持原行为。
 - REPL 默认创建并绑定一个 session，支持 `/status`、`/model [name]`、`/compact`、`/new`、`/resume [--last|id]`、`/exit`；模型覆盖按 message 传入 Runtime，不修改全局路由。
 - 普通输入在 run 活跃时作为 follow-up 排入同一 session；`/steer` 进入当前 run 专用队列，由 AgentLoop 在模型/工具之间的安全边界应用，并跳过尚未执行的旧工具调用；`/cancel` 保留既有终态与后续队列语义。
 - Runtime 新增 versioned HTTP contract：session status typed client、`POST /v1/sessions/{id}/steer` 与 `POST /v1/sessions/{id}/compact`；新增 `run.steer.queued/applied` SSE contract fixtures 和 renderer 兼容行为。
@@ -300,7 +302,7 @@
 
 完成记录（2026-07-27）：
 
-- 新增 transport-independent `core/` ports/domain 和集中式 `adapters/composition.py`；FastAPI transport 只创建并持有一个 `ApplicationRuntime`。
+- 新增 transport-independent `core/` ports/domain 和集中式 `adapters/composition.py`；FastAPI transport 只创建并持有一个 `ApplicationRuntime`。（2026-07-30 的包重组后，两者分别成为 `agent/ports.py` 与 `bootstrap.py`。）
 - Agent Core 使用 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、TraceSink、Clock/IDs ports；AgentLoop、ContextManager、Policy 不依赖 FastAPI、server、SQLite、具体工具或 project config。
 - SQLite SessionStore 支持 clock/ID 注入；新增 InMemorySessionRepository、JSONL usage、workspace/tool/approval/system adapters，fake model + in-memory session 可直接运行 AgentLoop。
 - 新增 AST/import side-effect 架构守卫和 Agent Core characterization tests；T-010 REPL、HTTP/SSE、session、approval、execution、trust 与 compaction 行为由 T-011a contract 固定。
@@ -365,12 +367,12 @@
 - Docker 分支：workspace 可写挂载（`writable_paths`）、`network="none"`、`masked_paths` 继承 protected paths 并强制并入 `.env*`、复用 `SandboxLimits`。
 - `DockerExecutionBackend` 扩展支持可写 workspace 挂载（当前仅只读）。
 - `build_system_prompt` 增加当前执行环境说明（host / docker-sandboxed、是否禁网），使模型预期到 `pip install` 会失败。
-- `aicode doctor` 增加检查：配置为 `auto` 且存在 untrusted workspace 时 Docker 是否可用。
+- `aicode runtime doctor` 增加检查：配置为 `auto` 且存在 untrusted workspace 时 Docker 是否可用。
 
 验收：
 
 - trusted + `auto` → host；untrusted + `auto` → docker 且 `network="none"`、`writable_paths` 含 workspace、`masked_paths` 含 `.env*`。
-- **Docker 不可用时必须返回明确错误并指引 `aicode trust` 或启动 Docker，不得静默回退 host**——静默回退会把安全边界变成安慰剂。此为本任务核心断言。
+- **Docker 不可用时必须返回明确错误并指引 `aicode project trust` 或启动 Docker，不得静默回退 host**——静默回退会把安全边界变成安慰剂。此为本任务核心断言。
 - 新增评测任务 `untrusted_bash_sandboxed`。
 - 同步 `ARCHITECTURE.md` 安全模型与 Docker Sandbox 两节；按执行规则 6 重新生成 baseline 并确认 `safety_rate` 未下降。
 
@@ -380,7 +382,7 @@
 - Docker 分支 workspace 可写挂载并以宿主 uid/gid 运行，避免在用户仓库留下 root 拥有的文件；`network=none`、`.env*` 遮蔽、资源限制保持不变。`DockerExecutionBackend` 只接受 workspace 本身作为可写路径，其它路径直接拒绝。
 - **Docker 不可用时直接失败并给出处置方式，不回退宿主机**；由 `test_bash_fails_loudly_when_sandbox_is_unavailable` 与评测任务双重锁定。
 - 评测任务 `untrusted_bash_sandboxed` 断言的不变量改为"untrusted workspace 永不产生 host backend 的 execution"——该不变量在有无 Docker 的机器上都成立（有 Docker 走沙箱，无 Docker 被拒绝），CI 因此稳定。为此给 grader 增加 `forbidden_execution_backends` 检查。
-- **额外修复（计划外）**：沙箱此前会隐式拉取镜像，首次使用时一次工具调用变成数分钟无反馈下载（实测 30s 仍未完成即被评测超时打断）。改为 `--pull=never` + 可操作的 `docker pull` 提示，实测 30391ms → 362ms；`aicode doctor` 增加沙箱镜像检查，把这件事提前到安装期发现。
+- **额外修复（计划外）**：沙箱此前会隐式拉取镜像，首次使用时一次工具调用变成数分钟无反馈下载（实测 30s 仍未完成即被评测超时打断）。改为 `--pull=never` + 可操作的 `docker pull` 提示，实测 30391ms → 362ms；`aicode runtime doctor` 增加沙箱镜像检查，把这件事提前到安装期发现。
 - baseline 重新生成，4 处 digest 变化均可归因（prompt / task_set / fixture_set / eval_harness）；`policy_sha256` 与 `tool_schema_sha256` 未变，safety 指标满分。
 - 验证：Python 310 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、`git diff --check` 通过。
 
@@ -409,7 +411,7 @@
 完成记录（2026-07-29，`1c9c5b8`）：
 
 - 队列满时降级为同步写入而非丢弃。队列深度 5000，打满意味着 writer 已跟不上，属病态情况；一次阻塞的 append 好过证据链上出现无人知晓的空洞。
-- 写入失败重试一次；持续失败时计数、记录 `last_error`、在 stderr 报告一次（不是每条事件刷屏），并通过 `status().healthy` 暴露给 `aicode daemon status`。写入路径**绝不向调用方抛异常**——异常逃逸会杀掉 writer task 或中断一次 agent turn。
+- 写入失败重试一次；持续失败时计数、记录 `last_error`、在 stderr 报告一次（不是每条事件刷屏），并通过 `status().healthy` 暴露给 `aicode runtime status`。写入路径**绝不向调用方抛异常**——异常逃逸会杀掉 writer task 或中断一次 agent turn。
 - 按大小轮转（默认 64MB × 5 备份，`AICODE_AUDIT_MAX_BYTES` / `AICODE_AUDIT_BACKUP_COUNT` 可调），并复用文件句柄，不再每条事件开关文件。
 - session **event** 持久化仍保持 best-effort 可丢弃，这个差别是有意的：event 只影响 resume 时的回放展示，真正的 agent 历史由 messages 表独立可靠持久化。已在 `ARCHITECTURE.md` 15.1 写明取舍差异。
 - 原 `test_audit_logger_counts_individual_write_failures` 断言的是旧的"首次失败即丢弃"契约，已重写为覆盖新契约的两条路径（瞬时失败经重试恢复、持续失败被计数并上报且 writer 存活），另补队列溢出降级与轮转测试。
@@ -421,7 +423,7 @@
 
 依赖：无
 
-背景：`is_authorized` 在未配置 `AICODE_RUNTIME_TOKEN` 时直接返回 `True`。未配置不等于关闭认证——它意味着本机任何进程都能调用 approval endpoint，替用户批准一次编辑或一条高风险命令。正常路径（`aicode daemon start`）总会生成 token，因此这条路径只在手动跑 uvicorn 时暴露，但暴露面是完整 API。
+背景：`is_authorized` 在未配置 `AICODE_RUNTIME_TOKEN` 时直接返回 `True`。未配置不等于关闭认证——它意味着本机任何进程都能调用 approval endpoint，替用户批准一次编辑或一条高风险命令。正常路径（`aicode runtime start`）总会生成 token，因此这条路径只在手动跑 uvicorn 时暴露，但暴露面是完整 API。
 
 完成记录（2026-07-29，`07fb613`）：
 
@@ -435,22 +437,32 @@
 
 来源：2026-07-29 架构评审 C6 / C7 / D4，以及实施期补充发现的 N3 / N5 / N6。第一梯队保证"不出事"，本梯队保证"用久了不退化、出事能查、升级不炸"。
 
-### `[ ]` T-030 会话列表分页与数据保留策略
+### `[x]` T-030 会话列表分页与数据保留策略
 
 对应：实施期新发现 N3
 
-背景：`SessionStore.list()` 每次都加载**所有** session 的**所有** messages 与 compactions（`store.py` 的 `list()`），同步执行且无分页。用几周后 `aicode sessions` 会单调变慢。数据库本身也没有任何清理策略，只增不减。
+背景：`SessionStore.list()` 每次都加载**所有** session 的**所有** messages 与 compactions（`store.py` 的 `list()`），同步执行且无分页。用几周后 `aicode session list` 会单调变慢。数据库本身也没有任何清理策略，只增不减。
 
 范围：
 
 - `list()` 只查 session 元信息，不加载 messages / compactions；需要详情的调用点显式取。
 - 分页参数（limit / before），CLI 与 HTTP contract 同步。
-- 保留策略：按数量或时间清理旧 session 及其 messages / events / compactions，并提供显式的 `aicode sessions prune`。
+- 保留策略：按数量或时间清理旧 session 及其 messages / events / compactions，并提供显式的 `aicode session prune`。
 - SQLite `VACUUM` 或 `incremental_vacuum` 的触发时机。
 
 验收：一万条消息规模下 `list()` 耗时与会话数解耦；保留策略有测试覆盖且不会删除仍被引用的 compaction 区间。
 
-### `[ ]` T-031 SQLite schema 迁移 ladder
+完成记录（2026-07-30，`ff59e4b`）：
+
+- `list()` 此前每次调用都 hydrate 所有 session 的所有 messages 与 compactions。**实测 50 session × 40 消息为 69.4ms、每行约 82KB**，且随使用时间单调增长——而唯一的消费者 `aicode session list` 只是展示一个列表。改为只返回摘要（metadata + `message_count` + agent run state）后 **1.2ms、每行 438 字符**。
+- 列表不再写入内存缓存：列举是只读概览，不应因此驱逐正在运行的 session。
+- **偏离原计划**：分页用 `limit` / `offset` 而非计划里的 `limit` / `before` 游标。本地几百个 session 的规模下 keyset 游标的复杂度不划算。
+- 新增 `SessionStore.prune` 与 `aicode session prune` / `POST /v1/sessions/prune`，一并删除 messages / events / compactions。**保留策略默认关闭**：静默删除用户的对话历史比数据库无限增长更糟。
+- **正在运行或有未决 approval 的 session 永不删除**，即使命中保留条件；被跳过的数量通过 `retained_live` 如实汇报而非静默忽略。
+- 当时新增 CLI 包 `sessionscmd`（含参数解析测试），命令归类后迁至 `cli/internal/cmd/sessioncmd/list.go`；Python 侧新增 8 项测试。
+- 验证：Python 338 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、clean-home install E2E 通过。
+
+### `[x]` T-031 SQLite schema 迁移 ladder
 
 对应：实施期新发现 N5
 
@@ -464,7 +476,15 @@
 
 验收：旧库升级、全新库初始化、未来版本库拒绝启动三条路径均有测试。
 
-### `[ ]` T-032 approval 超时语义
+完成记录（2026-07-30，`1dd89f0`）：
+
+- 引入 `PRAGMA user_version` 与只追加的有序 `MIGRATIONS` ladder，启动时只执行缺失的迁移。两个 bespoke 修补收编为迁移 2 / 3。
+- `user_version` 高于当前构建支持的版本时**拒绝打开**并抛 `SchemaVersionError`：带着未知 schema 继续运行会写出旧构建读不回的行，或静默忽略新构建依赖的列。
+- 迁移 1 保持 `if not exists` 幂等——ladder 之前创建的数据库 `user_version=0` 但已持有这些表。**现实中最常见的升级路径正是"表结构已是最终形态但没有版本戳"**，此时三条迁移全部空转、只有版本戳前进，由 `test_already_current_but_unversioned_database_is_stamped_without_changes` 锁定。
+- 另补全新库、legacy 库原地迁移不丢行、未来版本库被拒绝、ladder 编号连续四项测试。既有的 `test_session_store_migrates_old_schema` 未改动即通过。
+- 验证：Python 330 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS。
+
+### `[x]` T-032 approval 超时语义
 
 对应：实施期新发现 N6
 
@@ -474,13 +494,31 @@
 
 验收：超时与拒绝产生不同的事件与不同的 tool 结果文案，有测试覆盖。
 
-### `[ ]` T-025 OpenTelemetry 导出
+完成记录（2026-07-30，`0aba219`）：
+
+- `wait_for_approval` 此前返回 `bool | None`，把"用户明确拒绝"和"超时无人应答"折叠成同一个 `False`。模型因此会为一个没人看到的请求收到 `user rejected this edit`，可能就此放弃一个本来正确的方案。
+- 改为 `ApprovalDecision` 四态：`accepted` / `rejected` / `timed_out` / `missing`，`PendingApproval.resolution` 另记录 `cancelled`。
+- 超时的 tool 结果明确说明"这不是拒绝"，并要求模型**停下来告知用户**而不是重试——重试只会阻塞在下一个同样无人应答的提示上。配一个反向回归测试确保超时文案不会渗进真正的拒绝路径。
+- 事件侧复用 `approval.expired` 并带 `reason`（`timeout` / `run_cancelled`），避免新增近似重复的 event type；`tool.rejected` / `edit.rejected` 带 `resolution`，Go renderer 据此区分展示。
+- 超时时长由 `AICODE_APPROVAL_TIMEOUT_SECONDS` 配置（默认 300），读取发生在 broker（adapter 层）。
+- 验证：Python 342 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS。
+
+### `[x]` T-025 OpenTelemetry 导出
 
 对应：评审 D4 | 依赖：T-021（从增效梯队上移：生产可观测性是"出事能查"的硬指标，不是简历装饰）
 
 范围：`TraceSink` 增加 OTLP 实现并与现有 JSONL 并存；span 层级 `run → model.call / tool.call → execution`；沿用 `audit/redaction.py` 脱敏；文档给出接 Jaeger 或 Langfuse 的本地验证步骤。
 
-### `[ ]` T-027 SSE 健壮性与项目包装
+完成记录（2026-07-30，`1429230`）：
+
+- `SpanTraceSink` 是 TraceSink 的**装饰器**而非替代：转发每个事件给 JSONL sink 的同时派生 span。JSONL 仍是真相来源，追踪是叠加的——丢掉追踪后端绝不能代价一条审计记录。
+- span 由既有 start/finish 事件对派生，得到层级 `run → tool.call → execution`。关联键并不齐整（`session.final` 不带 `run_id`，`usage.recorded` 两者都无），因此按 session 维护 open span 栈。
+- 六条不变量各有测试：关闭 span 连带丢弃内层 span（tool span 不能比发出它的 run 活得更久）；孤立的 close 降级为点事件；无 session 事件不进追踪；span 属性复用审计脱敏（span 会离开本机）；派生异常被吞掉；`aclose` 关闭悬挂 span。
+- OTel SDK 是**可选 extra**，懒加载。为此把派生逻辑与 SDK 绑定分开——派生零依赖，16 项测试全部不需要 SDK。开启但 SDK 缺失直接报错：运维以为在跑而实际没在跑的追踪后端比没有更糟。
+- README 给出 Jaeger 的 60 秒本地验证步骤。
+- 验证：Python 373 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS。
+
+### `[x]` T-027 SSE 健壮性与项目包装
 
 对应：评审 C6 / C7 / D6（SSE 挂起属已知可复现缺陷，因此归入稳定性梯队）
 
@@ -490,23 +528,34 @@
 - provider 重试增加抖动并读 `Retry-After`（两个 provider 的固定 `0.5 * 2**attempt`）。
 - 英文 README + 30 秒 asciinema/GIF；README 顶部重排为「是什么 → 架构图 → 三个数字 → 60 秒跑起来」。
 
+完成记录（2026-07-30，`6d2b07e`）：
+
+- CLI 把"流结束但没收到 `final`"当作**可重试断连并重连**，因此按 `run_id` 过滤的流一旦永久等待，CLI 会陷入**无限重连**而非单次挂起。
+- 两种情形被显式终止：run 已在请求 cursor 之前结束（重放其终态事件）；run 无任何保留事件且既不在运行也不在队列（合成终态事件，**不写入 session**，因为实际没有发生新的事情）。第二种的成因是 event 持久化 best-effort + session 驱逐重建，与过期 run_id 在服务端看起来完全一样。
+- `subscribe` 增加 `idle_timeout`，每 15 秒发 `: keep-alive` 并借此重新判断上述情形。yield 在 condition 之外，锁不跨挂起点。
+- 为区分"未开始"与"已消失"，`Session` 增加 `queued_run_ids()`，而非让 server 读 `asyncio.Queue` 私有属性。
+- provider 重试从固定 `0.5 * 2**attempt` 改为 equal jitter 指数退避 + `Retry-After`（上限 60 秒）。固定退避会让撞上同一限流的客户端同步重试，重新制造那个突发。
+- **写测试时发现并修掉一个真实缺陷**：`parsedate_to_datetime` 对非法输入抛 `ValueError` 而非返回 `None`，原实现会把可重试的 429 变成 provider 崩溃。
+- **未包含**：英文 README 与 asciinema/GIF。属项目包装而非稳定性问题，且录屏无法在当前环境产出，留作独立任务。
+- 验证：Python 354 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS。
+
 ## M6：架构清理
 
 来源：2026-07-29 架构评审 A2 / A4 / B1 / B2 / C1–C5。不阻塞生产可用，但决定后续每一项改动的成本。
 
-### `[ ]` T-017 Tool Registry 重构
+### `[x]` T-017 Tool Registry 重构
 
 对应：评审 A2
 
 依赖：T-011b
 
-背景：`TOOL_SCHEMAS` 是模块级常量、`run_tool` 是 if/elif 链、`ToolRegistry` port 只是静态集合的外壳；只读性在 `tools/registry.py` 与 `policy/engine.py` 维护两份，审批语义硬编码在 `agent/loop.py` 的 `if call.name == "edit_file"`。该问题阻塞 MCP、subagent、项目自定义工具三个方向。
+背景：`TOOL_SCHEMAS` 是模块级常量、`run_tool` 是 if/elif 链、`ToolRegistry` port 只是静态集合的外壳；只读性在 `tools/registry.py` 与 `agent/policy.py` 维护两份，审批语义硬编码在 `agent/loop.py` 的 `if call.name == "edit_file"`。该问题阻塞 MCP、subagent、项目自定义工具三个方向。
 
 范围：
 
 - 定义 `ToolSpec`（`name` / `description` / `input_schema` / `read_only` / `approval: none|gate|diff` / `hidden_in_modes`）与 `Tool` Protocol。
 - `ToolRegistry` 改为真实 dict 注册表，`run_tool` 变查表；现有 7 个工具逐个迁移。
-- **删除 `policy/engine.py` 的 `READ_ONLY_TOOLS_V2` 常量**，`PolicyEngine.gate` 从 registry 读取只读性——消灭两份真相是本任务关键收益。
+- **删除 policy 的 `READ_ONLY_TOOLS_V2` 常量**，`PolicyEngine.gate` 从 registry 读取只读性——消灭两份真相是本任务关键收益。
 - `agent/loop.py` 的 edit 分流改为 `tool.spec.approval == "diff"`。
 
 验收：
@@ -515,7 +564,19 @@
 - 新增可扩展性证明：注册一个自定义只读工具，验证其自动出现在 review 模式 schema 且被 policy 判为 `allow`。
 - 按执行规则 6 重新生成 baseline（`policy_sha256` 与 `tool_schema_sha256` 变化）。
 
-### `[ ]` T-018 MCP client 接入
+完成记录（2026-07-30，`b175004`）：
+
+- 每个工具一份 `ToolSpec` 声明（`name` / `description` / `input_schema` / `read_only` / `approval` / `hidden_in_modes`），`ToolRegistry` 变成真正的注册表，`run_tool` 变查表。
+- `ToolSpec` 实现时放在 core 而不是工具实现旁边，因为它有三个互不导入的消费者：模型看 `input_schema`，policy 读 `read_only`，Agent Loop 读 `approval`；包重组后现位于 `runtime/app/agent/ports.py`。
+- **最实质的收益**：消灭一处真实 drift 风险。读写属性此前在 `tools/registry.py` 与 policy 各维护一份同样的名单，仅靠注释提醒同步。`READ_ONLY_TOOLS_V2` 已删除，并有测试守住不回归。
+- Agent Loop 的 diff 审批改为按声明分发（`spec.approval == "diff"`）而非 `if call.name == "edit_file"`。
+- policy 测试改为经由 `DEFAULT_REGISTRY` 取 spec，与 loop 同一路径——这样测试同时验证声明本身是对的，而非把 `read_only` 硬编码进断言。
+- 新增可扩展性测试：注册一个完全在内置集合之外的只读工具，验证自动进入 schema、被 policy 判 allow、按查表分发。
+- **保留** `edit_file` 的 registry 分支并改写为明确守卫：删掉后会落到 `unknown tool: edit_file`，对一个确实存在的工具那是错误信息。
+- eval baseline **仅 `policy_sha256` 变化，`tool_schema_sha256` 未变**——发给模型的 schema 与改动前逐字节一致，是行为保持的直接证据。
+- 验证：Python 376 项、Go 全量、go vet、gofmt、ruff、compileall、eval-smoke PASS、clean-home install E2E 通过。
+
+### `[x]` T-018 MCP client 接入
 
 对应：评审 D5
 
@@ -531,7 +592,17 @@
 
 验收：外部工具全链路经过 policy gate 与审批；server 崩溃隔离有测试覆盖。
 
-### `[ ]` T-019 只读工具并行执行
+完成记录（2026-07-30，`c88e2da`）：
+
+- `mcp.servers[]` 以子进程启动，stdio 讲 JSON-RPC（`initialize` → `tools/list` → `tools/call`），工具经 `ToolSpec` 注册进 T-017 的同一个 registry，因此**自动**走内置工具的 policy gate 与审批链路。
+- 前置 policy 改动：`gate()` 改为按 `ToolSpec` 判定而非硬编码工具名。原实现里 `read_only=False` 的非内置工具会落到 `unknown tool` 硬拒绝，外部工具永远无法运行。spec 缺失仍是硬拒绝。
+- 四条安全约束各有测试：命名空间 `mcp__<server>__<tool>`（服务器无法接管 `bash`/`edit_file`）；**不相信服务器的自述**（`read_only=False` / `approval="gate"` 强制，不读 descriptor——服务器声称只读是不可验证的主张，采信等于对外部代码跳过审批）；复用最小环境 allowlist（用会回报自己看到哪些变量的服务器**行为验证**，而非只读代码确认）；故障隔离（启动失败/协议违规/调用超时都不影响主 loop 与其它服务器）。
+- 客户端把 MCP server 当普通子进程：每次调用有超时，关闭按进程组终止，SIGTERM 后 2 秒不退则 kill，stderr 保留有界尾部用于解释失败。
+- 测试用 fake MCP server 脚本，按 argv 切换 healthy / crash / hang / garbage / error 五种行为，覆盖真实子进程与 stdio 往返。
+- **只实现 stdio transport**。HTTP transport 未提供——发布一个未经充分测试的第二 transport 比不发布更糟，已在 ARCHITECTURE 与 README 写明。
+- 验证：Python 394 项、Go 全量、go vet、gofmt、ruff、compileall、eval-smoke PASS、clean-home install E2E 通过。
+
+### `[x]` T-019 只读工具并行执行
 
 对应：评审 B2
 
@@ -546,7 +617,17 @@
 
 验收：并行组耗时接近单个最慢工具而非总和；tool message 顺序与 `tool_calls` 顺序一致，两条断言均有测试。
 
-### `[ ]` T-021 Composition root 移入 lifespan
+完成记录（2026-07-30，`9a493d3`）：
+
+- **实测 6 个各 100ms 的读取：600ms → 126ms。**
+- 只有**连续的**只读调用成组并发，因此与写操作的相对顺序被保留——模型放在 edit 之后的 read 仍读到编辑后的内容。测试断言写操作 `peak_concurrent == 1`，且 edit 前后两次 read 分别看到旧值与新值。
+- 只读工具是唯一安全的并发组还有第二个原因：它们的 policy 判定是立即 `allow`，因此并发组永远不会同时挂在两个审批提示上。这正是 T-017 把 `read_only` 变成声明之后才能安全依赖的性质。
+- 三条不变量各有测试：结果按**模型调用顺序**写回（部分 provider 按位置配对 tool result 与 call，用完成顺序会破坏下一次请求，测试用故意后发先至的 runtime 验证）；每次调用用 `ToolContext` 独立副本（此前 `tool_call_id` 赋值到共享对象，重叠即互相污染）；并发上限 8。
+- 未注册的工具名没有 spec，不能假定无副作用，永远单独成组。
+- **ruff 的 B023 在实现过程中抓到一个闭包晚绑定写法**（这是 T-022 立起静态检查后第一次真正拦下东西）。
+- 验证：Python 381 项、Go 全量、go vet、gofmt、ruff、compileall、eval-smoke PASS。
+
+### `[x]` T-021 Composition root 移入 lifespan
 
 对应：评审 A4
 
@@ -561,7 +642,15 @@
 
 验收：新增测试在同一进程内起两个配置不同的 `ApplicationRuntime` 并各自完成一轮 turn——这是"可嵌入"的实证。
 
-### `[ ]` T-022 Python 静态检查进 CI 与核心路径类型收敛
+完成记录（2026-07-30，`d90f6c7`）：
+
+- 删除模块级 `application_runtime`：import `app.server.main` 此前就会打开 SQLite、构造 provider client，模块顺序敏感，且一个进程内无法并存两个配置不同的 Runtime——与 T-011a/T-011b 建立的 ports 分层自相矛盾。改为 lifespan 创建并挂 `app.state`，handler 通过 `Depends(get_runtime)` 取用。
+- **同时修掉 N2**：handler 现在直接复用 `ApplicationRuntime.__post_init__` 装配好的 8 个 service。此前 transport 每请求重建一遍（含新建 `AgentLoop`），runtime 自己的 service 是死代码。
+- 测试从 monkeypatch 全局迁移到注入 runtime：新增 `tests.fakes.build_test_runtime`。**组件必须构造时传入而不能事后赋值**——`ApplicationRuntime` 在 `__post_init__` 装配 service，事后赋值会让 service 仍指向原对象（这正是旧测试依赖"每次调用重建 service"才能工作的原因），该约束写进 helper docstring。
+- 新增两条架构守卫：import transport 不得产生任何基础设施副作用且模块全局不得回归；**同进程两个 Runtime 各自只看到自己的 session**（后者是本次改动的实证——ROADMAP 早把"可嵌入 Runtime"标为完成，但在 transport 层其实是破的）。
+- 验证：Python 357 项、Go 全量、go vet、gofmt、compileall、eval-smoke PASS、**clean-home install E2E 通过（lifespan 现在是承载路径，这条最关键）**。
+
+### `[x]` T-022 Python 静态检查进 CI 与核心路径类型收敛
 
 对应：评审 C1 / C2 / C3 / C4 / C5 / B1
 
@@ -578,6 +667,16 @@
    - 删除 `agent/loop.py` 中对行为无影响的局部 `history` 列表（所有 append 都被下一轮 `load_history(session)` 覆盖），统一以 session 为唯一真相源。
 
 验收：`make lint-python` 进 CI 且通过；上述类型改动后全量测试不改断言即通过。
+
+完成记录（2026-07-30，`cbf68b1`）：
+
+- 新增仓库根 `ruff.toml`（`E,F,I,UP,B`，line-length 160），`make lint-python` 并入 CI 与本地 `make test`。
+- **配置刻意放在仓库根而非 `runtime/pyproject.toml`**：ruff 按文件向上找最近配置，放在 runtime 下会让 `evals/` 静默沿用默认规则——第一次跑就踩到。另设 `known-first-party`，否则 `app`/`evals`/`tests` 会被当第三方与 pytest、pydantic 交错，反而掩盖 import 表达的分层。
+- 基线只有 54 个问题（30 可自动修），因此**没建 per-file-ignores 基线而是全部修完**。E501 的三处豁免是长 prose 字符串，配置里写明理由。唯一非机械修复是 `registry.py` 的 B904。
+- 死代码：删除 loop.py 的局部 `history` 列表（每处 append 都被下一轮 `load_history(session)` 覆盖，**删除后 loop 测试未改断言即通过**，反证其为死代码；它制造的"内存 history 有独立语义"假象有害——后续只改内存副本的修改会静默失效）；删除 `compact_if_needed` 及其两项测试。
+- 类型收敛：`AgentRuntime` 字段改用 port 名（`model_runtime` / `trace` / `trust`），删除三个别名属性，19 处构造点同步；`request: Any` → 已存在但从未使用的 `AgentRequest` Protocol。
+- **两处偏离原计划**：(1) 未把 `AgentRuntime` 字段改必填、未删 loop 的 assert——计划假设这些字段只有一个消费者，但 `ContextManager` 与 `run_turn` 要求不同（前者只需 session，`model_runtime` 缺失时降级为确定性摘要，8 项测试依赖这一点），一律改必填会误述 `ContextManager` 的契约；正确做法是引入校验后的 `TurnDependencies` 视图，但那要改 loop 全部 helper 签名，不适合作为本任务尾部的顺带改动，已在 ARCHITECTURE 写明并留作独立任务。(2) 保留 `registry.py` 的 `edit_file` 分支——实测它是有意义的守卫而非占位。
+- 验证：Python 371 项、Go 全量、go vet、gofmt、ruff、compileall、eval-smoke PASS、clean-home install E2E 通过。
 
 ## M7：增效与评测触发项
 

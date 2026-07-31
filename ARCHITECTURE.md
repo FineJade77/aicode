@@ -50,7 +50,7 @@ Host 命令与 Docker Sandbox 统一经过 Runtime ExecutionService：
 ```text
 Agent bash/search/review ----\
                               -> ExecutionService -> HostExecutionBackend
-Go CLI --sandbox docker -----/                   \-> DockerExecutionBackend
+Go CLI project sandbox ------/                   \-> DockerExecutionBackend
   |
   +-- stable execution_id and terminal state
   +-- timeout/cancel kills the whole process group
@@ -66,26 +66,19 @@ CLI 负责用户入口、常驻 REPL 状态机、daemon 生命周期、命令参
 主要命令：
 
 - `chat`: 带 message 时执行单次对话；不带 message 时进入常驻 REPL，在同一 session 中支持 follow-up、steer、cancel、status/model/compact/new/resume。
-- `review`: 对当前改动做代码审查，Runtime 使用 reviewer 路由和只读工具。
-- `diff`: 分析当前 diff。
-- `test`: 根据测试失败信息让 Agent 辅助修复。
-- `explain`: 解释代码或项目行为。
-- `commit-message`: 基于 staged diff 或 working tree diff 生成提交信息。
-- `sessions`: 查看和恢复历史 session。
-- `usage`: 查看 token 和成本估算。
-- `models`: 查看模型路由。
-- `review-rules`: 查看当前审查规则和保护路径。
-- `config`: 查看或修改用户配置。
-- `daemon`: 管理 Runtime daemon。
-- `doctor`: 只读检查安装、版本、Python/依赖、端口、provider 和 Docker；不启动 daemon，不请求外部 provider。
-- `trust`: 查看、授予或移除仓库外 Project Trust。
-- `--sandbox docker test|build|lint`: 在 Docker 隔离环境运行项目命令。
+- `task review|diff|test|explain|commit-message`: 执行代码审查、diff 分析、测试修复、代码解释和提交信息生成。
+- `session list|show|resume|cancel|prune`: 查看、恢复、取消或清理历史 session。
+- `runtime start|stop|status|doctor|models|usage`: 管理 Runtime，并检查安装、模型路由和资源用量。
+- `project trust|review|protected|command test|workspace|sandbox`: 管理项目信任与规则，并执行项目命令或 Docker 隔离命令。
+- `config init|show|list|get|set|unset|docs`: 初始化、查看和修改用户配置。
+
+旧版扁平命令仍作为隐藏兼容别名保留，但帮助信息、文档和新增调用统一使用上述分组入口。
 
 CLI 在普通 Agent 命令中会自动确保 daemon 已启动；如果本机已有 Runtime，也会复用现有服务。
 
 REPL 由一个输入 scanner 和一个主状态循环统一协调普通消息、控制命令、SSE、approval 与 signal。普通输入在活跃 run 后排队；`/steer` 通过 Runtime 队列在 AgentLoop 安全边界生效。TTY 中首个 Ctrl-C 取消当前 run、第二个退出；非 TTY 在 EOF 后等待已提交 run 的终态，不输出 prompt。
 
-`--sandbox docker` 不再在 Go 进程内自行启动容器。CLI 只提交版本化 execution request，并在中断时调用统一 cancel API；命令探测、资源限制、进程终态和 audit 均由 Runtime 负责。
+`aicode project sandbox` 不在 Go 进程内自行启动容器。CLI 只提交版本化 execution request，并在中断时调用统一 cancel API；命令探测、资源限制、进程终态和 audit 均由 Runtime 负责。
 
 ### 3.1.1 Execution Backends
 
@@ -97,7 +90,7 @@ REPL 由一个输入 scanner 和一个主状态循环统一协调普通消息、
 - 进程组级 timeout/cancel；
 - 不记录原始命令的 execution audit。
 
-Agent `bash`、`rg` 搜索、review git 命令和编辑后的模型验证都走 Host backend。`test/build/lint` sandbox 由 Docker backend 执行，保持 workspace 只读、默认禁网、`.env*` 遮蔽和资源限制。正常 `daemon stop` 会先请求 Runtime 取消全部活跃 execution，再终止 daemon。
+Agent `bash`、`rg` 搜索、review git 命令和编辑后的模型验证都走 Host backend。`test/build/lint` sandbox 由 Docker backend 执行，保持 workspace 只读、默认禁网、`.env*` 遮蔽和资源限制。正常 `aicode runtime stop` 会先请求 Runtime 取消全部活跃 execution，再终止 daemon。
 
 Host backend 不继承完整 Runtime 环境：默认只复制 PATH、locale、terminal 和必要 toolchain root 等最小非敏感 allowlist，并把 HOME/XDG/TMP 重定向到按 canonical workspace 隔离、权限为 `0700` 的 execution home。API key、Runtime token、credentials、全局 build cache 路径和任意未列出的自定义变量不会进入项目子进程。Runtime 内部调用 `git`/`rg` 时会先解析绝对 executable，并拒绝 workspace PATH hijack。
 
@@ -120,15 +113,16 @@ daemon 解析 Runtime 的顺序：
 2. 根据当前 CLI 可执行文件定位 `<prefix>/lib/aicode/manifest.json`，使用其中版本化 Runtime 和 venv Python。
 3. 从当前目录向父目录查找源码 checkout 的 `runtime/`，仅作为开发 fallback。
 
-manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和 `..` 逃逸。`aicode doctor [--json]` 使用与 daemon 相同的 Runtime 解析路径，并区分阻断运行的 error 与可选能力/尚未启动服务的 warning。安装启动 E2E 在临时 HOME、临时 prefix 和源码目录外 workspace 中覆盖 install → doctor → start → status → stop。
+manifest 中的路径必须相对 manifest 目录，CLI 会拒绝绝对路径和 `..` 逃逸。`aicode runtime doctor [--json]` 使用与 daemon 相同的 Runtime 解析路径，并区分阻断运行的 error 与可选能力/尚未启动服务的 warning。安装启动 E2E 在临时 HOME、临时 prefix 和源码目录外 workspace 中覆盖 install → runtime doctor → runtime start → runtime status → runtime stop。
 
 ### 3.3 Python Runtime
 
 Runtime 分为三层：
 
 - `application/`：会话、run 串行化/取消/steer、手动 compaction、审批决议、trace/usage、Project Trust、model 与 execution facade。
-- `agent/` + `core/`：transport-independent AgentLoop、ContextManager、Policy，以及 ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、Clock/IDs ports。
-- `adapters/`：composition root、SQLite/内存 session、JSONL usage、provider router、host/Docker execution、workspace/project config、tool registry、approval broker 与系统 clock/UUID。
+- `agent/`：transport-independent AgentLoop、ContextManager、Policy（`agent/policy.py`）、domain 类型（`agent/session.py`）与全部 port 声明（`agent/ports.py`：ModelRuntime、ToolRegistry、SessionRepository、EventSink、ApprovalBroker、ExecutionRuntime、WorkspaceRuntime、Clock/IDs，以及 `ToolSpec`）。
+- **adapter 实现按其所属领域就近放置**，而非集中在一个 `adapters/` 包：`sessions/`（SQLite + 内存 session、approval broker）、`tools/`（registry、内置工具、`tools/runtime.py` 与 `tools/workspace.py` 适配、`tools/mcp/`）、`models/`（provider router）、`execution/`（host/Docker）、`usage/`、`project/`，以及 `system.py`（clock/UUID）、`security.py`、`events.py`、`config.py`。
+- `bootstrap.py` 是唯一的 composition root。
 
 `ApplicationRuntime` 由 ASGI lifespan 创建并挂在 `app.state`，handler 通过 `Depends(get_runtime)` 取用。此前它是模块级全局：import `app.server.main` 就会打开 SQLite、构造 provider client，模块顺序敏感，且一个进程内无法并存两个配置不同的 Runtime——这与 T-011a/T-011b 建立的 ports 分层自相矛盾，也让 ROADMAP 标注为已完成的"可嵌入 Runtime"在 transport 层被打破。
 
@@ -142,10 +136,10 @@ handler **直接复用 `ApplicationRuntime.__post_init__` 装配好的 service**
 
 依赖规则：
 
-- Agent Core 不导入 FastAPI、server、SQLite store、具体工具、project config 或 adapter。
-- Application 层不导入 FastAPI、server 或具体 adapter。
-- 只有 `adapters/composition.py` 组装具体实现。
-- adapter 可以依赖 core/application port，反向依赖禁止。
+- Agent Core（`agent/`）不导入 FastAPI、server、SQLite store、具体工具、project config 或任何 adapter 实现。
+- Application 层不导入 FastAPI、server 或具体 adapter 实现。
+- 只有 `bootstrap.py` 组装具体实现。
+- adapter 可以依赖 `agent/ports.py` 与 application 契约，反向依赖禁止。
 - 导入 `app.agent.loop` 不读取用户配置、不创建数据库、不启动 FastAPI。
 
 Runtime 使用 FastAPI + Uvicorn，持久化默认落在 `.aicode/state/` 下。
@@ -281,11 +275,11 @@ emit run.completed or run.failed
 
 ## 7. Tool Registry
 
-`ToolRegistry` 是真正的 name → tool 注册表，每个工具由一份 `ToolSpec`（`app/core/tools.py`）声明：`name` / `description` / `input_schema` / `read_only` / `approval`（`none` | `gate` | `diff`）/ `hidden_in_modes`。
+`ToolRegistry` 是真正的 name → tool 注册表，每个工具由一份 `ToolSpec`（`app/agent/ports.py`）声明：`name` / `description` / `input_schema` / `read_only` / `approval`（`none` | `gate` | `diff`）/ `hidden_in_modes`。
 
-**一份声明，三个消费者**：模型看 `input_schema`，policy 读 `read_only`，Agent Loop 读 `approval`。`ToolSpec` 因此放在 `core` 而不是工具实现旁边——这三层互不导入。
+**一份声明，三个消费者**：模型看 `input_schema`，policy 读 `read_only`，Agent Loop 读 `approval`。`ToolSpec` 因此和其它 port 一起声明在 `agent/ports.py`，而不是放在工具实现旁边——这三个消费者互不导入。
 
-这替换掉了此前的模块级 schema 列表 + if/elif 分发链。更重要的是消灭了一处真实的 drift 风险：读写属性此前在 `tools/registry.py` 的 `READ_ONLY_TOOL_NAMES` 和 `policy/engine.py` 的 `READ_ONLY_TOOLS_V2` 各维护一份，靠注释提醒保持同步。现在 `PolicyEngine.gate` 接收调用方从 `ToolSpec` 读出的 `read_only`，自己不再持有名单。
+这替换掉了此前的模块级 schema 列表 + if/elif 分发链。更重要的是消灭了一处真实的 drift 风险：读写属性此前在 `tools/registry.py` 的 `READ_ONLY_TOOL_NAMES` 和 policy 的 `READ_ONLY_TOOLS_V2` 各维护一份，靠注释提醒保持同步。现在 `PolicyEngine.gate` 接收调用方从 `ToolSpec` 读出的 `read_only`，自己不再持有名单。
 
 Agent Loop 的 diff 审批同样改为按声明分发（`spec.approval == "diff"`）而不是 `if call.name == "edit_file"`，未来任何需要 diff 审批的工具无需改动 loop。
 
@@ -441,7 +435,7 @@ OpenAI-compatible Profile auth mode 支持 `required`、`optional`、`none`。`n
 
 每个 purpose 在调用前解析 `provider + model` capability，包括 context window、max output、native tools、streaming 与 tokenizer。精确 model map 优先，随后使用 Profile 默认值。`tool_calling=false` 或 `streaming=false` 会在 provider 请求前快速失败，禁止从正文猜 tool JSON。
 
-`GET /v1/models/probe` / `aicode models probe` 按 configuration → `/v1/models` → selected model → SSE → tools 分阶段探测，并返回 versioned result 和稳定错误 code。Profile/probe contract 分别由 `schemas/provider-profile.schema.json` 与 `schemas/provider-probe.schema.json` 定义。
+`GET /v1/models/probe` / `aicode runtime models probe` 按 configuration → `/v1/models` → selected model → SSE → tools 分阶段探测，并返回 versioned result 和稳定错误 code。Profile/probe contract 分别由 `schemas/provider-profile.schema.json` 与 `schemas/provider-probe.schema.json` 定义。
 
 ## 13. Sessions And API
 
@@ -490,11 +484,11 @@ compaction 在每次模型调用前按该路由的 capability 主动发生。摘
 
 ### 14.0 读取形态与保留策略
 
-`GET /v1/sessions` 与 `SessionStore.list()` 只返回摘要（metadata + `message_count` + agent run state），并支持 `limit` / `offset`。此前每次调用都会 hydrate 所有 session 的所有 messages 与 compactions——50 × 40 实测 69.4ms、每行约 82KB，且随使用时间单调增长，而唯一的消费者 `aicode sessions` 只是展示一个列表。改后为 1.2ms、每行 438 字符。单个 session 的完整历史仍由 `get(session_id)` 提供。
+`GET /v1/sessions` 与 `SessionStore.list()` 只返回摘要（metadata + `message_count` + agent run state），并支持 `limit` / `offset`。此前每次调用都会 hydrate 所有 session 的所有 messages 与 compactions——50 × 40 实测 69.4ms、每行约 82KB，且随使用时间单调增长，而唯一的消费者 `aicode session list` 只是展示一个列表。改后为 1.2ms、每行 438 字符。单个 session 的完整历史仍由 `get(session_id)` 提供。
 
 列表也**不再写入内存缓存**：列举是只读概览，不应因此驱逐正在运行的 session。
 
-保留策略（`SessionStore.prune`）默认关闭，两个上界都是 0。静默删除用户的对话历史比数据库无限增长更糟，因此不配置就不清理；配置后由 `aicode sessions prune` 或 `POST /v1/sessions/prune` 触发，一并删除对应的 messages / events / compactions。
+保留策略（`SessionStore.prune`）默认关闭，两个上界都是 0。静默删除用户的对话历史比数据库无限增长更糟，因此不配置就不清理；配置后由 `aicode session prune` 或 `POST /v1/sessions/prune` 触发，一并删除对应的 messages / events / compactions。
 
 **正在运行或有未决 approval 的 session 永不删除**，即使命中保留条件——它即将写回状态；这类被跳过的数量通过返回值的 `retained_live` 汇报，而不是静默忽略。
 
@@ -562,7 +556,7 @@ OTel SDK 是可选依赖（`pip install 'aicode-runtime[otel]'`），懒加载�
 - **不静默丢弃。** 写入队列满时不丢弃事件，而是降级为当前线程内同步写入。队列深度 5000，打满意味着 writer 已经跟不上，属于病态情况；此时一次阻塞的 append 好过证据链上出现一个没人知道的空洞——否则"没有危险命令的记录"和"没有发生危险命令"就变得不可区分。
 - **不无限增长。** 按大小轮转（默认 64MB × 5 个备份），可用 `AICODE_AUDIT_MAX_BYTES` / `AICODE_AUDIT_BACKUP_COUNT` 调整。
 
-写入失败会重试一次；持续失败时计数、记录 `last_error`、在 stderr 上报告一次（而不是每条事件都刷屏），并通过 `status()` 的 `healthy` 字段暴露给 `aicode daemon status`。写入路径**绝不向调用方抛异常**——异常逃逸会杀掉 writer task 或中断一次 agent turn。
+写入失败会重试一次；持续失败时计数、记录 `last_error`、在 stderr 上报告一次（而不是每条事件都刷屏），并通过 `status()` 的 `healthy` 字段暴露给 `aicode runtime status`。写入路径**绝不向调用方抛异常**——异常逃逸会杀掉 writer task 或中断一次 agent turn。
 
 对比：session **event** 持久化仍是 best-effort，队列满时允许丢弃。两者的差别是有意的——event 只影响 resume 时的回放展示，真正的 agent 历史由 messages 表独立、可靠地持久化。
 
@@ -584,9 +578,9 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 
 **显式命令**（workspace 只读挂载）：
 
-- `aicode --sandbox docker test`
-- `aicode --sandbox docker build`
-- `aicode --sandbox docker lint`
+- `aicode project sandbox test`
+- `aicode project sandbox build`
+- `aicode project sandbox lint`
 
 **Agent `bash` 工具**（workspace 可写挂载）：由 `execution.agent_bash_backend` 与 workspace trust level 共同决定，见 18.1。
 
@@ -598,7 +592,7 @@ Docker Sandbox 是 Runtime ExecutionBackend 的隔离实现，Go CLI 只保留�
 - 只允许少量缓存相关环境变量。
 - 设置 CPU、内存、进程数等资源限制。
 - 使用与 Agent Host 命令一致的 execution 终态、取消和 audit 格式。
-- `--pull=never`：绝不隐式拉取镜像。镜像缺失会立即失败并提示 `docker pull`，而不是把一次工具调用变成数分钟无反馈的下载。`aicode doctor` 会在安装期就报告缺失的沙箱镜像。
+- `--pull=never`：绝不隐式拉取镜像。镜像缺失会立即失败并提示 `docker pull`，而不是把一次工具调用变成数分钟无反馈的下载。`aicode runtime doctor` 会在安装期就报告缺失的沙箱镜像。
 
 它适合在隔离环境中验证命令是否能通过，但不是完整的远程执行平台。当前还没有实现 artifact 回收或复杂服务编排。
 
@@ -633,7 +627,7 @@ Agent `bash` 的落点由 `execution.agent_bash_backend` 与 workspace trust lev
 - 项目级：`.aicode/config.json` 的 `execution.agentBashBackend`；取值非法时回落到"继承 Runtime 设置"，而不是回落到宽松默认——配置里的拼写错误绝不能悄悄削弱沙箱。
 - system prompt 会声明当前的执行环境（是否禁网），使模型不会围绕它并不具备的能力做计划。
 
-**不做静默降级**：当命令被路由到 docker 但 Docker CLI 不可用时，`bash` 直接失败并提示用户启动 Docker、执行 `aicode trust add`，或显式改配置为 `host`。回退到宿主机执行会把一个安全边界变成安慰剂，因此这条路径由 `test_bash_fails_loudly_when_sandbox_is_unavailable` 与评测任务 `untrusted_bash_sandboxed` 双重锁定。
+**不做静默降级**：当命令被路由到 docker 但 Docker CLI 不可用时，`bash` 直接失败并提示用户启动 Docker、执行 `aicode project trust add`，或显式改配置为 `host`。回退到宿主机执行会把一个安全边界变成安慰剂，因此这条路径由 `test_bash_fails_loudly_when_sandbox_is_unavailable` 与评测任务 `untrusted_bash_sandboxed` 双重锁定。
 
 评测任务断言的不变量是"untrusted workspace 永不产生 host backend 的 execution"——这个断言在有无 Docker 的机器上都成立：有 Docker 则走沙箱，无 Docker 则被拒绝，只有回退到 host 的回归才会让它失败。
 
@@ -662,17 +656,21 @@ Agent shell command、模型正文、tool output 和 edit/diff 正文不会完�
 ├── cli/                    # Go CLI
 ├── runtime/                # Python Runtime
 │   └── app/
-│       ├── agent/          # Agent Loop, prompts, history compression
-│       ├── audit/          # audit logger and redaction
-│       ├── config/         # user/project config loading
+│       ├── agent/          # Agent Loop, prompts, history compression, policy, ports, domain types
+│       ├── application/    # session/run/approval/context services over the ports
+│       ├── audit/          # audit logger, redaction and OTLP span derivation
+│       ├── execution/      # host and Docker execution backends
 │       ├── models/         # provider clients and router
-│       ├── policy/         # tool policy engine
 │       ├── project/        # project config, detection and external trust store
-│       ├── security/       # secret classification and output redaction
-│       ├── server/         # FastAPI routes
-│       ├── sessions/       # SQLite-backed sessions/events/approvals
-│       ├── tools/          # tool registry and implementations
-│       └── usage/          # usage tracking
+│       ├── server/         # FastAPI routes and auth
+│       ├── sessions/       # SQLite-backed sessions/events/approvals, in-memory repo
+│       ├── tools/          # registry, built-in tools, MCP client, runtime/workspace adapters
+│       ├── usage/          # usage tracking and pricing
+│       ├── bootstrap.py    # the only composition root
+│       ├── config.py       # settings loading
+│       ├── events.py       # SSE encoding and the event type registry
+│       ├── security.py     # secret classification, redaction, hashing, path guards
+│       └── system.py       # clock and id generation
 ├── evals/                  # tasks, isolated fixtures, graders, runner and baselines
 ├── schemas/                # runtime and eval contracts
 ├── runtime/tests/          # integration and behavior tests
