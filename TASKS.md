@@ -881,9 +881,19 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - eval 按规则 6 处理：`tool_specs_sha256` 与 `prompt_sha256` 变更，5 个 run 全通过、指标无回退后才 rebase。
 - 验证：Python 545 项 + 1 skip、Go 全量（含 4 项新增 REPL 测试）、gofmt、go vet、ruff、eval-smoke PASS、clean-home install E2E 通过。
 
-### `[ ]` T-043 后台与长时命令
+### `[x]` T-043 后台与长时命令
 
 对应：评审 T4。`bash` 最多阻塞 600 秒，dev server / watch / 长构建做不了。范围：background 模式返回句柄，配套读取输出与终止工具，复用 `ExecutionService` 的进程组终止与 daemon 停止清理。
+
+完成记录（2026-07-31）：
+
+- 新增 `app/execution/background.py`，`bash(background=true)` 返回句柄，配套 `read_output` / `stop_command`。`BackgroundProcessManager` 挂在 `ExecutionService` 上，于是 lifespan 的 `aclose()` → `cancel_all()` 这条既有路径顺带收干净后台进程——不是新建一条清理链路。进程组终止复用 `kill_process_group`。
+- 进程**不挂在 session 上**：session 被缓存淘汰时挂在它上面的进程会活得比属主久。读取游标才挂在 session 上，两个 session 看同一命令不会互相吃掉输出。
+- 输出由常驻 reader task 持续抽干，不是按需读取——管道写满的进程会永久阻塞。缓冲区有上限，读取按绝对偏移寻址，落后者被明确告知丢了多少字符；静默的缺口会被当成连续输出来推理。
+- **Docker backend 下拒绝后台执行**：Docker 路径每次执行建容器、返回即拆除，"后台"在那里不是同一个意思。与沙箱不可用时同源——拒绝，而不是悄悄把不受信任工作区的服务器放到宿主机上跑。
+- **实现中改了一处自己的判断**：`status()` 最初让 `exited` 优先于 `stopped`，于是被我们杀掉的进程报告成"自己退出了"——模型据此可能得出"服务器崩了"。改为 `stopped` 优先，退出码照常一并给出。
+- 进程组终止用 T-035 时重写的 pid 断言（`process_helpers`）验证，不是靠 marker 计时推断；跑完全量套件后实测无残留进程。
+- 验证：Python 561 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（仅 `tool_specs_sha256` 变更）、clean-home install E2E 通过。
 
 ### `[ ]` T-044 OS 级沙箱
 

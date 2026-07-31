@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from typing import Any, Protocol
 
+from app.execution.background import BackgroundProcessManager
 from app.execution.docker import DockerExecutionBackend
 from app.execution.host import HostExecutionBackend
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus
@@ -29,6 +30,10 @@ class ExecutionService:
         self.host = host or HostExecutionBackend()
         self.docker = docker or DockerExecutionBackend(self.host)
         self._active: dict[str, ExecutionBackend] = {}
+        # Background commands live here rather than in a separate service so
+        # daemon shutdown reaps them through the same `cancel_all` that already
+        # reaps foreground executions.
+        self.background = BackgroundProcessManager()
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         if request.execution_id in self._active:
@@ -64,9 +69,13 @@ class ExecutionService:
     async def cancel_all(self) -> None:
         for execution_id in list(self._active):
             await self.cancel(execution_id)
+        await self.background.stop_all()
 
     def status(self) -> dict[str, Any]:
-        return {"active": len(self._active)}
+        return {
+            "active": len(self._active),
+            "background": len([entry for entry in self.background.list() if entry.running]),
+        }
 
     def _record(self, event_type: str, request: ExecutionRequest, result: ExecutionResult | None) -> None:
         if self.audit is None:

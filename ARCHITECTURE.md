@@ -262,7 +262,19 @@ emit run.completed or run.failed
 
 预算只从 Runtime settings 读取，**不接受 `.aicode/config.json` 覆盖**：被检查的仓库能自行抬高的花费上限不是上限。这与 Project Trust 不允许 workspace 自我提权同源。
 
-### 5.2 中途向用户提问
+### 5.2 后台与长时命令
+
+`bash` 最多阻塞几分钟，因此 dev server、watch 构建、长编译此前只能靠阻塞整轮来跑——实际结果是模型干脆不跑它们。`bash(background=true)` 立即返回一个句柄，配套 `read_output` 与 `stop_command`。
+
+**进程组终止与 daemon 清理复用既有实现**：后台进程以 `start_new_session=True` 独立成组，`stop` 走 `kill_process_group`，因此一个会派生 worker 的 dev server 不会留下孤儿；`BackgroundProcessManager` 挂在 `ExecutionService` 上而不是单独一个 service，于是 lifespan 的 `aclose()` → `cancel_all()` 这条既有路径顺带就把后台进程收干净了。进程也不挂在 session 上——session 被缓存淘汰时，挂在它上面的进程会活得比属主还久。
+
+输出由一个常驻 reader task 持续抽干，而不是按需读取：管道写满的进程会永久阻塞，所以即使没人读也必须排空。缓冲区有上限，读取按**绝对偏移**寻址，落后于上限的读取会被明确告知丢了多少字符——静默的缺口会被当成连续输出来推理。读取游标存在 session 上，两个 session 看同一个命令不会互相吃掉对方的输出。
+
+`background` 只支持 host backend。Docker 路径是每次执行建一个容器、调用返回即拆除，"后台"在那里的含义与告诉模型的完全不是一回事；与沙箱不可用时的处理同源——**拒绝，而不是悄悄把不受信任工作区的服务器放到宿主机上跑**。并发上限 5，超出直接报错而不是静默排队。
+
+`stop_command` 声明 `approval="none"`：终止 Agent 自己启动的东西是严格降级操作，而启动它的那条命令早已过闸。
+
+### 5.3 中途向用户提问
 
 `ask_user` 让模型在一轮中间提问并等待。此前模型只有两个出口——继续猜或者结束——而审批填不上这个缺口：审批回答的是"这个操作可不可以"，回答不了"你想要哪一种"。需求真正模糊时（用哪个测试框架、API 要不要保持兼容、能不能引入新依赖），猜错的代价是整轮工作作废，而问一次的代价只是一个来回。
 
@@ -274,7 +286,7 @@ emit run.completed or run.failed
 
 系统提示里额外写明"能靠读项目确定的事就去读"，因为这个能力最现实的失败模式是滥用而不是不用。
 
-### 5.3 无进展检测
+### 5.4 无进展检测
 
 `max_steps` 对"改一行"和"跨六文件重构"是同一个数，调大调小只是在两种失败模式之间换边。真正区分"任务长"和"卡住了"的不是步数而是重复。
 
@@ -284,7 +296,7 @@ emit run.completed or run.failed
 
 阈值不从 2 起跳是刻意的——连着两次相同调用往往是合法的。`max_repeated_actions` 为 0 或 1 关闭该检测，行为回到只受 `max_steps` 约束。
 
-### 5.4 编辑后的验证闸门
+### 5.5 编辑后的验证闸门
 
 `max_verify_rounds`（默认 3，第四个 `TurnBudget` 维度）约束"应用编辑之后的修复轮次"。此前这里是一个一次性布尔标志：模型说"做完了"，被推回一次，再说一次"做完了"，循环就退出——**验证事实上是可选的**，prompt 里那句"stop and report after 3 consecutive failed attempts"没有任何代码执行它。
 

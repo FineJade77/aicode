@@ -328,6 +328,10 @@ class Session:
     # seen this file's current content in this conversation". After a restart the
     # safe default is to re-read, so persisting the record would weaken it.
     read_files: dict[str, str] = field(default_factory=dict)
+    # Read cursors for background commands, so each read returns only new output.
+    # Per session rather than per process: two sessions watching one command must
+    # not consume each other's output.
+    background_offsets: dict[str, int] = field(default_factory=dict)
     plan_writer: Callable[[list[PlanItem]], None] | None = field(default=None, repr=False)
     message_appender: Callable[[dict[str, Any]], int | None] | None = field(default=None, repr=False)
     compaction_appender: Callable[[CompactionEntry], CompactionEntry] | None = field(default=None, repr=False)

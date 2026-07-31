@@ -6,6 +6,7 @@ import re
 import shutil
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 from app.agent.ports import ToolSpec
 from app.agent.session import MAX_PLAN_ITEMS, PLAN_ITEM_STATUSES, PlanItem
 from app.config import settings
+from app.execution.background import BackgroundProcessError
 from app.execution.docker import docker_available, missing_image_hint
 from app.execution.models import ResourceLimits
 from app.project.config import load_project_config
@@ -230,7 +232,13 @@ TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="bash",
-        description="Run shell commands in the primary workspace. Low-risk commands run directly, medium-risk commands require approval, and destructive commands are denied.",
+        description=(
+            "Run shell commands in the primary workspace. Low-risk commands run directly, medium-risk commands "
+            "require approval, and destructive commands are denied. "
+            "Set background to true for a command that does not terminate on its own or runs for a long time "
+            "(dev server, watch build, long compile): it returns a handle immediately instead of blocking, and you "
+            "read its output with read_output and end it with stop_command."
+        ),
         read_only=False,
         approval="gate",
         hidden_in_modes=WRITE_HIDDEN_MODES,
@@ -239,6 +247,11 @@ TOOL_SPECS: list[ToolSpec] = [
             "properties": {
                 "command": {"type": "string"},
                 "timeout": {"type": "integer", "description": f"Seconds; default {DEFAULT_BASH_TIMEOUT}", "default": DEFAULT_BASH_TIMEOUT},
+                "background": {
+                    "type": "boolean",
+                    "description": "Run without waiting and return a handle. Use for servers, watchers, and long builds.",
+                    "default": False,
+                },
             },
             "required": ["command"],
         },
@@ -277,6 +290,41 @@ TOOL_SPECS: list[ToolSpec] = [
                 "delete": {"type": "boolean", "default": False},
             },
             "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="read_output",
+        description=(
+            "Read new output from a background command started with bash(background=true). "
+            "Each call returns only what has arrived since the previous call for that handle. "
+            "Call it with no handle to list every background command and its status."
+        ),
+        read_only=True,
+        approval="none",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "The handle returned by bash(background=true)."},
+            },
+        },
+    ),
+    ToolSpec(
+        name="stop_command",
+        description=(
+            "Stop a background command started with bash(background=true), killing its whole process group. "
+            "Stop anything you started once you no longer need it."
+        ),
+        # Not read-only: it terminates a process. No approval of its own, because
+        # stopping something the agent started is strictly de-escalating — the
+        # command that created it was already gated.
+        read_only=False,
+        approval="none",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
+            "type": "object",
+            "properties": {"handle": {"type": "string"}},
+            "required": ["handle"],
         },
     ),
     ToolSpec(
@@ -431,6 +479,8 @@ def build_default_registry() -> ToolRegistry:
     return ToolRegistry(
         [
             AskUserTool(TOOL_SPECS_BY_NAME["ask_user"]),
+            FunctionTool(TOOL_SPECS_BY_NAME["read_output"], context_first(read_background_output)),
+            FunctionTool(TOOL_SPECS_BY_NAME["stop_command"], context_first(stop_background_command)),
             FunctionTool(TOOL_SPECS_BY_NAME["read_file"], context_first(read_file_lines)),
             FunctionTool(TOOL_SPECS_BY_NAME["search"], context_first(run_search)),
             GlobTool(TOOL_SPECS_BY_NAME["glob"]),
@@ -592,6 +642,130 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
     return ToolResult(success=True, text=f"{header}\n{shown}", data=data)
 
 
+async def start_background_command(context: ToolContext, command: str, backend: str) -> ToolResult:
+    """Start a command that outlives this tool call.
+
+    Host-only on purpose. The Docker path builds a container per execution and
+    tears it down when the call returns, so "background" there would mean
+    something materially different from what the model is told it means. Refusing
+    is better than quietly running an untrusted workspace's server on the host —
+    the same reasoning as the sandbox-unavailable branch above.
+    """
+    manager = getattr(context.execution, "background", None)
+    if manager is None:
+        return ToolResult(success=False, error="background commands are not available in this runtime")
+    if backend == "docker":
+        return ToolResult(
+            success=False,
+            error=(
+                "background commands are only supported on the host backend, and this workspace's commands "
+                "are routed to the Docker sandbox. Run it in the foreground, or trust the workspace with "
+                "`aicode project trust add`."
+            ),
+            risk_level="high",
+            data={"backend": backend, "status": "unsupported"},
+        )
+    try:
+        entry = await manager.start(
+            command,
+            workspace=context.workspace,
+            session_id=context.session_id,
+        )
+    except BackgroundProcessError as exc:
+        return ToolResult(success=False, error=str(exc), risk_level="medium")
+    return ToolResult(
+        success=True,
+        text=(
+            f"Started in the background with handle {entry.handle_id}. "
+            f"Read its output with read_output({entry.handle_id}) and end it with stop_command({entry.handle_id})."
+        ),
+        data={"handle": entry.handle_id, "status": "running", "backend": "host"},
+    )
+
+
+async def read_background_output(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
+    manager = getattr(context.execution, "background", None)
+    if manager is None:
+        return ToolResult(success=False, error="background commands are not available in this runtime")
+    handle = str(arguments.get("handle") or "").strip()
+    session = context.session
+    if not handle:
+        entries = manager.list(session_id=context.session_id)
+        if not entries:
+            return ToolResult(success=True, text="No background commands are running.", data={"commands": []})
+        lines = [
+            f"- {entry.handle_id}: {entry.status()} · {entry.command}"
+            for entry in entries
+        ]
+        return ToolResult(
+            success=True,
+            text="Background commands:\n" + "\n".join(lines),
+            data={"commands": [entry.describe() for entry in entries]},
+        )
+    offsets = _background_offsets(session)
+    try:
+        result = manager.read(handle, after=int(offsets.get(handle, 0)))
+    except BackgroundProcessError as exc:
+        return ToolResult(success=False, error=str(exc))
+    offsets[handle] = result.next_offset
+
+    header = f"{handle} is {result.status}"
+    if result.exit_code is not None:
+        header += f" (exit={result.exit_code})"
+    if result.dropped:
+        # Reported rather than hidden: a silent gap would read as contiguous
+        # output and could be reasoned about as if nothing were missing.
+        header += f"; {result.dropped} characters were dropped because output outran the buffer"
+    body = result.text.strip()
+    if not body:
+        header += "; no new output"
+    return ToolResult(
+        success=True,
+        text=header if not body else f"{header}\n{body}",
+        data={
+            "handle": handle,
+            "status": result.status,
+            "exit_code": result.exit_code,
+            "dropped_chars": result.dropped,
+            "new_chars": len(result.text),
+        },
+    )
+
+
+async def stop_background_command(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
+    manager = getattr(context.execution, "background", None)
+    if manager is None:
+        return ToolResult(success=False, error="background commands are not available in this runtime")
+    handle = str(arguments.get("handle") or "").strip()
+    if not handle:
+        raise ToolError("handle must not be empty")
+    try:
+        entry = await manager.stop(handle)
+    except BackgroundProcessError as exc:
+        return ToolResult(success=False, error=str(exc))
+    return ToolResult(
+        success=True,
+        text=f"{handle} is {entry.status()} (exit={entry.exit_code}).",
+        data={"handle": handle, "status": entry.status(), "exit_code": entry.exit_code},
+    )
+
+
+def _background_offsets(session: Any) -> dict[str, int]:
+    """Per-session read cursors, so each read returns only what is new.
+
+    Held on the session rather than on the process: two sessions watching one
+    command must not consume each other's output.
+    """
+    if session is None:
+        return {}
+    offsets = getattr(session, "background_offsets", None)
+    if offsets is None:
+        offsets = {}
+        with suppress(AttributeError):
+            session.background_offsets = offsets
+    return offsets
+
+
 async def run_search(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
     root, workspace_name = resolve_tool_workspace(context, arguments.get("workspace"))
     query = str(arguments.get("query") or "")
@@ -738,6 +912,8 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
         raise ToolError("command must not be empty")
     timeout = max(1, min(int(arguments.get("timeout") or DEFAULT_BASH_TIMEOUT), MAX_BASH_TIMEOUT))
     backend = resolve_bash_backend(context.bash_backend, context.trust_level)
+    if arguments.get("background"):
+        return await start_background_command(context, command, backend)
     if backend == "docker" and not docker_available():
         # Deliberately no fallback to host execution. Routing an untrusted
         # workspace's command to the host because the sandbox is missing would
