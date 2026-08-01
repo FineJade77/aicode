@@ -868,6 +868,27 @@ make eval-live-openai-compatible \
 - **24 个作业任务 `tool: accept`,4 个安全任务 `tool: reject`**。作业任务跑不了命令就永远无法自验,`retry_fix` 就不再测"读失败再改"、`verification_failure` 永远不会触发——变成 grader 替 Agent 做了验证。安全任务相反:拒绝本身就是被测行为。policy 仍然直接拒绝危险可执行文件与 protected path,所以 accept 放宽的是"可以被批准的范围",不是"可以被执行的范围"。
 - **成本为 0 必须能和"没配价格"区分开**。报告里的 `unpriced_model_calls` 统计"消耗了 token 但计价为 0"的调用;provider 用别名回应(DeepSeek 的 `deepseek-chat` 实际返回 `deepseek-v4-flash`)时价格表会查不中,静默报 $0.00 比报一个近似值更糟——0 读起来像事实。
 
+#### live_hard：能产出失败归因的一档
+
+`live` 全过(84/84),因此**说不出 Agent 在哪里失败**。`live_hard` 是并行新增的更难一档,8 个任务,难点是**因与果的距离**——失败的测试指向的模块不是该改的那个。难度来自间接层级而不是代码量:强模型读得很快。
+
+```bash
+make eval-live-hard REPETITIONS=1
+make eval-live-hard OC_MODEL=... LIVE_PROFILE='...'   # 同 eval-live 的覆盖方式
+```
+
+类别命名的是**难在哪儿**而不是任务形状,这样分类别通过率才直接回答那个被 gate 的问题:
+
+| 类别 | 数量 | 难点 |
+| --- | ---: | --- |
+| `localization` | 2 | 症状在下游三个模块之外;失败测试点名的文件不该改 |
+| `cross_module` | 2 | 只改一处仍然红;两个文件必须一起改 |
+| `algorithmic` | 2 | 一眼看去能跑的实现,在特定输入上是错的 |
+| `reproduce_first` | 1 | 只在某种输入形状下丢数据,得先复现 |
+| `underspecified` | 1 | 请求不给规则,仓库里的 `SPEC.md` 才是契约 |
+
+**和 `live` 分开而不是替换**:后者是零成本的回归地板和已知参照点(84/84),前者是唯一能产出失败归因的一档;合并会让每次运行都为两者付钱。8 个任务全部由 `reference_solutions_hard.py` 的已知可行解验证过——**难必须是难,不能是无解**;在这一档尤其重要,因为失败本身就是产物,分不清"模型不行"和"题出错了"就等于没有信号。
+
 报告在 smoke 的基础上多出分类别 pass@1 / pass@k、p95 耗时,以及失败归因(`localization_failure` / `edit_failure` / `verification_failure` / `budget_exhausted` / `safety_violation` / `agent_error`)。归因全部由 trace 确定性推导,可从存档 trace 复现。
 
 预算是硬停而非事后统计:超出 token/cost 上限会中止该次运行,因为 live 超支花的是真钱。缺 API key 时在**建任何目录、发任何请求之前**就失败——跑到第 12 个任务才发现没配 key,钱已经花掉了,而且失败看起来像是 Agent 不行。

@@ -588,3 +588,58 @@ def test_the_live_tasks_validate_against_the_task_schema():
     assert set(schema["required"]) == {
         name for name, field in EvalTask.model_fields.items() if field.is_required()
     }
+
+
+# --- the harder tier ----------------------------------------------------------
+
+
+def hard_tasks() -> list[EvalTask]:
+    return [load_task(path) for path in discover_tasks(suite="live_hard")]
+
+
+def test_the_hard_suite_covers_every_difficulty_mechanism():
+    """Categories name *why* a task is hard, not what shape it is.
+
+    That is what makes a per-category pass rate answer the question the gated
+    roadmap tasks are waiting on — which kind of difficulty defeats the Agent.
+    """
+    counts = Counter(task_category(task) for task in hard_tasks())
+
+    assert set(counts) == {
+        "localization",
+        "cross_module",
+        "algorithmic",
+        "reproduce_first",
+        "underspecified",
+    }
+    assert sum(counts.values()) == 8
+
+
+def test_hard_tasks_are_live_and_forbid_editing_their_tests():
+    for task in hard_tasks():
+        assert task.is_live, task.task_id
+        assert task.checks.forbidden_changed_paths, task.task_id
+        allowed = {Path(path).name for path in task.checks.allowed_changed_paths}
+        assert not any(name.startswith("test_") for name in allowed), task.task_id
+
+
+def test_the_hard_suite_is_separate_from_the_easy_one():
+    """Kept apart on purpose: `live` is a cheap regression floor and a known
+    reference point, `live_hard` is the tier that can actually produce failure
+    attribution. Merging them would make every run pay for both."""
+    assert {task.task_id for task in hard_tasks()}.isdisjoint(
+        {task.task_id for task in live_tasks()}
+    )
+
+
+@pytest.mark.parametrize(
+    "task", [pytest.param(task, id=task.task_id) for task in hard_tasks()]
+)
+def test_every_hard_task_is_solvable(task: EvalTask):
+    """Hard must mean hard, not impossible.
+
+    A task no correct edit can satisfy scores a model failure that is really an
+    authoring bug — and on this tier, where failures are the point, that
+    distinction is the whole value of the run.
+    """
+    assert reference_solutions.verify(task) == []

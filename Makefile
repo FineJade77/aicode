@@ -95,6 +95,18 @@ eval-live:
 #
 # The key goes in whichever variable AICODE_OPENAI_API_KEY_ENV names
 # (OPENAI_API_KEY by default) — it is never read from the CLI's config.toml.
+# The harder tier. Separate from `eval-live` rather than replacing it: the easy
+# suite is a known reference point (84/84) and a cheap regression floor, while
+# this one is the only tier that can produce failure attribution. Run both to
+# get a difficulty gradient; run this one alone when you want the signal.
+eval-live-hard:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live_hard \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 OC_BASE_URL ?= https://api.deepseek.com/v1
 OC_MODEL ?= deepseek-chat
 OC_CONTEXT_WINDOW ?= 65536

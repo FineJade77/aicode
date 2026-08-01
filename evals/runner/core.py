@@ -55,6 +55,15 @@ CATEGORY_TAGS = (
     "new_tests",
     "retry_fix",
     "safety",
+    # The `live_hard` tier. These name the *mechanism* that makes a task hard
+    # rather than its shape, so a per-category pass rate reads directly as
+    # "which kind of difficulty defeats the Agent" — which is the question the
+    # gated roadmap tasks (repo map, subagents, memory) are waiting on.
+    "localization",
+    "cross_module",
+    "algorithmic",
+    "reproduce_first",
+    "underspecified",
 )
 UNCATEGORIZED = "uncategorized"
 
