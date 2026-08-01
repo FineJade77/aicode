@@ -388,16 +388,144 @@ def test_only_a_separator():
 
 
 
+# A second, deliberately different solution for every task that declares a
+# mutation.
+#
+# Checking one solution cannot tell a well-formed mutation from one that merely
+# happens to match the reference's chosen inputs. `live_clamp` proved this: the
+# original lower-bound mutation was an off-by-one detectable *only* by the input
+# `low - 1`, so the reference (which used exactly that) passed while a model
+# writing the equally correct `clamp(-5, 0, 10) == 0` was scored as failing.
+#
+# These alternates use different values on purpose. A mutation has to remove
+# documented behaviour wholesale — so that any reasonable test of that behaviour
+# catches it — rather than perturb it by one unit at one point.
+ALTERNATE_SOLUTIONS: dict[str, dict[str, str]] = {
+    "live_stats": {
+        "test_stats.py": '''import pytest
+
+from stats import mean, spread
+
+
+@pytest.mark.parametrize("values,expected", [([4, 6], 5), ([10], 10)])
+def test_mean_of_values(values, expected):
+    assert mean(values) == expected
+
+
+def test_mean_of_an_empty_sequence():
+    assert mean([]) == 0.0
+
+
+def test_spread_of_an_empty_sequence():
+    assert spread([]) == 0.0
+'''
+    },
+    "live_unicode_slug": {
+        "test_slug.py": '''from slug import slugify
+
+
+def test_plain_title():
+    assert slugify("One Two") == "one-two"
+
+
+def test_cyrillic_is_preserved():
+    assert slugify("Привет Мир") == "привет-мир"
+
+
+def test_japanese_is_preserved():
+    assert slugify("日本語 タイトル") == "日本語-タイトル"
+'''
+    },
+    "live_parser": {
+        "test_parser.py": '''import pytest
+
+from parser import parse_pair
+
+
+def test_parses_without_spaces():
+    assert parse_pair("a=b") == ("a", "b")
+
+
+def test_a_bare_word_is_rejected():
+    with pytest.raises(ValueError):
+        parse_pair("justakey")
+
+
+def test_a_blank_key_is_rejected():
+    with pytest.raises(ValueError):
+        parse_pair("=orphan")
+'''
+    },
+    "live_clamp": {
+        # Far outside the range on both sides, not `low - 1` / `high + 1`.
+        "test_clamp.py": '''from clamp import clamp
+
+
+def test_midrange_is_untouched():
+    assert clamp(3, 0, 10) == 3
+
+
+def test_far_below_is_pulled_up():
+    assert clamp(-100, 0, 10) == 0
+
+
+def test_far_above_is_pulled_down():
+    assert clamp(999, 0, 10) == 10
+
+
+def test_the_boundaries_themselves_are_kept():
+    assert clamp(0, 0, 10) == 0
+    assert clamp(10, 0, 10) == 10
+'''
+    },
+    "live_tags": {
+        "test_tags.py": '''from tags import add_tag
+
+
+def test_appends_to_an_empty_list():
+    assert add_tag([], "x") == ["x"]
+
+
+def test_a_duplicate_is_not_appended():
+    assert add_tag(["x", "y", "z"], "x") == ["x", "y", "z"]
+'''
+    },
+    "live_csv_row": {
+        "test_csv_row.py": '''from csv_row import split_row
+
+
+def test_two_fields():
+    assert split_row("one,two") == ["one", "two"]
+
+
+def test_a_row_ending_in_a_separator_has_a_final_empty_field():
+    assert split_row("one,two,three,") == ["one", "two", "three", ""]
+'''
+    },
+}
+
+
 def verify(task: EvalTask) -> list[str]:
-    """Apply the reference solution and report what is still wrong.
+    """Apply the reference solutions and report what is still wrong.
 
     An empty list means the task is solvable and every mutation it declares is
-    caught by the reference tests.
+    caught by *every* known-good solution — not merely by the one whose inputs
+    the mutation was written alongside.
     """
-    problems: list[str] = []
     solution = SOLUTIONS.get(task.fixture)
     if solution is None:
         return [f"no reference solution for fixture {task.fixture!r}"]
+    problems = _verify_solution(task, solution, "reference")
+    alternate = ALTERNATE_SOLUTIONS.get(task.fixture)
+    if task.checks.mutations and alternate is None:
+        problems.append("declares a mutation but has no alternate solution to cross-check it")
+    if alternate is not None:
+        problems.extend(_verify_solution(task, alternate, "alternate"))
+    return problems
+
+
+def _verify_solution(task: EvalTask, solution: dict[str, str], label: str) -> list[str]:
+    problems: list[str] = []
     fixture = EVAL_ROOT / "fixtures" / task.fixture
     command = task.checks.test_commands[0]
     with tempfile.TemporaryDirectory(prefix="aicode-reference-") as temp:
@@ -406,7 +534,7 @@ def verify(task: EvalTask) -> list[str]:
         for relative, content in solution.items():
             (work / relative).write_text(content, encoding="utf-8")
         if _run(command, work) != 0:
-            problems.append("the reference solution does not make the suite pass")
+            problems.append(f"the {label} solution does not make the suite pass")
         for index, mutation in enumerate(task.checks.mutations):
             mutant = pathlib.Path(temp) / f"mutant-{index}"
             shutil.copytree(work, mutant, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -417,7 +545,10 @@ def verify(task: EvalTask) -> list[str]:
                 continue
             target.write_text(source.replace(mutation.old_text, mutation.new_text, 1), encoding="utf-8")
             if _run(task.checks.test_commands[mutation.command_index], mutant) == 0:
-                problems.append(f"mutation {index + 1}: reference tests do not catch it")
+                problems.append(
+                    f"mutation {index + 1}: the {label} tests do not catch it — a mutation must "
+                    "remove the documented behaviour, not perturb it at one input"
+                )
     return problems
 
 

@@ -35,6 +35,7 @@ from evals.runner.core import (
     override_live_profile,
     percentile,
     preflight_live_tasks,
+    seeded_chars_per_message,
     task_category,
 )
 
@@ -373,6 +374,20 @@ def test_editing_without_ever_running_a_command_is_a_verification_failure():
     assert reason == FAILURE_VERIFICATION
 
 
+def test_a_read_only_task_that_changed_nothing_is_not_a_localization_failure():
+    """`checks.files` also carries invariants, not just targets.
+
+    A safety task asserting "README.md still says X" changed nothing on purpose;
+    reading that as "never found the file" mislabels the one category that is
+    supposed to tell you where to look next.
+    """
+    task = attribution_task(
+        checks={"files": [{"path": "README.md"}], "allowed_changed_paths": []}
+    )
+    reason = failure_reason(task, grade(False, ("event_required:context.budget",)), [], metrics(), False)
+    assert reason != FAILURE_LOCALIZATION
+
+
 def test_a_wrong_edit_that_was_verified_is_an_edit_failure():
     reason = failure_reason(
         attribution_task(),
@@ -481,6 +496,32 @@ def test_no_live_task_lets_the_agent_edit_its_own_tests():
             assert task.checks.forbidden_changed_paths
             continue
         assert not test_files, f"{task.task_id} may edit {test_files}"
+
+
+@pytest.mark.parametrize("window", [8192, 65536, 131072, 200000])
+def test_the_compaction_task_forces_a_compaction_at_every_window(window: int):
+    """A seed sized in characters only means something relative to the window.
+
+    Sized for 8k it compacts there and does nothing at 200k, which turns the
+    assertion into one that can never fire — the task then reports a model
+    failure that is really an authoring bug.
+    """
+    task = load_task(EVAL_ROOT / "tasks" / "live" / "live_safety_long_context.json")
+    retargeted = task.model_copy(
+        update={"profile": task.profile.model_copy(update={"context_window": window})}
+    )
+    settings = build_settings(retargeted)
+
+    chars = seeded_chars_per_message(retargeted, settings)
+    seeded_tokens = chars * task.history_seed.message_count / settings.context.chars_per_token
+
+    assert seeded_tokens > window * settings.context.compact_threshold
+
+
+def test_the_compaction_task_still_asserts_a_compaction():
+    task = load_task(EVAL_ROOT / "tasks" / "live" / "live_safety_long_context.json")
+    assert task.checks.minimum_compactions >= 1
+    assert task.history_seed.target_context_ratio > 0
 
 
 def test_new_test_tasks_carry_a_mutation():

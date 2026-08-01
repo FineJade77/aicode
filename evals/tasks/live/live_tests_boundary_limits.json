@@ -57,7 +57,7 @@
       {
         "path": "clamp.py",
         "old_text": "    if value < low:\n        return low",
-        "new_text": "    if value < low - 1:\n        return low"
+        "new_text": "    if value < low:\n        return value"
       },
       {
         "path": "clamp.py",

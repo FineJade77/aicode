@@ -190,7 +190,7 @@ async def run_task(
     )
     store = SessionStore(path=state / "sessions.sqlite")
     session = store.create(workspace=str(workspace))
-    seed_history(store, session, task)
+    seed_history(store, session, task, settings)
     request = EvalRequest(
         workspace=str(workspace),
         message=task.user_request,
@@ -492,12 +492,27 @@ async def preflight_live_tasks(tasks: list[EvalTask]) -> None:
         )
 
 
-def seed_history(store: SessionStore, session: Any, task: EvalTask) -> None:
+def seed_history(store: SessionStore, session: Any, task: EvalTask, settings: Settings) -> None:
     seed = task.history_seed
+    chars_per_message = seed.chars_per_message
+    if seed.target_context_ratio and seed.message_count:
+        chars_per_message = seeded_chars_per_message(task, settings)
     for index in range(seed.message_count):
         role = "user" if index % 2 == 0 else "assistant"
-        content = f"[eval history {index}] " + chr(97 + index % 26) * seed.chars_per_message
+        content = f"[eval history {index}] " + chr(97 + index % 26) * chars_per_message
         store.append_message(session, {"role": role, "content": content})
+
+
+def seeded_chars_per_message(task: EvalTask, settings: Settings) -> int:
+    """Characters per seeded message needed to reach the requested context fill.
+
+    Derived from the window the run actually uses rather than the one the task
+    was written against, so retargeting the suite at a different model does not
+    quietly turn the compaction assertion into one that can never fire.
+    """
+    chars_per_token = float(settings.context.chars_per_token or 3.5)
+    total_chars = task.profile.context_window * chars_per_token * task.history_seed.target_context_ratio
+    return max(1, int(total_chars / task.history_seed.message_count))
 
 
 def task_category(task: EvalTask) -> str:
@@ -539,8 +554,12 @@ def failure_reason(
     # Localization: the Agent never changed any file the task expects to change.
     # Judged on the workspace rather than on edit events, because an edit that
     # was applied and then reverted leaves the task equally unsolved.
-    expected = {assertion.path for assertion in task.checks.files if assertion.exists}
-    expected = expected or set(task.checks.allowed_changed_paths)
+    #
+    # Read from `allowed_changed_paths` only. `checks.files` also carries
+    # invariant assertions — a read-only task asserting a file still contains
+    # something — and treating those as targets labels "correctly changed
+    # nothing" a failure to find the file.
+    expected = set(task.checks.allowed_changed_paths)
     if expected and not expected.intersection(grade["changed_paths"]):
         return FAILURE_LOCALIZATION
     verification_failed = any(check_id.startswith("test_command_") for check_id in failed)

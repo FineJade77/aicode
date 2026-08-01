@@ -41,6 +41,13 @@ class EvalBudgets(BaseModel):
 class HistorySeed(BaseModel):
     message_count: int = Field(default=0, ge=0, le=1_000)
     chars_per_message: int = Field(default=0, ge=0, le=100_000)
+    # Size the seed as a fraction of the model's context window instead of a
+    # fixed character count. "Enough history to force a compaction" only means
+    # something relative to the window: a seed sized for an 8k window compacts
+    # there and silently does nothing at 200k, so the task would assert a
+    # compaction that can never happen. Set above `context.compact_threshold`
+    # (0.8 by default). 0 keeps the absolute `chars_per_message`.
+    target_context_ratio: float = Field(default=0.0, ge=0.0, le=4.0)
 
 
 class FileAssertion(BaseModel):
