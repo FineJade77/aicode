@@ -309,7 +309,7 @@
 - 新增 AST/import side-effect 架构守卫和 Agent Core characterization tests；T-010 REPL、HTTP/SSE、session、approval、execution、trust 与 compaction 行为由 T-011a contract 固定。
 - 原 T-011 曾整体提前落地；本次按实际稳定边界拆分为 T-011a/T-011b，并将逻辑依赖正式调整为 `T-011a → T-010 → T-011b`。
 
-### `[ ]` T-012 SDK 与 stdio JSONL RPC
+### `[x]` T-012 SDK 与 stdio JSONL RPC
 
 对应：WP2.1
 
@@ -322,6 +322,17 @@
 - 协议版本协商、背压和最小集成示例。
 
 优先级说明（2026-07-29）：T-013 ~ T-016 的成本闸门、执行边界与真实评测数字优先于本任务。IDE / 脚本嵌入需求出现前不启动。
+
+完成记录（2026-08-01）：**触发条件由用户直接提出嵌入需求满足**（此前的"不启动"纪律因此解除）。
+
+- `app/sdk/`：一行一个 JSON 对象，走 stdin/stdout，**架在与 HTTP server 同一个 `ApplicationRuntime` 上**——嵌入方拿到同一套 session / run / approval / policy 语义，而不是一份会漂移的第二实现。选行分隔而非带长度前缀的帧，是因为传输本身就是宿主已有的管道：一行即一条消息,任何语言 `readline` 就能读。
+- 方法集：`initialize` / `session.create` / `session.get` / `session.prompt` / `session.cancel` / `session.subscribe` / `session.events` / `approval.resolve`。错误码用字符串而非整数——嵌入方要在日志和 `except` 分支里读它。
+- **握手强制**：`initialize` 之前任何方法都拒绝。协商失败**直接拒绝而不静默降级**——请求了本 Runtime 不会说的版本的宿主心里想着某些功能，降级只会把失败推迟到某次具体调用，那时归因远比握手被拒困难。返回体带支持区间。另钉住 `True` 不是合法版本号：Python 里 `bool` 是 `int`，放行会意外协商成版本 1。
+- **背压**：出站队列有界，满了就阻塞事件泵（真背压），由 session 自身的有界缓冲承受并按最旧丢弃。这条丢弃路径**可检测而非静默**——`event_id` 是 per-session 单调序列，缺口精确告诉宿主漏了什么，`session.events` 按游标补齐；示例代码演示了恢复路径。
+- **实现中发现并修掉两个自造 bug**：(1) 关停时直接取消 writer 会把宿主最后一条请求的响应悄悄丢掉——改为先排空队列再取消（`task_done` + `join`，5s 上限）；(2) 单行 JSON 解析失败原本会终止整条流，改为报错后继续，由测试钉住"坏行之后下一条请求仍然工作"。
+- 最小集成示例 [docs/examples/sdk_minimal.py](docs/examples/sdk_minimal.py)：宿主进程不 import Runtime，只 spawn 一个并通过管道对话。示例里 approval 默认拒绝——无人值守时自动批准任意编辑，正是这道闸门存在的理由。
+- `python -m app.sdk` 把进程变成 RPC server。**stdout 是协议通道，别的输出一律不能写那里**——一句多余的 print 会以"Runtime 发来解析错误"的形式污染流。
+- 验证：Python 714 项 + 1 skip（其中 19 项新增）、ruff、Go 全量、eval-smoke PASS。
 
 ## M4：生产就绪第一梯队（正确性与边界）
 

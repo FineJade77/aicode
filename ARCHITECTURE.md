@@ -739,6 +739,22 @@ Anthropic 的渲染顺序是 `tools` → `system` → `messages`，因此**打�
 
 **最小可缓存前缀与模型相关且不单调**（Opus 5 为 512 token，Opus 4.8 / Sonnet 5 为 1024，Opus 4.6 / Haiku 4.5 却是 4096）。低于阈值时**不报错、静默不缓存**，表现为 `cache_creation_input_tokens` 恒为 0——排查"开了却没省钱"时先看这里。
 
+### 嵌入用 stdio JSONL RPC（SDK）
+
+`app/sdk/` 提供第二种传输：一行一个 JSON 对象，走 stdin/stdout。它**架在与 HTTP server 同一个 `ApplicationRuntime` 上**——嵌入方拿到的是同一套 session / run / approval / policy 语义，而不是一份会漂移的第二实现；两者唯一的差别是那根管子。
+
+选行分隔而非带长度前缀的帧格式，是因为传输本身就是宿主已经有的管道：一行即一条消息，任何语言用 `readline` 就能读，不需要写解析器。
+
+三种形状：`{"id","method","params"}` 请求、`{"id","result"|"error"}` 响应、`{"method","params"}` 通知（无 id，因而无从对应回复）。错误码是字符串而非整数——嵌入方要在日志和 `except` 分支里读它，`"unknown_method"` 不需要查表。
+
+**握手是强制的**：`initialize` 之前的任何方法都被拒绝。协商失败时**直接拒绝而不静默降级**——请求了本 Runtime 不会说的版本的宿主，心里想的是某些功能，降级只会把失败推迟到某次具体调用上，那时归因比握手被拒难得多。返回体带上支持区间，宿主据此决定升级还是退让。
+
+**背压**：出站队列有界。宿主不读管道时不能把 Runtime 内存撑爆，因此队列满了就**阻塞事件泵**（真背压），由 session 自己那个有界缓冲承受，按最旧丢弃。这条丢弃路径**可检测而非静默**：`event_id` 是 per-session 单调序列，缺口即精确告诉宿主漏了什么，`session.events` 按游标补齐。示例代码演示了这条恢复路径。
+
+关停时**先排空再取消 writer**：输入结束不等于回复已经写出，直接取消会把宿主最后一条请求的响应悄悄丢掉。
+
+`python -m app.sdk` 把当前进程变成一个 RPC server。**stdout 是协议通道，任何别的输出都不能往那里写**——一句多余的 print 会以"Runtime 发来解析错误"的形式污染流。最小集成示例见 [docs/examples/sdk_minimal.py](docs/examples/sdk_minimal.py)。
+
 ## 19. Agent Eval And Trace
 
 `evals/` 提供独立于真实 provider 的任务级评测层。CI profile 使用 scripted model，但仍调用真实 Agent Loop、ModelRouter、PolicyEngine、ExecutionService、SessionStore 和 compaction 路径，因此可以稳定捕获 Agent 行为回归，而不把外部模型波动引入普通 CI。
