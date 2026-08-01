@@ -617,6 +617,17 @@ def run_metrics(
         "input_tokens": sum(int(event.get("input_tokens") or 0) for event in usages),
         "output_tokens": sum(int(event.get("output_tokens") or 0) for event in usages),
         "estimated_cost": round(sum(float(event.get("estimated_cost") or 0) for event in usages), 8),
+        # Calls that consumed tokens but priced to nothing. A report whose cost
+        # column reads $0.00 is either free or unpriced, and those must not look
+        # the same: the run that produced this metric billed real money while
+        # reporting zero, because the provider answered under a model name the
+        # price table did not have.
+        "unpriced_model_calls": sum(
+            1
+            for event in usages
+            if (int(event.get("input_tokens") or 0) + int(event.get("output_tokens") or 0)) > 0
+            and not float(event.get("estimated_cost") or 0)
+        ),
         "duration_ms": duration_ms,
         "model_calls": len(provider.calls),
         "tool_calls": len(tool_started),
@@ -696,6 +707,7 @@ def build_report(
         "total_tool_calls": sum(result["metrics"]["tool_calls"] for result in results),
         "invalid_tool_calls": sum(result["metrics"]["invalid_tool_calls"] for result in results),
         "duplicate_edits": sum(result["metrics"]["duplicate_edits"] for result in results),
+        "unpriced_model_calls": sum(result["metrics"]["unpriced_model_calls"] for result in results),
         "mean_duration_ms": mean_of([result["metrics"]["duration_ms"] for result in results]),
         # p95 alongside the mean because the tail is the number that decides
         # whether a suite is usable: one task that takes ten times the average
@@ -880,6 +892,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Duration mean / p95: {metrics['mean_duration_ms']} ms / {metrics['p95_duration_ms']} ms",
         f"- Mean cost per task: {metrics['mean_cost_per_task']:.8f}",
     ]
+    if metrics.get("unpriced_model_calls"):
+        lines.append(
+            f"- **{metrics['unpriced_model_calls']} model calls consumed tokens but priced to zero** — "
+            "the cost figures above are an undercount. Check that the price table names the model the "
+            "provider answered with."
+        )
     breakdown = metrics.get("by_category") or {}
     if breakdown:
         lines.extend(

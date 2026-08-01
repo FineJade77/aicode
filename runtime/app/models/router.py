@@ -16,7 +16,7 @@ from app.models.provider import (
     ToolCallRequest,
     Usage,
 )
-from app.usage.pricing import estimate_cost, model_prices_data
+from app.usage.pricing import estimate_cost, model_prices_data, price_for
 
 
 @dataclass(slots=True)
@@ -135,14 +135,34 @@ class ModelRouter:
             provider=provider_name,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
-            estimated_cost=estimate_cost(
-                provider=provider_name,
-                model=model_name,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                prices=self.settings.pricing.model_prices,
+            estimated_cost=self._estimate_cost(
+                provider_name, model_name, request.model, usage
             ),
         )
+
+    def _estimate_cost(self, provider: str, responded: str, requested: str, usage: Usage) -> float:
+        """Price a call, falling back to the model that was asked for.
+
+        Providers may answer under a different name than the one requested —
+        DeepSeek serves `deepseek-chat` as `deepseek-v4-flash` — and the price
+        table is configured against the name the user configured. Pricing the
+        response name alone silently misses and reports $0.00 for a call that
+        was billed, which is worse than an approximate number because it looks
+        like a fact.
+        """
+        for name in (responded, requested):
+            if not name:
+                continue
+            price = price_for(provider=provider, model=name, prices=self.settings.pricing.model_prices)
+            if price is not None:
+                return estimate_cost(
+                    provider=provider,
+                    model=name,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    prices=self.settings.pricing.model_prices,
+                )
+        return 0.0
 
     async def probe(self, *, model: str | None = None, tools: bool = True) -> dict:
         selected_model = model or self.settings.models.main

@@ -67,6 +67,27 @@ _STATEMENT_PUNCTUATION = "();<>|&\n"
 _SEP_OPERATOR_CHARS = set(";&|\n")
 _SHELL_WRAPPERS = {"sh", "bash", "zsh", "dash", "fish"}
 _SYSTEM_EXECUTABLE_ROOTS = tuple(Path(value).resolve() for value in ("/bin", "/usr/bin"))
+
+
+def _probe_exists(candidate: Path) -> bool:
+    """Whether a shell token names something on disk, never raising.
+
+    Every token of a command is speculatively treated as a possible path, so
+    this is asked about arbitrary model-authored text — a `python3 -c` program,
+    a regex, a sentence. `Path.exists()` only swallows ENOENT/ENOTDIR/EBADF/
+    ELOOP; a token longer than the filesystem's per-component limit raises
+    ENAMETOOLONG instead. That escaped the tool error handler and killed the
+    whole turn, so a model that inlined a long script lost its session rather
+    than getting one failed tool call back.
+
+    A token that cannot even be looked up is definitively not an existing file,
+    which is the question being asked. Gating is unaffected: `path_like` tokens
+    skip this check and are gated on their resolved text regardless.
+    """
+    try:
+        return candidate.exists()
+    except (OSError, ValueError):
+        return False
 _SENSITIVE_PATH_MARKERS = {
     ".env",
     ".ssh",
@@ -455,7 +476,7 @@ class PolicyEngine:
         candidate = Path(token).expanduser()
         if not candidate.is_absolute():
             candidate = workspace / candidate
-        if not path_like and not candidate.exists():
+        if not path_like and not _probe_exists(candidate):
             return None
         return self._gate_resolved_path(candidate, workspace, protected_paths)
 
@@ -465,6 +486,8 @@ class PolicyEngine:
         workspace: Path,
         protected_paths: list[str],
     ) -> GateDecision | None:
+        # NOTE: keep every filesystem probe in this class non-raising. See
+        # `_probe_exists`.
         resolved = candidate.resolve(strict=False)
         try:
             relative = resolved.relative_to(workspace)

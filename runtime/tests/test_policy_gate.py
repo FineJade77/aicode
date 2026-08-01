@@ -291,3 +291,30 @@ def test_untrusted_shell_does_not_auto_allow_workspace_path_hijack(
     decision = gate_bash(engine, "ls", workspace=tmp_path, trust_level="untrusted")
 
     assert decision.verdict == "ask"
+
+
+def test_an_inline_script_longer_than_the_filename_limit_does_not_raise(engine, tmp_path):
+    """Every command token is speculatively probed as a path.
+
+    `Path.exists()` swallows ENOENT but not ENAMETOOLONG, so a token longer than
+    the filesystem's per-component limit raised out of the policy engine,
+    escaped the tool error handler and killed the whole turn. A model that
+    inlined a long script lost its session instead of getting one failed tool
+    call back.
+    """
+    program = (
+        "from errors import AppError, ConfigError; assert issubclass(ConfigError, AppError); "
+        "from loader import load; from validator import validate\n"
+        "try:\n    load({})\n    raise SystemExit('loader did not raise')\nexcept ConfigError:\n    pass\n"
+    ) * 2
+    assert len(program) > 255
+
+    decision = gate_bash(engine, f"python3 -c {program!r}", workspace=tmp_path)
+
+    assert decision.verdict in {"allow", "ask", "deny"}
+
+
+def test_a_long_token_is_still_gated_when_it_looks_like_a_path(engine, tmp_path):
+    """The non-raising probe must not become an escape hatch."""
+    escape = "../" + "a" * 300
+    assert gate_bash(engine, f"cat {escape}", workspace=tmp_path).verdict == "deny"
