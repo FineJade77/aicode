@@ -70,6 +70,18 @@ eval-smoke:
 		--output-root "$(EVAL_OUTPUT_ROOT)" \
 		--baseline "$(CURDIR)/evals/baselines/deterministic-smoke.v1.json"
 
+# Calls a real model and costs real money, so it is deliberately absent from
+# `test` and from PR CI. The scripted smoke suite above stays the CI gate: its
+# value is zero-cost, zero-jitter regression detection, which a live suite
+# cannot provide. Override REPETITIONS or LIVE_MODEL from the command line.
+REPETITIONS ?= 3
+eval-live:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -31,7 +32,7 @@ from app.usage.pricing import ModelPrice
 from evals import EVAL_CONTRACT_VERSION, REPORT_SCHEMA_VERSION, RUNNER_VERSION, TRACE_SCHEMA_VERSION
 from evals.contracts import EvalTask, load_task, task_digest
 from evals.graders.deterministic import GradeContext, grade_task
-from evals.provider import ScriptedEvalProvider
+from evals.provider import LiveEvalProvider, ScriptedEvalProvider
 from evals.trace import (
     canonical_digest,
     redact_literals,
@@ -43,6 +44,29 @@ from evals.trace import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 EVAL_ROOT = REPOSITORY_ROOT / "evals"
+
+# The task categories a live report breaks results down by. Reporting one
+# aggregate pass rate hides the thing the suite exists to answer — *which kind*
+# of work the Agent fails at — so a task that declares none of these is called
+# out rather than silently folded into the total.
+CATEGORY_TAGS = (
+    "single_file_fix",
+    "cross_file",
+    "new_tests",
+    "retry_fix",
+    "safety",
+)
+UNCATEGORIZED = "uncategorized"
+
+# Deterministic failure attribution. Ordered by precedence: a run that both
+# violated a safety boundary and failed its tests is a safety failure first.
+FAILURE_SAFETY = "safety_violation"
+FAILURE_BUDGET = "budget_exhausted"
+FAILURE_ERROR = "agent_error"
+FAILURE_LOCALIZATION = "localization_failure"
+FAILURE_VERIFICATION = "verification_failure"
+FAILURE_EDIT = "edit_failure"
+FAILURE_OTHER = "other"
 
 
 @dataclass(slots=True)
@@ -59,13 +83,26 @@ async def run_suite(
     repetitions: int = 1,
     baseline_path: Path | None = None,
     keep_workspaces: bool = False,
+    live_model: str | None = None,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("repetitions must be at least 1")
+    tasks = [(path, load_task(path)) for path in task_paths]
+    if live_model:
+        # Applied to live tasks only. Silently rewriting a scripted task's model
+        # would make its recorded baseline meaningless.
+        tasks = [
+            (path, task.model_copy(update={"live_model": live_model}) if task.is_live else task)
+            for path, task in tasks
+        ]
+    # Checked before any directory is created or any request is sent: a live
+    # suite that discovers a missing API key on task 12 of 28 has already spent
+    # real money, and the resulting failures read as Agent failures rather than
+    # a configuration problem.
+    await preflight_live_tasks([task for _path, task in tasks])
     output_dir.mkdir(parents=True, exist_ok=False)
     traces_dir = output_dir / "traces"
     traces_dir.mkdir()
-    tasks = [(path, load_task(path)) for path in task_paths]
     started_at = datetime.now(UTC)
     results: list[dict[str, Any]] = []
 
@@ -136,8 +173,8 @@ async def run_task(
     trust_store = TrustStore(state / "trust.json")
     if task.trust == "trusted":
         trust_store.trust(workspace)
-    provider = ScriptedEvalProvider(task.model_script, task.profile, task.budgets)
     settings = build_settings(task)
+    provider = build_provider(task, settings)
     router = ModelRouter(primary=provider, settings=settings)
     runtime = AgentRuntime(
         model_runtime=router,
@@ -192,7 +229,16 @@ async def run_task(
     )
     duration_ms = max(0, int((time.perf_counter() - started) * 1_000))
     append_runtime_checks(grade, task, provider, events, duration_ms, timed_out)
-    metrics = run_metrics(task, provider, events, audit_events, grade, approval_decisions, duration_ms)
+    metrics = run_metrics(
+        task,
+        provider,
+        events,
+        audit_events,
+        grade,
+        approval_decisions,
+        duration_ms,
+        timed_out=timed_out,
+    )
     versions = source_versions(REPOSITORY_ROOT)
     trace: dict[str, Any] = {
         "schema_version": TRACE_SCHEMA_VERSION,
@@ -259,7 +305,7 @@ async def run_task(
 def append_runtime_checks(
     grade: dict[str, Any],
     task: EvalTask,
-    provider: ScriptedEvalProvider,
+    provider: Any,
     events: list[dict[str, Any]],
     duration_ms: int,
     timed_out: bool,
@@ -325,25 +371,94 @@ async def resolve_approvals(
 
 
 def build_settings(task: EvalTask) -> Settings:
-    model = task.profile.model
     provider = task.profile.provider
-    return Settings(
-        models=ModelSettings(main=model, reviewer=model, summarizer=model),
-        context=ContextSettings(
-            default_context_window=task.profile.context_window,
-            default_max_output_tokens=task.profile.max_output_tokens,
-            model_context_windows={f"{provider}:{model}": task.profile.context_window},
-            model_max_output_tokens={f"{provider}:{model}": task.profile.max_output_tokens},
-        ),
-        pricing=PricingSettings(
-            model_prices={
-                f"{provider}/{model}": ModelPrice(
-                    input_per_1m=task.profile.input_per_1m,
-                    output_per_1m=task.profile.output_per_1m,
-                )
-            }
-        ),
+    model = task.live_model or task.profile.model if task.is_live else task.profile.model
+    context = ContextSettings(
+        default_context_window=task.profile.context_window,
+        default_max_output_tokens=task.profile.max_output_tokens,
+        model_context_windows={f"{provider}:{model}": task.profile.context_window},
+        model_max_output_tokens={f"{provider}:{model}": task.profile.max_output_tokens},
     )
+    pricing = PricingSettings(
+        model_prices={
+            f"{provider}/{model}": ModelPrice(
+                input_per_1m=task.profile.input_per_1m,
+                output_per_1m=task.profile.output_per_1m,
+            )
+        }
+    )
+    if not task.is_live:
+        return Settings(
+            models=ModelSettings(main=model, reviewer=model, summarizer=model),
+            context=context,
+            pricing=pricing,
+        )
+    # Live runs need the ambient credentials and base URLs, but not the ambient
+    # model routes, context window or prices: those come from the task, so a
+    # report's cost column reflects the model the task pinned rather than
+    # whatever the developer's shell happened to be set to.
+    ambient = Settings.from_env()
+    return ambient.model_copy(
+        update={
+            "models": ModelSettings(main=model, reviewer=model, summarizer=model),
+            "provider": ambient.provider.model_copy(update={"type": provider}),
+            "context": ambient.context.model_copy(
+                update={
+                    "default_context_window": context.default_context_window,
+                    "default_max_output_tokens": context.default_max_output_tokens,
+                    "model_context_windows": context.model_context_windows,
+                    "model_max_output_tokens": context.model_max_output_tokens,
+                }
+            ),
+            "pricing": pricing,
+        }
+    )
+
+
+def build_provider(task: EvalTask, settings: Settings) -> Any:
+    """Pick the provider for a task's mode.
+
+    Both return the same `calls` / `total_tokens` / `total_cost` surface, which
+    is what keeps `run_metrics` and the trace writer free of a mode branch.
+    """
+    if not task.is_live:
+        return ScriptedEvalProvider(task.model_script, task.profile, task.budgets)
+    # Reuses the router's provider-type mapping rather than repeating it, so a
+    # new provider becomes available to the live suite without a second edit.
+    inner = ModelRouter.from_settings(settings).primary
+    return LiveEvalProvider(
+        inner,
+        task.profile,
+        task.budgets,
+        model=task.live_model or task.profile.model,
+    )
+
+
+async def preflight_live_tasks(tasks: list[EvalTask]) -> None:
+    live = [task for task in tasks if task.is_live]
+    if not live:
+        return
+    # Reported per provider rather than per task: 28 tasks sharing one missing
+    # API key is one problem, and printing it 28 times buries the fix.
+    unconfigured: dict[str, int] = {}
+    for task in live:
+        settings = build_settings(task)
+        provider = ModelRouter.from_settings(settings).primary
+        is_configured = getattr(provider, "is_configured", None)
+        if callable(is_configured) and not is_configured():
+            unconfigured[task.profile.provider] = unconfigured.get(task.profile.provider, 0) + 1
+        aclose = getattr(provider, "aclose", None)
+        if callable(aclose):
+            await aclose()
+    if unconfigured:
+        detail = ", ".join(
+            f"{provider} ({count} task{'s' if count > 1 else ''})"
+            for provider, count in sorted(unconfigured.items())
+        )
+        raise RuntimeError(
+            f"live eval tasks require a configured model provider, and none is: {detail}. "
+            "Set that provider's API key environment variable and retry."
+        )
 
 
 def seed_history(store: SessionStore, session: Any, task: EvalTask) -> None:
@@ -354,14 +469,72 @@ def seed_history(store: SessionStore, session: Any, task: EvalTask) -> None:
         store.append_message(session, {"role": role, "content": content})
 
 
+def task_category(task: EvalTask) -> str:
+    for tag in task.tags:
+        if tag in CATEGORY_TAGS:
+            return tag
+    return UNCATEGORIZED
+
+
+def failure_reason(
+    task: EvalTask,
+    grade: dict[str, Any],
+    events: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    timed_out: bool,
+) -> str | None:
+    """Classify a failed run, deterministically and from the trace alone.
+
+    No LLM-as-judge: a grader that is itself a model turns "why did this fail"
+    into a second thing that needs evaluating. Every signal below is already
+    recorded — which checks failed, which files changed, whether the Agent ever
+    ran a command — so the attribution is reproducible from a stored trace.
+    """
+    if grade["passed"]:
+        return None
+    failed = {item["check_id"] for item in grade["checks"] if not item["passed"]}
+    if metrics["unauthorized_modification"] or metrics["dangerous_commands_executed"]:
+        return FAILURE_SAFETY
+    budget_checks = {"token_budget", "cost_budget", "runner_wall_time"}
+    error_types = {
+        str(event.get("error_type") or "")
+        for event in events
+        if event.get("type") == "error"
+    }
+    if timed_out or failed.intersection(budget_checks) or "EvalBudgetExceeded" in error_types:
+        return FAILURE_BUDGET
+    if error_types:
+        return FAILURE_ERROR
+    # Localization: the Agent never changed any file the task expects to change.
+    # Judged on the workspace rather than on edit events, because an edit that
+    # was applied and then reverted leaves the task equally unsolved.
+    expected = {assertion.path for assertion in task.checks.files if assertion.exists}
+    expected = expected or set(task.checks.allowed_changed_paths)
+    if expected and not expected.intersection(grade["changed_paths"]):
+        return FAILURE_LOCALIZATION
+    verification_failed = any(check_id.startswith("test_command_") for check_id in failed)
+    # Edited the right file and stopped without ever running a command: the
+    # failure is "declared done unverified", not a bad edit.
+    if verification_failed and metrics["agent_executions"] == 0:
+        return FAILURE_VERIFICATION
+    # A passing test suite whose mutation check fails means the Agent wrote a
+    # test with no teeth — a content failure, not a verification one.
+    if verification_failed or any(
+        check_id.startswith(("file:", "mutation_")) for check_id in failed
+    ):
+        return FAILURE_EDIT
+    return FAILURE_OTHER
+
+
 def run_metrics(
     task: EvalTask,
-    provider: ScriptedEvalProvider,
+    provider: Any,
     events: list[dict[str, Any]],
     audit_events: list[dict[str, Any]],
     grade: dict[str, Any],
     approvals: list[dict[str, Any]],
     duration_ms: int,
+    timed_out: bool = False,
 ) -> dict[str, Any]:
     usages = [event for event in events if event.get("type") == "usage.recorded"]
     tool_started = [event for event in events if event.get("type") == "tool.started"]
@@ -386,9 +559,11 @@ def run_metrics(
         if event.get("event_type") == "execution.started"
     }
     approval_checks = [item for item in grade["checks"] if item["category"] == "approval"]
-    return {
+    metrics = {
         "success": bool(grade["passed"]),
         "safety_task": "safety" in task.tags,
+        "category": task_category(task),
+        "provider_mode": task.provider_mode,
         "input_tokens": sum(int(event.get("input_tokens") or 0) for event in usages),
         "output_tokens": sum(int(event.get("output_tokens") or 0) for event in usages),
         "estimated_cost": round(sum(float(event.get("estimated_cost") or 0) for event in usages), 8),
@@ -406,6 +581,8 @@ def run_metrics(
         "approval_correct": all(item["passed"] for item in approval_checks) if approval_checks else True,
         "agent_executions": int(grade["agent_execution_count"]),
     }
+    metrics["failure_reason"] = failure_reason(task, grade, events, metrics, timed_out)
+    return metrics
 
 
 def build_report(
@@ -469,7 +646,19 @@ def build_report(
         "total_tool_calls": sum(result["metrics"]["tool_calls"] for result in results),
         "invalid_tool_calls": sum(result["metrics"]["invalid_tool_calls"] for result in results),
         "duplicate_edits": sum(result["metrics"]["duplicate_edits"] for result in results),
+        "mean_duration_ms": mean_of([result["metrics"]["duration_ms"] for result in results]),
+        # p95 alongside the mean because the tail is the number that decides
+        # whether a suite is usable: one task that takes ten times the average
+        # disappears entirely into a mean over 28 tasks.
+        "p95_duration_ms": percentile([result["metrics"]["duration_ms"] for result in results], 95),
+        "mean_cost_per_task": round(
+            sum(result["metrics"]["estimated_cost"] for result in results) / len(results), 8
+        )
+        if results
+        else 0.0,
     }
+    metrics["by_category"] = category_breakdown(tasks, results)
+    metrics["failure_attribution"] = failure_attribution(results)
     versions = source_versions(REPOSITORY_ROOT)
     versions["task_set_sha256"] = canonical_digest(
         [task.model_dump(mode="json") for task in sorted(tasks, key=lambda item: item.task_id)]
@@ -496,6 +685,74 @@ def build_report(
         "baseline": baseline,
         "runs": results,
     }
+
+
+def category_breakdown(tasks: list[EvalTask], results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-category pass@1 / pass@k, cost and latency.
+
+    The suite's whole purpose is to say *which kind* of work fails, so the
+    breakdown is part of the report rather than something a reader derives from
+    the per-run table by hand.
+    """
+    categories = sorted({task_category(task) for task in tasks})
+    breakdown: dict[str, Any] = {}
+    for category in categories:
+        rows = [result for result in results if result["metrics"]["category"] == category]
+        if not rows:
+            continue
+        task_ids = sorted({result["task_id"] for result in rows})
+        first_runs = [result for result in rows if result["run_index"] == 1]
+        any_pass = {
+            task_id: any(result["passed"] for result in rows if result["task_id"] == task_id)
+            for task_id in task_ids
+        }
+        durations = [result["metrics"]["duration_ms"] for result in rows]
+        breakdown[category] = {
+            "task_count": len(task_ids),
+            "run_count": len(rows),
+            "pass_at_1": rate(sum(result["passed"] for result in first_runs), len(first_runs)),
+            "pass_at_k": rate(sum(any_pass.values()), len(any_pass)),
+            "success_rate": rate(sum(result["passed"] for result in rows), len(rows)),
+            "total_estimated_cost": round(
+                sum(result["metrics"]["estimated_cost"] for result in rows), 8
+            ),
+            "mean_cost_per_run": round(
+                sum(result["metrics"]["estimated_cost"] for result in rows) / len(rows), 8
+            ),
+            "mean_duration_ms": mean_of(durations),
+            "p95_duration_ms": percentile(durations, 95),
+            "failure_attribution": failure_attribution(rows),
+        }
+    return breakdown
+
+
+def failure_attribution(results: list[dict[str, Any]]) -> dict[str, int]:
+    reasons = Counter(
+        str(result["metrics"].get("failure_reason") or "")
+        for result in results
+        if not result["passed"]
+    )
+    return {reason: count for reason, count in sorted(reasons.items()) if reason}
+
+
+def mean_of(values: list[int]) -> int:
+    if not values:
+        return 0
+    return int(round(sum(values) / len(values)))
+
+
+def percentile(values: list[int], percent: float) -> int:
+    """Nearest-rank percentile.
+
+    Nearest-rank rather than interpolated: with 28 tasks the interpolated value
+    is a number no run actually took, and a latency budget is easier to defend
+    when it names a real observation.
+    """
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = math.ceil(percent / 100 * len(ordered)) - 1
+    return ordered[min(max(index, 0), len(ordered) - 1)]
 
 
 def compare_baseline(
@@ -570,15 +827,46 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Tokens (input/output): {metrics['total_input_tokens']} / {metrics['total_output_tokens']}",
         f"- Estimated cost: {metrics['total_estimated_cost']:.8f}",
         f"- Model / tool calls: {metrics['total_model_calls']} / {metrics['total_tool_calls']}",
-        "",
-        "| Task | Run | Result | Failed checks | Trace |",
-        "| --- | ---: | --- | --- | --- |",
+        f"- Duration mean / p95: {metrics['mean_duration_ms']} ms / {metrics['p95_duration_ms']} ms",
+        f"- Mean cost per task: {metrics['mean_cost_per_task']:.8f}",
     ]
+    breakdown = metrics.get("by_category") or {}
+    if breakdown:
+        lines.extend(
+            [
+                "",
+                "## By category",
+                "",
+                "| Category | Tasks | pass@1 | pass@k | Cost (total / mean) | Duration mean / p95 |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for name, row in breakdown.items():
+            lines.append(
+                f"| {name} | {row['task_count']} | {row['pass_at_1']:.3f} | {row['pass_at_k']:.3f} | "
+                f"{row['total_estimated_cost']:.6f} / {row['mean_cost_per_run']:.6f} | "
+                f"{row['mean_duration_ms']} ms / {row['p95_duration_ms']} ms |"
+            )
+    attribution = metrics.get("failure_attribution") or {}
+    if attribution:
+        lines.extend(["", "## Failure attribution", "", "| Reason | Runs |", "| --- | ---: |"])
+        for reason, count in attribution.items():
+            lines.append(f"| {reason} | {count} |")
+    lines.extend(
+        [
+            "",
+            "## Runs",
+            "",
+            "| Task | Run | Result | Reason | Failed checks | Trace |",
+            "| --- | ---: | --- | --- | --- | --- |",
+        ]
+    )
     for result in report["runs"]:
         failures = ", ".join(result["failed_checks"]) or "-"
+        reason = result["metrics"].get("failure_reason") or "-"
         lines.append(
             f"| {result['task_id']} | {result['run_index']} | "
-            f"{'PASS' if result['passed'] else 'FAIL'} | {failures} | `{result['trace']}` |"
+            f"{'PASS' if result['passed'] else 'FAIL'} | {reason} | {failures} | `{result['trace']}` |"
         )
     if report.get("baseline") is not None:
         baseline = report["baseline"]

@@ -4,12 +4,14 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evals.contracts import EvalTask
+from evals.contracts import EvalTask, MutationCheck
 
 
 @dataclass(slots=True)
@@ -38,6 +40,9 @@ async def grade_task(task: EvalTask, context: GradeContext) -> dict[str, Any]:
                 result,
             )
         )
+
+    for index, mutation in enumerate(task.checks.mutations):
+        checks.append(await grade_mutation(task, context, mutation, index))
 
     for assertion in task.checks.files:
         target = (context.workspace / assertion.path).resolve(strict=False)
@@ -175,14 +180,18 @@ async def grade_task(task: EvalTask, context: GradeContext) -> dict[str, Any]:
             )
         )
 
-    checks.append(
-        check(
-            "model_script_consumed",
-            "trace",
-            context.remaining_script_turns == 0,
-            f"remaining scripted turns={context.remaining_script_turns}",
+    if not task.is_live:
+        # A live run has no script to consume. Emitting the check anyway would
+        # record a vacuous pass, which is indistinguishable from a real one when
+        # reading a report.
+        checks.append(
+            check(
+                "model_script_consumed",
+                "trace",
+                context.remaining_script_turns == 0,
+                f"remaining scripted turns={context.remaining_script_turns}",
+            )
         )
-    )
 
     if task.trace_redactions:
         surfaces = json.dumps(
@@ -213,6 +222,61 @@ async def grade_task(task: EvalTask, context: GradeContext) -> dict[str, Any]:
         "unauthorized_modification": bool(unauthorized or forbidden),
         "agent_execution_count": execution_count,
     }
+
+
+async def grade_mutation(
+    task: EvalTask,
+    context: GradeContext,
+    mutation: MutationCheck,
+    index: int,
+) -> dict[str, Any]:
+    """Run a test command against a deliberately broken copy of the workspace.
+
+    The mutation is applied to a *copy* so that grading never disturbs the
+    workspace the diff and content hashes are computed from.
+    """
+    check_id = f"mutation_{index + 1}:{mutation.path}"
+    commands = task.checks.test_commands
+    if mutation.command_index >= len(commands):
+        return check(check_id, "verification", False, "mutation references a missing test command")
+    with tempfile.TemporaryDirectory(prefix="aicode-mutation-") as temp_name:
+        mutant_root = Path(temp_name) / "workspace"
+        shutil.copytree(
+            context.workspace,
+            mutant_root,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
+        )
+        target = (mutant_root / mutation.path).resolve(strict=False)
+        if not _is_within(target, mutant_root.resolve()) or not target.is_file():
+            return check(check_id, "verification", False, f"mutation target missing: {mutation.path}")
+        original = target.read_text(encoding="utf-8")
+        if mutation.old_text not in original:
+            # The Agent rewrote the line the mutation targets, so the mutant can
+            # no longer be built. Reported rather than skipped: a silently
+            # dropped check reads as a pass.
+            return check(
+                check_id,
+                "verification",
+                False,
+                f"mutation anchor no longer present in {mutation.path}",
+            )
+        target.write_text(
+            original.replace(mutation.old_text, mutation.new_text, 1),
+            encoding="utf-8",
+        )
+        result = await run_command(
+            commands[mutation.command_index],
+            mutant_root,
+            task.budgets.wall_time_seconds,
+        )
+    caught = result["returncode"] != 0
+    return check(
+        check_id,
+        "verification",
+        caught,
+        "tests catch the seeded defect" if caught else "tests still pass against the seeded defect",
+        {"returncode": result["returncode"]},
+    )
 
 
 def check(

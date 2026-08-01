@@ -6,6 +6,13 @@
 line-length = 160
 target-version = "py311"
 
+# Eval fixtures are inputs, not source. Several of them carry a deliberate defect
+# that is exactly what the task asks the Agent to find — `live_basket` seeds a
+# mutable default argument, which is B006 by construction. Linting them would
+# either fail the build or, worse, invite someone to "fix" the bug the task
+# depends on. `make compile-python` excludes them for the same reason.
+extend-exclude = ["evals/fixtures"]
+
 [lint]
 # E/F: correctness and obvious mistakes. I: import order. UP: stay current with
 # the minimum Python. B: bugbear's real-defect subset.

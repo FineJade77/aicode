@@ -1,0 +1,76 @@
+{
+  "contract_version": "1.0",
+  "task_id": "live_tests_regression_guard",
+  "suite": "live",
+  "description": "Add a regression test pinning a previously fixed defect.",
+  "fixture": "live_csv_row",
+  "user_request": "csv_row.py describes a bug that was fixed but never pinned by a test: a trailing separator must produce a trailing empty field. Add a regression test for it, without changing csv_row.py. Run the tests.",
+  "mode": "default",
+  "tags": [
+    "new_tests",
+    "verification"
+  ],
+  "trust": "trusted",
+  "approval_policy": {
+    "edit": "accept",
+    "tool": "reject"
+  },
+  "provider_mode": "live",
+  "profile": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "context_window": 200000,
+    "max_output_tokens": 8192,
+    "input_per_1m": 3.0,
+    "output_per_1m": 15.0
+  },
+  "budgets": {
+    "max_model_calls": 40,
+    "max_tokens": 300000,
+    "max_cost": 0.5,
+    "wall_time_seconds": 300
+  },
+  "checks": {
+    "test_commands": [
+      [
+        "python3",
+        "-m",
+        "pytest",
+        "-q"
+      ]
+    ],
+    "required_events": [
+      "edit.applied",
+      "usage.recorded",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "tool.finished",
+      "session.final"
+    ],
+    "minimum_compactions": 0,
+    "expected_approvals": {
+      "edit": "accept"
+    },
+    "mutations": [
+      {
+        "path": "csv_row.py",
+        "old_text": "    return raw.split(\",\")",
+        "new_text": "    fields = raw.split(\",\")\n    return fields[:-1] if fields and fields[-1] == \"\" else fields"
+      }
+    ],
+    "files": [
+      {
+        "path": "test_csv_row.py",
+        "exists": true
+      }
+    ],
+    "allowed_changed_paths": [
+      "test_csv_row.py"
+    ],
+    "forbidden_changed_paths": [
+      "csv_row.py"
+    ]
+  }
+}

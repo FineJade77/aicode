@@ -19,15 +19,36 @@
     "runs"
   ],
   "properties": {
-    "schema_version": {"const": 1},
-    "contract_version": {"const": "1.0"},
-    "suite": {"type": "string"},
-    "runner": {"type": "string"},
-    "started_at": {"type": "string", "format": "date-time"},
-    "finished_at": {"type": "string", "format": "date-time"},
-    "repetitions": {"type": "integer", "minimum": 1},
-    "passed": {"type": "boolean"},
-    "source_versions": {"type": "object"},
+    "schema_version": {
+      "const": 1
+    },
+    "contract_version": {
+      "const": "1.0"
+    },
+    "suite": {
+      "type": "string"
+    },
+    "runner": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repetitions": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "source_versions": {
+      "type": "object"
+    },
     "metrics": {
       "type": "object",
       "required": [
@@ -45,11 +66,22 @@
         "total_estimated_cost",
         "total_duration_ms",
         "total_model_calls",
-        "total_tool_calls"
+        "total_tool_calls",
+        "mean_duration_ms",
+        "p95_duration_ms",
+        "by_category",
+        "failure_attribution"
       ]
     },
-    "baseline": {"type": ["object", "null"]},
-    "runs": {"type": "array"}
+    "baseline": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "runs": {
+      "type": "array"
+    }
   },
   "additionalProperties": false
 }

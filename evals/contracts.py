@@ -23,7 +23,7 @@ class ScriptedTurn(BaseModel):
 
 
 class ModelProfile(BaseModel):
-    provider: Literal["scripted"]
+    provider: Literal["scripted", "anthropic", "openai_compatible"]
     model: str
     context_window: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
@@ -50,8 +50,30 @@ class FileAssertion(BaseModel):
     not_contains: list[str] = Field(default_factory=list)
 
 
+class MutationCheck(BaseModel):
+    """A deliberate defect the task's tests must catch.
+
+    Grading "the Agent added tests" on the tests passing is vacuous — an empty
+    test file passes. So the grader re-runs the suite against a broken copy of
+    the implementation and requires it to fail.
+
+    The mutation lives in the task JSON rather than in the fixture on purpose:
+    anything placed in the workspace is readable by the Agent, and a discoverable
+    answer key turns "write a test for the empty-input boundary" into "read which
+    line we broke".
+    """
+
+    path: str
+    old_text: str = Field(min_length=1)
+    new_text: str
+    # Which of `test_commands` must fail against the mutant. Defaults to the
+    # first, which is the suite command in every task written so far.
+    command_index: int = Field(default=0, ge=0)
+
+
 class EvalChecks(BaseModel):
     test_commands: list[list[str]] = Field(default_factory=list)
+    mutations: list[MutationCheck] = Field(default_factory=list)
     files: list[FileAssertion] = Field(default_factory=list)
     allowed_changed_paths: list[str] = Field(default_factory=list)
     forbidden_changed_paths: list[str] = Field(default_factory=list)
@@ -85,14 +107,40 @@ class EvalTask(BaseModel):
     profile: ModelProfile
     budgets: EvalBudgets
     history_seed: HistorySeed = Field(default_factory=HistorySeed)
-    model_script: list[ScriptedTurn]
+    # `scripted` replays `model_script` and proves the Agent Loop is implemented
+    # correctly. `live` calls a real model and measures whether the Agent can
+    # finish the task at all — a different question, so it is a mode rather than
+    # a replacement: the scripted suite stays in CI for its zero-cost,
+    # zero-jitter regression value.
+    provider_mode: Literal["scripted", "live"] = "scripted"
+    # Overrides the model actually called in live mode. `profile.model` still
+    # drives context window and pricing, so a model swap that forgets this stays
+    # visible rather than silently billing against the wrong price table.
+    live_model: str | None = None
+    model_script: list[ScriptedTurn] = Field(default_factory=list)
     checks: EvalChecks
     trace_redactions: list[str] = Field(default_factory=list)
 
+    @property
+    def is_live(self) -> bool:
+        return self.provider_mode == "live"
+
     @model_validator(mode="after")
     def validate_script_budget(self) -> EvalTask:
-        if len(self.model_script) > self.budgets.max_model_calls:
-            raise ValueError("model_script exceeds budgets.max_model_calls")
+        if self.provider_mode == "scripted":
+            if not self.model_script:
+                raise ValueError("scripted tasks require a non-empty model_script")
+            if self.profile.provider != "scripted":
+                raise ValueError("scripted tasks require profile.provider 'scripted'")
+            if len(self.model_script) > self.budgets.max_model_calls:
+                raise ValueError("model_script exceeds budgets.max_model_calls")
+            return self
+        # A live task carrying a script would silently ignore it, which reads as
+        # a working assertion that never runs.
+        if self.model_script:
+            raise ValueError("live tasks must not define a model_script")
+        if self.profile.provider == "scripted":
+            raise ValueError("live tasks require a real profile.provider")
         return self
 
 

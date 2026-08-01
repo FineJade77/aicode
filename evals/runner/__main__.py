@@ -18,6 +18,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=Path(".artifacts/evals"))
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--keep-workspaces", action="store_true")
+    parser.add_argument(
+        "--live-model",
+        help=(
+            "Live tasks only: override the model every task calls. Exists so the same "
+            "task set can be run against several models without editing the tasks."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -38,13 +45,19 @@ async def async_main() -> int:
     baseline = args.baseline
     if baseline is not None and not baseline.is_absolute():
         baseline = REPOSITORY_ROOT / baseline
-    report = await run_suite(
-        tasks,
-        output_dir,
-        repetitions=args.repetitions,
-        baseline_path=baseline,
-        keep_workspaces=args.keep_workspaces,
-    )
+    try:
+        report = await run_suite(
+            tasks,
+            output_dir,
+            repetitions=args.repetitions,
+            baseline_path=baseline,
+            keep_workspaces=args.keep_workspaces,
+            live_model=args.live_model,
+        )
+    except RuntimeError as exc:
+        # A refused preflight is a configuration problem the user can fix, not a
+        # harness crash. A traceback here buries the one line that says what to do.
+        raise SystemExit(str(exc)) from exc
     print(f"eval report: {output_dir / 'report.json'}")
     print(f"markdown: {output_dir / 'report.md'}")
     print(f"status: {'PASS' if report['passed'] else 'FAIL'}")

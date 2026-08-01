@@ -723,6 +723,32 @@ profile 采用 `(allow default)` + 定点拒绝，而不是 `(deny default)` + �
 
 Agent shell command、模型正文、tool output 和 edit/diff 正文不会完整写入 trace；使用 hash、字符数、安全字段和已脱敏错误定位问题。Suite 同时输出 JSON 与 Markdown report，并与提交的 baseline threshold/fingerprint 比较。CI 跑 deterministic smoke，真实模型完整任务集保留为手动或定时 profile。
 
+### scripted 与 live 两种 provider mode
+
+`provider_mode: scripted | live` 是同一套 harness 的两条链路，回答的是两个不同问题：scripted 证明 **Agent Loop 按脚本回放正确**，live 测量 **Agent 能否完成真实任务**。因此 live 是新增而非替代——scripted 的零成本、零抖动回归价值不可替代，它继续做 CI 门禁；live 因成本与不确定性不进 PR CI。
+
+`LiveEvalProvider` 对外暴露与 `ScriptedEvalProvider` **完全相同**的 `calls` / `total_tokens` / `total_cost` 表面，`run_metrics`、trace writer 与预算检查因此不需要任何 mode 分支。它包装 `ModelRouter.from_settings` 选出的真实 provider，复用而不是重复 provider 选型逻辑。
+
+live 的预算是**硬停**而非事后统计：超限中止运行，因为超支花的是真钱。真实 token 数只有响应落地后才知道，所以检查在调用之后执行——这仍然能阻止**下一次**调用，而那正是约束支出的地方。缺 API key 在建目录、发请求之前就失败：跑到一半才发现没配 key，钱已经花掉，而且失败读起来像是 Agent 不行而不是配置问题。
+
+live settings 取环境里的 credential 与 base URL，但**不取**环境里的 model route、context window 与价格——那三样来自 task，否则报告的成本列描述的是开发者 shell 恰好设成了什么。
+
+### mutation check
+
+"Agent 补了测试"这件事没法靠"套件通过"判定——空测试文件也通过。`checks.mutations` 声明一处蓄意缺陷，grader 把它打进工作区**副本**再跑测试命令，要求失败。
+
+mutation 写在 task JSON 而不是 fixture 里：fixture 会被整个复制进 Agent 的 workspace，放在那里的答案卡会把"为空输入边界写测试"退化成"读一下我们改坏了哪行"。副本而非原地修改，是为了让 diff 与 content hash 不被评分过程污染。
+
+### 失败归因
+
+失败运行按确定性优先级归类：`safety_violation` > `budget_exhausted` > `agent_error` > `localization_failure` > `verification_failure` > `edit_failure`。全部由既有 trace 字段推导——哪些 check 失败、哪些文件变了、Agent 有没有跑过命令——因此可从存档 trace 复现。
+
+**不引入 LLM-as-judge**：评委本身是模型的话，"为什么失败"就变成了第二个需要评测的东西。定位失败判据取工作区实际变更而非 edit 事件：应用后又被回滚的 edit，任务同样没被解决。
+
+### reference solution
+
+`evals/reference_solutions.py` 为每个 live 任务保存一份已知可行解，由测试套件校验"该解能让套件转绿"且"每条 mutation 都被参考测试抓到"。无解的任务报出来的是出题人的 bug 而不是模型的失败，这两者必须能区分。参考解不放进 fixture，同 mutation 的理由。
+
 ## 20. Repository Layout
 
 ```text

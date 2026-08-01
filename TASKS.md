@@ -962,6 +962,22 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - 在 `docs/review/` 产出评测报告：分类别的 pass@1 / pass@3、平均与总成本、平均与 p95 耗时、失败归因分类（定位失败 / 编辑失败 / 验证失败 / 预算耗尽）。
 - 该数字写入 README 顶部。
 
+进度（2026-08-01）：**harness 与任务集已完成并验证，仍为 `[ ]`——本任务的交付物是数字，而数字尚未产出**（本机未配置任何 provider API key，`make eval-live` 会在 preflight 直接拒绝）。剩余工作只有一步：配好 key 后跑 `make eval-live`，把 `report.md` 落到 `docs/review/` 并把分类别数字写进 README 顶部。
+
+已完成部分：
+
+- `LiveEvalProvider` 暴露与 `ScriptedEvalProvider` **完全相同**的 `calls` / `total_tokens` / `total_cost` 表面，`run_metrics`、trace writer、预算检查全部无 mode 分支。它包装 `ModelRouter.from_settings` 选出的真实 provider，复用而非重复 provider 选型。
+- `EvalTask` 增加 `provider_mode` 与 `live_model`；两种 mode 的非法组合在 contract 层就被拒（live 带 script、scripted 缺 script、mode 与 profile.provider 不匹配）。**live 带 script 必须报错而不是忽略**：一条被静默忽略的断言读起来和一条在跑的断言一模一样。
+- 任务集 28 个，分布与要求一致：单文件 8、跨文件 6、新增测试 6、二次修复 4，另 4 个安全场景的 live 变体。安全变体只保留与模型措辞无关的不变量（什么都没被破坏、凭据没被读到、没有 host 执行、compaction 确实发生），scripted 版那些精确措辞断言真实模型不会复现。
+- **修复类任务把测试文件放进 `forbidden_changed_paths`**：把测试改成迎合坏实现是伪造通过最省事的方式。
+- **新增 `checks.mutations`**。"新增测试"类任务光看套件通过毫无意义——空测试文件也通过。grader 把一处蓄意缺陷打进工作区**副本**再跑测试，要求它失败。mutation 写在 task JSON 而不是 fixture：fixture 会被整个复制进 Agent workspace，放那里就是答案卡。用副本是为了不污染 diff 与 content hash。
+- **失败归因确定性推导**，优先级 `safety_violation` > `budget_exhausted` > `agent_error` > `localization_failure` > `verification_failure` > `edit_failure`，全部来自既有 trace 字段，可从存档 trace 复现。**没有 LLM-as-judge**：评委是模型的话，"为什么失败"就变成第二个要评测的东西。
+- **新增 `evals/reference_solutions.py`**（范围外但必要）：每个 live 任务一份已知可行解，测试套件校验其可解且每条 mutation 都被抓到。无解任务报出来的是出题人的 bug 而不是模型的失败，两者必须能区分——已验证 24/24 可解、10/10 mutation 被抓。为控制这一步的耗时，参考解校验关掉了 pytest 插件自动加载（1.9s → 0.5s/次，fixture 只用核心 pytts 特性）；grader 本身刻意不这么做，它跑的必须和 Agent 跑的一致。
+- live 预算**硬停**而非事后统计（超支花真钱）；缺 key 在建目录、发请求之前就失败——跑到第 12 个任务才发现没 key，钱已经花掉，而且失败读起来像 Agent 不行。
+- `make eval-live` 默认 `--repetitions 3`，支持 `REPETITIONS=` 与 `LIVE_MODEL=`（后者为 T-026 的横向对比预留）；**不进 `make test`、不进 PR CI**。
+- 报告新增分类别 pass@1 / pass@k、mean 与 p95 耗时、失败归因分布。p95 取 nearest-rank：插值出来的是没有任何一次运行真正花过的数字。
+- 验证：Python 634 项 + 1 skip（其中 54 项新增）、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（baseline 的 `eval_harness_sha256` / `eval_schema_sha256` / `task_set_sha256` 按预期更新，5/5 任务全通过、recorded_metrics 未变）。
+
 ### `[ ]` T-023 检索式项目记忆
 
 对应：评审 B4 | 触发条件：T-016 显示跨会话重复解释同一项目约定造成可观测的 token 浪费

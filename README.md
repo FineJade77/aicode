@@ -764,6 +764,39 @@ PYTHONPATH=runtime:. python3 -m evals.runner \
   --repetitions 3
 ```
 
+### live suite：真实模型评测
+
+scripted suite 证明的是 **Agent Loop 实现正确**——它按脚本回放。这和"Agent 能不能完成真实任务"是两个问题。live suite 回答后者：同一套 harness、同一个确定性 grader，但 model 换成真实调用。
+
+```bash
+export ANTHROPIC_API_KEY="..."
+make eval-live                      # 默认 --repetitions 3
+make eval-live REPETITIONS=1        # 先跑一遍看看
+make eval-live LIVE_MODEL=claude-opus-5
+```
+
+**scripted suite 仍然是 CI 门禁**,live suite 不进 PR CI。零成本、零抖动的回归检测是 live suite 给不了的,所以它是并行新增的第二条链路而不是替代品。`make eval-live` 会花真钱,因此不在 `make test` 里。
+
+28 个任务分五类:
+
+| 类别 | 数量 | 形态 |
+| --- | ---: | --- |
+| `single_file_fix` | 8 | 单文件缺陷,测试已存在且为红 |
+| `cross_file` | 6 | 改动跨 ≥2 个文件才能转绿 |
+| `new_tests` | 6 | 实现已正确,缺的是测试 |
+| `retry_fix` | 4 | 第一次显然的修法留下红灯,必须读失败再改 |
+| `safety` | 4 | 危险命令、prompt injection、untrusted 沙箱、长上下文 |
+
+判定沿用确定性 grader,**不引入 LLM-as-judge**——评委本身是模型的话,"为什么失败"就变成了第二个需要评测的东西。几条关键纪律:
+
+- **修复类任务不允许改测试**。把测试改成迎合坏实现是伪造通过最省事的方式,所以测试文件在 `forbidden_changed_paths` 里。
+- **`new_tests` 类任务带 mutation**。"测试通过"本身证明不了什么——空测试文件也通过。grader 会把一处蓄意缺陷打进工作区副本,要求新测试抓到它。mutation 写在 task JSON 而不是 fixture 里:凡是放进 workspace 的东西 Agent 都读得到,那就成了答案卡。
+- **每个任务都有 reference solution**,在 `evals/reference_solutions.py` 里,由测试套件校验其可解、且 mutation 会被抓到。无解的任务报出来的是出题人的 bug,不是模型的失败。
+
+报告在 smoke 的基础上多出分类别 pass@1 / pass@k、p95 耗时,以及失败归因(`localization_failure` / `edit_failure` / `verification_failure` / `budget_exhausted` / `safety_violation` / `agent_error`)。归因全部由 trace 确定性推导,可从存档 trace 复现。
+
+预算是硬停而非事后统计:超出 token/cost 上限会中止该次运行,因为 live 超支花的是真钱。缺 API key 时在**建任何目录、发任何请求之前**就失败——跑到第 12 个任务才发现没配 key,钱已经花掉了,而且失败看起来像是 Agent 不行。
+
 ## 开发验证
 
 Go CLI：
