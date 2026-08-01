@@ -962,7 +962,15 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - 在 `docs/review/` 产出评测报告：分类别的 pass@1 / pass@3、平均与总成本、平均与 p95 耗时、失败归因分类（定位失败 / 编辑失败 / 验证失败 / 预算耗尽）。
 - 该数字写入 README 顶部。
 
-进度（2026-08-01）：**harness 与任务集已完成并验证，仍为 `[ ]`——本任务的交付物是数字，而数字尚未产出**（本机未配置任何 provider API key，`make eval-live` 会在 preflight 直接拒绝）。剩余工作只有一步：配好 key 后跑 `make eval-live`，把 `report.md` 落到 `docs/review/` 并把分类别数字写进 README 顶部。
+进度（2026-08-01）：**harness 与任务集已完成，首轮真实运行已跑通，仍为 `[ ]`**——首轮的数字不可用于交付（原因见下），需在修复后重跑再落 `docs/review/` 与 README 顶部。
+
+首轮运行（DeepSeek，OpenAI-compatible，`REPETITIONS=1`）：27/28 通过，p95 35.4s。这一轮的价值不在数字而在**它暴露的三个 bug，其中两个在产品里而不在评测里**：
+
+- **policy 路径探测崩溃（产品 bug）**。`policy.py` 把 shell 命令的每个 token 都当候选路径试探，`Path.exists()` 吞 ENOENT 但不吞 ENAMETOOLONG。模型内联一段 579 字符的 `python3 -c` 脚本时，异常从 policy 抛出、**越过 tool 错误处理、终结整个 turn**（`session.final` 都没发出）——模型写一段长脚本的代价是丢掉整个会话，而不是拿回一次失败的工具调用。已改为不抛异常的探测；`path_like` token 仍照常按解析后的文本 gate，由 `cat ../aaa…` 仍然 deny 的测试钉住。回归测试先复现了生产报错再验证修复。
+- **模型别名导致计价静默丢失（产品 bug）**。DeepSeek 把 `deepseek-chat` 以 `deepseek-v4-flash` 的名字返回；价格表按**配置的**模型名建键，计价却用**返回的**模型名，于是查不中、整轮计价为 $0.00。已改为回退到请求的模型名，并新增 `unpriced_model_calls` 指标让"计价为 0"无法再静默通过（该指标立刻在 scripted smoke 里也抓到 7 次）。**"免费"和"没配价格"必须长得不一样。**
+- **approval 策略让评测测错了东西（出题 bug）**。原先 24 个作业任务是 `tool: reject`，模型**一次命令都跑不了**，代码是盲写的、验证是 grader 做的。于是 `retry_fix` 不再测"读失败再改"，`verification_failure` 永远不可能触发。已改为作业任务 `tool: accept`、安全任务保持 `reject`（拒绝本身是被测行为），并由测试钉住这个划分。policy 仍直接拒绝危险可执行文件与 protected path，accept 放宽的是可批准范围而非可执行范围。
+
+另外两个出题 bug 在此前一轮已修（长上下文种子按窗口比例化、clamp mutation 由"单点 off-by-one"改为"整体移除文档行为"），本轮两项均通过。`reference_solutions.py` 新增第二份写法不同的解交叉校验 mutation——只校验一份参考解，分不出 mutation 写得对还是恰好对上了那份解挑的输入。
 
 已完成部分：
 

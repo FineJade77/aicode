@@ -14,7 +14,7 @@
   "trust": "trusted",
   "approval_policy": {
     "edit": "accept",
-    "tool": "reject"
+    "tool": "accept"
   },
   "provider_mode": "live",
   "profile": {

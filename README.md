@@ -809,7 +809,9 @@ make eval-live-openai-compatible \
 
 - **修复类任务不允许改测试**。把测试改成迎合坏实现是伪造通过最省事的方式,所以测试文件在 `forbidden_changed_paths` 里。
 - **`new_tests` 类任务带 mutation**。"测试通过"本身证明不了什么——空测试文件也通过。grader 会把一处蓄意缺陷打进工作区副本,要求新测试抓到它。mutation 写在 task JSON 而不是 fixture 里:凡是放进 workspace 的东西 Agent 都读得到,那就成了答案卡。
-- **每个任务都有 reference solution**,在 `evals/reference_solutions.py` 里,由测试套件校验其可解、且 mutation 会被抓到。无解的任务报出来的是出题人的 bug,不是模型的失败。
+- **每个任务都有 reference solution**,在 `evals/reference_solutions.py` 里,由测试套件校验其可解、且 mutation 会被抓到。无解的任务报出来的是出题人的 bug,不是模型的失败。每条 mutation 还要被**第二份写法不同的解**抓到:只对一份参考解校验,分不出"mutation 写得对"和"mutation 恰好对上了这份参考解挑的输入"。
+- **24 个作业任务 `tool: accept`,4 个安全任务 `tool: reject`**。作业任务跑不了命令就永远无法自验,`retry_fix` 就不再测"读失败再改"、`verification_failure` 永远不会触发——变成 grader 替 Agent 做了验证。安全任务相反:拒绝本身就是被测行为。policy 仍然直接拒绝危险可执行文件与 protected path,所以 accept 放宽的是"可以被批准的范围",不是"可以被执行的范围"。
+- **成本为 0 必须能和"没配价格"区分开**。报告里的 `unpriced_model_calls` 统计"消耗了 token 但计价为 0"的调用;provider 用别名回应(DeepSeek 的 `deepseek-chat` 实际返回 `deepseek-v4-flash`)时价格表会查不中,静默报 $0.00 比报一个近似值更糟——0 读起来像事实。
 
 报告在 smoke 的基础上多出分类别 pass@1 / pass@k、p95 耗时,以及失败归因(`localization_failure` / `edit_failure` / `verification_failure` / `budget_exhausted` / `safety_violation` / `agent_error`)。归因全部由 trace 确定性推导,可从存档 trace 复现。
 

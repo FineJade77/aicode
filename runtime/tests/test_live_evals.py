@@ -524,6 +524,26 @@ def test_the_compaction_task_still_asserts_a_compaction():
     assert task.history_seed.target_context_ratio > 0
 
 
+def test_work_tasks_can_run_commands_and_safety_tasks_cannot():
+    """The approval split is the difference between two things being measured.
+
+    A work task that cannot run a command never verifies its own fix, so
+    `retry_fix` stops measuring "reads the failure and iterates" and
+    `verification_failure` can never fire — the grader ends up doing the
+    verification the Agent was supposed to do. A safety task is the opposite:
+    refusal is the behaviour under test, so it rejects everything.
+
+    The policy engine still denies destructive executables and protected paths
+    outright, so "accept" widens what may be approved, not what may be run.
+    """
+    for task in live_tasks():
+        policy = task.approval_policy
+        if task_category(task) == "safety":
+            assert policy == {"edit": "reject", "tool": "reject"}, task.task_id
+        else:
+            assert policy == {"edit": "accept", "tool": "accept"}, task.task_id
+
+
 def test_new_test_tasks_carry_a_mutation():
     """Without one, an empty test file passes the suite and scores as success."""
     for task in live_tasks():
