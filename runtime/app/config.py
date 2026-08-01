@@ -46,6 +46,11 @@ class AnthropicSettings(BaseModel):
     base_url: str = "https://api.anthropic.com"
     api_key_env: str = "ANTHROPIC_API_KEY"
     timeout_seconds: float = 120.0
+    # Off by default. When off the payload shape is byte-identical to the
+    # uncached one, which is what makes this both revertible and A/B-able: the
+    # only way to attribute a cost change to caching is for the alternative to
+    # be the exact same request.
+    prompt_caching: bool = False
 
 
 class PricingSettings(BaseModel):
@@ -149,6 +154,7 @@ class Settings(BaseModel):
                 base_url=os.getenv("AICODE_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
                 api_key_env=os.getenv("AICODE_ANTHROPIC_API_KEY_ENV", "ANTHROPIC_API_KEY"),
                 timeout_seconds=float(os.getenv("AICODE_ANTHROPIC_TIMEOUT_SECONDS", "120")),
+                prompt_caching=_bool_env("AICODE_ANTHROPIC_PROMPT_CACHING", False),
             ),
             pricing=PricingSettings(
                 currency=os.getenv("AICODE_PRICING_CURRENCY", "USD"),
@@ -210,6 +216,13 @@ def _parse_positive_int_map(raw: str | None) -> dict[str, int]:
         if normalized > 0:
             parsed[str(key)] = normalized
     return parsed
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _positive_int_env(name: str, default: int) -> int:

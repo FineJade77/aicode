@@ -961,6 +961,18 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - payload 形状、深拷贝回归、开关关闭时行为一致、cache token 解析与分档计价均有测试。
 - **交付物包含量化数据**：同一真实 session 连续 5 轮，开启与关闭 caching 的 `input_tokens` 与 `estimated_cost` 对比，写入 README 或评审文档。无此数据不算完成。
 
+进度（2026-08-01）：**代码与测试已完成，仍为 `[ ]`——量化数据未产出**。本机未配置 `ANTHROPIC_API_KEY`；且用户的 provider 是 DeepSeek（OpenAI-compatible），DeepSeek 走自动上下文缓存、不认 `cache_control`，因此这条路径拿不到对照数据。剩余工作：配好 Anthropic key 后同一 session 连跑 5 轮 × 开/关两组，把 `input_tokens` 与 `estimated_cost` 对比写进 README。
+
+已完成部分：
+
+- `settings.anthropic.prompt_caching` 开关（`AICODE_ANTHROPIC_PROMPT_CACHING`），**默认关闭**。关闭时 payload 逐字节与启用前一致，由测试钉住——这既是回退路径也是 A/B 前提：把成本变化归因到 caching，对照组必须是完全相同的请求。
+- `system` 改为 block 数组并打 `cache_control`；**Anthropic 渲染顺序是 `tools` → `system` → `messages`，所以 system 上的断点已经覆盖了 tools**。tools 末元素上另打一个更靠前的断点，用于"system 变了但工具集没变"时保住工具部分的缓存。断点只打末元素——每请求上限 4 个，逐个标注是白白花掉预算。
+- **深拷贝 `TOOL_SCHEMAS` 后再标注**。原地改会给之后每个 OpenAI-compatible 请求挂上 Anthropic 专有的 `cache_control`,污染出现在离现场很远的地方,且只在两个 provider 同进程时暴露。测试同时钉住"必须是深拷贝":浅拷贝仍共享被写入的 dict。
+- `Usage` 增加 `cache_creation_input_tokens` / `cache_read_input_tokens`,并在 `message_start` 解析。**`input_tokens` 是未命中缓存的余量而非整个 prompt**,总量是三者之和;字段缺失时读 0 而不报错——它们是对本次请求的报告,不是 API 的承诺。
+- `estimate_cost` 分档:cache write 按 input 单价 1.25×(5 分钟 TTL;1 小时是 2×,aicode 只写默认 TTL),cache read 按 0.1×。两个参数默认 0,**不知道 caching 存在的调用方结果逐位不变**——分档是叠加而非改动。router 端到端接通。
+- 记录一个排查陷阱:**最小可缓存前缀与模型相关且不单调**(Opus 5 是 512,Opus 4.8/Sonnet 5 是 1024,Opus 4.6/Haiku 4.5 却是 4096),低于阈值静默不缓存、不报错。
+- 验证:Python 695 项 + 1 skip(其中 14 项新增)、ruff、eval-smoke PASS。
+
 ### `[x]` T-016 真实模型评测套件
 
 对应：评审 D1（2026-07-29 由第一梯队降级：价值在于能力证明，不阻塞生产就绪）

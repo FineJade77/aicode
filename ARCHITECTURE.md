@@ -725,6 +725,20 @@ profile 采用 `(allow default)` + 定点拒绝，而不是 `(deny default)` + �
 
 `post_edit` 结构上无法否决编辑（运行时文件已落盘），失败只上报；能拒绝的只有 `pre_bash`。hook 改写文件后刷新 read 记录，否则模型对同一文件的下一次编辑会被 read-before-write 判为 stale。
 
+### Anthropic prompt caching
+
+由 `settings.anthropic.prompt_caching` 开关控制，**默认关闭**。关闭时 payload 形状与启用前逐字节一致——这既是回退路径，也是 A/B 的前提：把成本变化归因到 caching 的唯一办法，是对照组必须是完全相同的请求。
+
+Anthropic 的渲染顺序是 `tools` → `system` → `messages`，因此**打在最后一个 system block 上的断点同时覆盖了 tool 定义**。tools 末元素上另打一个更靠前的断点：system prompt 变了而工具集没变时，工具部分仍然命中缓存，而不是整段前缀重写。每请求最多 4 个断点，这里用掉 2 个。
+
+**`TOOL_SCHEMAS` 是模块级共享常量，打断点前必须深拷贝。** 原地标注会给之后每一个 OpenAI-compatible 请求都挂上一个 Anthropic 专有的 `cache_control` 键——这种污染出现在离现场很远的地方，而且只在两个 provider 跑在同一进程里时才暴露。深拷贝而非浅拷贝：浅拷贝仍然共享被写入的那些 dict。
+
+`Usage` 增加 `cache_creation_input_tokens` / `cache_read_input_tokens`。**`input_tokens` 是未命中缓存的余量而不是整个 prompt**：prompt 总量是三者之和，只累加 `input_tokens` 会把缓存服务掉的部分漏掉。这两个字段在不支持缓存的 provider/model 上直接缺失，因此按 0 读取而不是报错——它们是对本次请求的报告，不是 API 的承诺。
+
+`estimate_cost` 分档计价：cache write 按 input 单价的 1.25×（5 分钟 TTL；1 小时 TTL 是 2×，aicode 只写默认 TTL），cache read 按 0.1×。两个参数默认为 0，因此不知道 caching 存在的调用方拿到的结果与之前逐位相同——分档是叠加而不是对普通 token 计价方式的改动。
+
+**最小可缓存前缀与模型相关且不单调**（Opus 5 为 512 token，Opus 4.8 / Sonnet 5 为 1024，Opus 4.6 / Haiku 4.5 却是 4096）。低于阈值时**不报错、静默不缓存**，表现为 `cache_creation_input_tokens` 恒为 0——排查"开了却没省钱"时先看这里。
+
 ## 19. Agent Eval And Trace
 
 `evals/` 提供独立于真实 provider 的任务级评测层。CI profile 使用 scripted model，但仍调用真实 Agent Loop、ModelRouter、PolicyEngine、ExecutionService、SessionStore 和 compaction 路径，因此可以稳定捕获 Agent 行为回归，而不把外部模型波动引入普通 CI。

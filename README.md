@@ -395,6 +395,7 @@ Trust 不写入仓库，也不能通过 `.aicode/config.json`、rules 或 memory
 ```bash
 export AICODE_BUDGET_MAX_TOTAL_TOKENS="1000000"   # 0 表示关闭
 export AICODE_BUDGET_MAX_TOTAL_COST="5.0"         # 0 表示关闭
+export AICODE_ANTHROPIC_PROMPT_CACHING="true"     # Anthropic prompt caching，默认关闭
 ```
 
 触发后 Runtime 发出 `run.budget.exceeded`，然后走与步数上限相同的收尾路径——追加一条 note、以无工具的方式再请求一次模型——**因此用户拿到的始终是一份总结，而不是被截断的对话**。收尾这次调用不再计入闸门，不会递归。

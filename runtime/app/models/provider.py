@@ -89,8 +89,14 @@ class ToolCallRequest:
 
 @dataclass(slots=True)
 class Usage:
+    # `input_tokens` is the *uncached remainder*, not the whole prompt: the
+    # provider reports cache-written and cache-read tokens separately, and the
+    # prompt size is the sum of all three. Summing only `input_tokens` across a
+    # cached session under-reports it by whatever the cache served.
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass(slots=True)

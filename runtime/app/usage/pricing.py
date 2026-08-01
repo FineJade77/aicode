@@ -11,6 +11,15 @@ class ModelPrice:
     output_per_1m: float = 0.0
 
 
+# Anthropic prices cached prompt tokens off the base input rate: writing the
+# cache costs more than a plain input token, reading it costs far less. These are
+# the 5-minute-TTL multipliers (a 1-hour TTL writes at 2x); aicode only ever
+# writes the default TTL, so encoding the 5m figure is exact rather than an
+# approximation.
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.1
+
+
 def estimate_cost(
     *,
     provider: str,
@@ -18,13 +27,23 @@ def estimate_cost(
     input_tokens: int,
     output_tokens: int,
     prices: dict[str, ModelPrice],
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> float:
+    """Price one call, charging cached prompt tokens at their own rates.
+
+    Cache tokens default to zero, so a caller that does not know about caching
+    gets exactly the previous result — the tiering is additive, not a change to
+    how ordinary tokens are priced.
+    """
     price = price_for(provider=provider, model=model, prices=prices)
     if price is None:
         return 0.0
     cost = (max(input_tokens, 0) / 1_000_000 * price.input_per_1m) + (
         max(output_tokens, 0) / 1_000_000 * price.output_per_1m
     )
+    cost += max(cache_creation_input_tokens, 0) / 1_000_000 * price.input_per_1m * CACHE_WRITE_MULTIPLIER
+    cost += max(cache_read_input_tokens, 0) / 1_000_000 * price.input_per_1m * CACHE_READ_MULTIPLIER
     return round(cost, 8)
 
 
