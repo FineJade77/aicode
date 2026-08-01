@@ -899,6 +899,18 @@ make eval-live-hard-openai-compatible \
 
 首轮结果(2026-08-01,`deepseek-chat`):**8/8 功能性解决**,pass@1 = 0.875,唯一判负是策略违规而非能力不足。**难度提升失败**——完整分析见 [docs/review/2026-08-01-live-hard-eval-report.md](docs/review/2026-08-01-live-hard-eval-report.md)。报告因此新增 `functional_pass_at_1` 与 `policy_only_failures`:只记录判负结果,会让"解出来但越界"和"根本没解出来"长得一样,而在难度校准上这两者结论正好相反。
 
+#### live_scale:难度来自规模
+
+`live_hard` 证伪了"因与果的距离构成难度"——能快速读完整个仓库的模型不为跳转付费。`live_scale` 测另一根轴:**让"读完所有东西"不再便宜**。
+
+```bash
+make eval-live-scale-openai-compatible REPETITIONS=1
+```
+
+2 个任务,每个 30+ 个近乎相同的模块:35 个 handler 里有 1 个违反共享返回契约、30 个配置段里有 2 个把必填键拼错。grep 症状会命中几十个同样合理的位置,填充代码在长度上刻意保持一致(由测试钉住:同组模块最长与最短相差不超过 2 行),因此**没法靠形状认出问题模块**。
+
+**如果这一档能区分而 `live_hard` 不能,那正是 T-047(repo map / 符号索引)在等的证据。**
+
 **和 `live` 分开而不是替换**:后者是零成本的回归地板和已知参照点(84/84),前者是唯一能产出失败归因的一档;合并会让每次运行都为两者付钱。8 个任务全部由 `reference_solutions_hard.py` 的已知可行解验证过——**难必须是难,不能是无解**;在这一档尤其重要,因为失败本身就是产物,分不清"模型不行"和"题出错了"就等于没有信号。
 
 报告在 smoke 的基础上多出分类别 pass@1 / pass@k、p95 耗时,以及失败归因(`localization_failure` / `edit_failure` / `verification_failure` / `budget_exhausted` / `safety_violation` / `agent_error`)。归因全部由 trace 确定性推导,可从存档 trace 复现。

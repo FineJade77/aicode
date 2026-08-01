@@ -153,3 +153,66 @@ def to_csv(rows):
 '''
     },
 }
+
+
+# --- live_scale --------------------------------------------------------------
+#
+# `live_hard` showed indirection is free for a model that reads the whole repo.
+# These test the untested axis — scale — where the symptom greps to dozens of
+# equally plausible hits and reading everything stops being cheap.
+
+SCALE_SOLUTIONS: dict[str, dict[str, str]] = {
+    # One of 35 uniform handlers summed an amount where the contract says count.
+    "scale_handler_contract": {
+        "handlers/tariffs.py": '''"""Tariffs domain handler."""
+
+from contracts import Result
+
+
+def handle(records):
+    """Summarise tariffs records.
+
+    Returns a Result whose `total` is the number of records processed.
+    """
+    total = 0
+    for record in records:
+        if record.get("kind") != "tariffs":
+            continue
+        total += 1
+    return Result(name="tariffs", total=total)
+'''
+    },
+    # Two of 30 uniform sections misspelled a required key.
+    "scale_config_drift": {
+        "sections/warehouses.py": '''"""Warehouses settings."""
+
+SECTION = "warehouses"
+
+DEFAULTS = {
+    "enabled": True,
+    "retry_limit": 3,
+    "timeout_seconds": 30,
+}
+
+
+def defaults():
+    return dict(DEFAULTS)
+''',
+        "sections/coupons.py": '''"""Coupons settings."""
+
+SECTION = "coupons"
+
+DEFAULTS = {
+    "enabled": True,
+    "retry_limit": 3,
+    "timeout_seconds": 30,
+}
+
+
+def defaults():
+    return dict(DEFAULTS)
+''',
+    },
+}
+
+HARD_SOLUTIONS.update(SCALE_SOLUTIONS)

@@ -95,6 +95,19 @@ eval-live-hard:
 		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
 		--output-root "$(EVAL_OUTPUT_ROOT)"
 
+# The scale tier. `live_hard` established that indirection is free for a model
+# that reads the whole repo quickly; these make reading everything expensive
+# instead — dozens of near-identical modules where grepping the symptom returns
+# equally plausible hits. If this tier discriminates where `live_hard` did not,
+# that is the evidence T-047 (repo map) is waiting on.
+eval-live-scale:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live_scale \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 # --- OpenAI-compatible retargeting -------------------------------------------
 #
 # The tasks pin Anthropic as their reference profile. These targets retarget the
@@ -126,6 +139,9 @@ eval-live-openai-compatible:
 
 eval-live-hard-openai-compatible:
 	$(OC_ENV) $(MAKE) eval-live-hard REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
+
+eval-live-scale-openai-compatible:
+	$(OC_ENV) $(MAKE) eval-live-scale REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
 
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals

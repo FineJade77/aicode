@@ -690,3 +690,51 @@ def test_the_agent_toolchain_is_recorded_but_not_gated():
         (EVAL_ROOT / "baselines" / "deterministic-smoke.v1.json").read_text(encoding="utf-8")
     )
     assert "agent_toolchain" not in baseline["source_versions"]
+
+
+# --- the scale tier -----------------------------------------------------------
+
+
+def scale_tasks() -> list[EvalTask]:
+    return [load_task(path) for path in discover_tasks(suite="live_scale")]
+
+
+def test_scale_fixtures_are_actually_large():
+    """The tier's whole premise is that reading everything stops being cheap.
+
+    A "scale" task over five files would test nothing the hard tier didn't, so
+    the size is asserted rather than assumed.
+    """
+    for task in scale_tasks():
+        modules = list((EVAL_ROOT / "fixtures" / task.fixture).rglob("*.py"))
+        assert len(modules) >= 30, f"{task.task_id} has only {len(modules)} modules"
+
+
+def test_the_planted_defect_does_not_stand_out_by_shape():
+    """If the broken module were visibly odd, scale would be irrelevant.
+
+    Checked within the peer group the defect hides in — the package of
+    near-identical modules — not across the whole fixture, since a registry that
+    lists every peer is legitimately larger and is not where the bug is.
+    """
+    for task in scale_tasks():
+        root = EVAL_ROOT / "fixtures" / task.fixture
+        package = max(
+            (directory for directory in root.iterdir() if directory.is_dir()),
+            key=lambda directory: len(list(directory.glob("*.py"))),
+        )
+        sizes = sorted(
+            len(path.read_text(encoding="utf-8").splitlines())
+            for path in package.glob("*.py")
+            if path.stat().st_size > 0
+        )
+        assert len(sizes) >= 25, f"{task.task_id}: peer group is too small to hide in"
+        # Widest and narrowest peer within a couple of lines of each other.
+        assert sizes[-1] - sizes[0] <= 2, f"{task.task_id}: peers are not uniform"
+
+
+@pytest.mark.parametrize(
+    "task", [pytest.param(task, id=task.task_id) for task in scale_tasks()]
+)
+def test_every_scale_task_is_solvable(task: EvalTask):
+    assert reference_solutions.verify(task) == []
