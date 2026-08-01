@@ -485,3 +485,39 @@ func TestUncompactedContextBudgetStaysSilent(t *testing.T) {
 		t.Fatalf("expected no output for a no-op budget event, got %q", text)
 	}
 }
+
+func TestRenderHookFinishedListsTheCommands(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":  "hook.finished",
+		"event": "post_edit",
+		"path":  "a.py",
+		"hooks": []any{"ruff format a.py"},
+	})
+	if !strings.Contains(output, "ruff format a.py") {
+		t.Fatalf("expected the hook command in the output, got %q", output)
+	}
+}
+
+func TestRenderHookNotRunExplainsWhy(t *testing.T) {
+	// A hook that did not fire must not look like one that passed.
+	output := captureRenderEvent(map[string]any{
+		"type":   "hook.finished",
+		"event":  "post_edit",
+		"hooks":  []any{},
+		"reason": "workspace is not trusted",
+	})
+	if !strings.Contains(output, "not trusted") {
+		t.Fatalf("expected the skip reason, got %q", output)
+	}
+}
+
+func TestRenderHookBlockedShowsTheReason(t *testing.T) {
+	output := captureRenderEvent(map[string]any{
+		"type":   "hook.blocked",
+		"event":  "pre_bash",
+		"reason": "hook `make lint` failed (exit=1)",
+	})
+	if !strings.Contains(output, "make lint") {
+		t.Fatalf("expected the failing hook, got %q", output)
+	}
+}

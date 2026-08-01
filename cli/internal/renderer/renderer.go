@@ -480,6 +480,16 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		fmt.Fprintf(out, "\n%s: %v\n", approvalOutcomeLabel(event, "Edit rejected", "Edit not approved (approval timed out)"), event["path"])
 	case "edit.auto_approved":
 		fmt.Fprintf(out, "\n[allowed for this session] Edit applied automatically: %v\n", event["path"])
+	case "hook.finished":
+		// A hook that did not fire is reported too. Staying silent about skipped
+		// hooks is how a project's format-on-write quietly stops happening.
+		if reason := stringValue(event["reason"]); reason != "" {
+			fmt.Fprintf(out, "\nProject hooks not run: %s\n", reason)
+		} else {
+			fmt.Fprintf(out, "\nProject hooks ran (%s): %s\n", stringValue(event["event"]), hookList(event["hooks"]))
+		}
+	case "hook.blocked":
+		fmt.Fprintf(out, "\nBlocked by project hook: %s\n", stringValue(event["reason"]))
 	case "usage.recorded":
 		fmt.Fprintln(out, usageLine(event))
 	case "error":
@@ -816,6 +826,25 @@ func sliceValue(value any) []any {
 
 func escapeMarkdownTable(value string) string {
 	return strings.ReplaceAll(value, "|", "\\|")
+}
+
+// hookList renders the commands a hook event reports, so the user sees which
+// project command touched their file rather than an opaque count.
+func hookList(value any) string {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if text := stringValue(item); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func stringValue(value any) string {

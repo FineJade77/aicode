@@ -707,6 +707,18 @@ profile 采用 `(allow default)` + 定点拒绝，而不是 `(deny default)` + �
 
 这套模型的目标是降低本地 Agent 的误操作风险。Agent 命令在 untrusted workspace 下已进入容器隔离；trusted workspace 是用户显式授予的信任，仍在宿主机执行。
 
+### 项目 hooks
+
+`.aicode/config.json` 的 `hooks` 把命令挂在两个工具事件上：`post_edit`（编辑落盘后，用于格式化）与 `pre_bash`（shell 命令前，非零退出即拒绝该命令，用于 lint 门禁）。
+
+**hook 命令与 Agent 命令共用 `run_shell_command` → `ExecutionService` → 审计这条路径，并同样经过 `PolicyEngine`**。这是本特性的约束而非实现细节：如果 hook 绕开这些检查，它就成了"把命令写进配置文件即可执行任意内容"的旁路，而这正是 deny 列表要防的。审计以 `hook.<event>` 标记，backend 由同一个 `resolve_bash_backend` 决定——沙箱化的 workspace 不会因为声明了 hook 就多出一条宿主机执行的侧路。
+
+**untrusted workspace 不执行任何 hook。** `.aicode/config.json` 随仓库分发，hook 因此是仓库作者选择的代码；只要打开目录就执行它，等于 clone 一个恶意仓库便足以运行其命令。这条与"不做静默降级"同源：不执行会显式上报，因为没触发的 hook 不能与通过了的 hook 长得一样。
+
+`{path}` / `{command}` 替换一律 `shlex.quote`。仓库可以包含名为 `a; rm -rf ~.py` 的文件，直接拼接会把 post_edit 格式化变成任意命令执行——这是注入，不是排版。
+
+`post_edit` 结构上无法否决编辑（运行时文件已落盘），失败只上报；能拒绝的只有 `pre_bash`。hook 改写文件后刷新 read 记录，否则模型对同一文件的下一次编辑会被 read-before-write 判为 stale。
+
 ## 19. Agent Eval And Trace
 
 `evals/` 提供独立于真实 provider 的任务级评测层。CI profile 使用 scripted model，但仍调用真实 Agent Loop、ModelRouter、PolicyEngine、ExecutionService、SessionStore 和 compaction 路径，因此可以稳定捕获 Agent 行为回归，而不把外部模型波动引入普通 CI。

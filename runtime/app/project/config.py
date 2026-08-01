@@ -37,6 +37,33 @@ class McpServerRef:
     call_timeout: float = 60.0
 
 
+HOOK_EVENTS = ("post_edit", "pre_bash")
+MAX_HOOKS = 20
+DEFAULT_HOOK_TIMEOUT = 60.0
+MAX_HOOK_TIMEOUT = 600.0
+
+
+@dataclass(slots=True)
+class HookRef:
+    """One command the project wants run around a tool event.
+
+    `post_edit` fires after an edit lands (format the file that was written).
+    `pre_bash` fires before a shell command runs and can refuse it on a non-zero
+    exit, which is what makes a "lint before commit" gate possible.
+
+    `match` is a glob against the edited path or the shell command; empty
+    matches everything.
+    """
+
+    event: str
+    command: str
+    match: str = ""
+    timeout: float = DEFAULT_HOOK_TIMEOUT
+    # Only meaningful for `pre_bash`. A post_edit hook cannot block anything —
+    # the edit is already on disk by the time it runs.
+    blocking: bool = True
+
+
 @dataclass(slots=True)
 class ExecutionConfig:
     """Project-level override for where Agent shell commands run.
@@ -100,6 +127,7 @@ class ProjectConfig:
     review: ReviewConfig = field(default_factory=ReviewConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     mcp_servers: list[McpServerRef] = field(default_factory=list)
+    hooks: list[HookRef] = field(default_factory=list)
 
 
 def load_project_config(workspace: Path) -> ProjectConfig:
@@ -131,7 +159,47 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
         review=parse_review_config(review),
         execution=parse_execution_config(execution),
         mcp_servers=parse_mcp_servers(mcp),
+        hooks=parse_hooks(raw.get("hooks")),
     )
+
+
+def parse_hooks(raw: Any) -> list[HookRef]:
+    """Read the project's hook declarations, dropping anything malformed.
+
+    An unknown event name is skipped rather than defaulted onto a real event: a
+    typo must not silently attach a command to a different trigger than the one
+    the author wrote.
+    """
+    if not isinstance(raw, list):
+        return []
+    hooks: list[HookRef] = []
+    for entry in raw[:MAX_HOOKS]:
+        if not isinstance(entry, dict):
+            continue
+        event = str(entry.get("event") or "").strip()
+        command = str(entry.get("command") or "").strip()
+        if event not in HOOK_EVENTS or not command:
+            continue
+        hooks.append(
+            HookRef(
+                event=event,
+                command=command,
+                match=str(entry.get("match") or "").strip(),
+                timeout=_hook_timeout(entry.get("timeout")),
+                blocking=entry.get("blocking") is not False,
+            )
+        )
+    return hooks
+
+
+def _hook_timeout(raw: Any) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_HOOK_TIMEOUT
+    if value <= 0:
+        return DEFAULT_HOOK_TIMEOUT
+    return min(value, MAX_HOOK_TIMEOUT)
 
 
 def parse_mcp_servers(raw: Any) -> list[McpServerRef]:

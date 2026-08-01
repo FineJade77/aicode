@@ -123,6 +123,25 @@
     },
     {
       "event_id": 14,
+      "type": "hook.finished",
+      "event": "post_edit",
+      "path": "app.py",
+      "tool_call_id": "tc_1",
+      "hooks": [
+        "ruff format {path}"
+      ]
+    },
+    {
+      "event_id": 15,
+      "type": "hook.blocked",
+      "event": "pre_bash",
+      "hooks": [
+        "make lint"
+      ],
+      "reason": "hook `make lint` failed (exit=1)"
+    },
+    {
+      "event_id": 16,
       "type": "edit.applied",
       "run_id": "run_fixture",
       "path": "app.py",
@@ -132,14 +151,14 @@
       "duration_ms": 8
     },
     {
-      "event_id": 15,
+      "event_id": 17,
       "type": "edit.rejected",
       "run_id": "run_fixture",
       "path": "config.py",
       "tool_call_id": "tool_edit_rejected"
     },
     {
-      "event_id": 16,
+      "event_id": 18,
       "type": "usage.recorded",
       "run_id": "run_fixture",
       "provider": "fixture",
@@ -150,7 +169,7 @@
       "estimated_cost": 0
     },
     {
-      "event_id": 17,
+      "event_id": 19,
       "type": "context.budget",
       "run_id": "run_fixture",
       "purpose": "history",
@@ -162,21 +181,21 @@
       ]
     },
     {
-      "event_id": 18,
+      "event_id": 20,
       "type": "run.cancelled",
       "run_id": "run_fixture",
       "status": "cancelled",
       "message": "The current run was cancelled."
     },
     {
-      "event_id": 19,
+      "event_id": 21,
       "type": "error",
       "run_id": "run_fixture",
       "error": "Agent execution failed",
       "error_type": "RuntimeError"
     },
     {
-      "event_id": 20,
+      "event_id": 22,
       "type": "run.steer.queued",
       "run_id": "run_fixture",
       "status": "queued",
@@ -184,7 +203,7 @@
       "message": "Steering guidance queued."
     },
     {
-      "event_id": 21,
+      "event_id": 23,
       "type": "run.steer.applied",
       "run_id": "run_fixture",
       "count": 1,
@@ -192,7 +211,7 @@
       "message": "Steering guidance applied."
     },
     {
-      "event_id": 22,
+      "event_id": 24,
       "type": "run.budget.exceeded",
       "run_id": "run_fixture",
       "reason": "cost",
@@ -203,7 +222,7 @@
       "message": "The cost budget for this turn is exhausted; wrapping up without further tool calls."
     },
     {
-      "event_id": 23,
+      "event_id": 25,
       "type": "mcp.server.started",
       "server": "files",
       "tools": [
@@ -213,14 +232,14 @@
       "message": "MCP server 'files' started with 2 tools."
     },
     {
-      "event_id": 24,
+      "event_id": 26,
       "type": "mcp.server.failed",
       "server": "broken",
       "error": "RuntimeError: server exited during handshake",
       "message": "MCP server 'broken' did not start; its tools are unavailable."
     },
     {
-      "event_id": 25,
+      "event_id": 27,
       "type": "plan.updated",
       "items": [
         {
@@ -239,7 +258,7 @@
       "message": "Plan updated (3 items)."
     },
     {
-      "event_id": 26,
+      "event_id": 28,
       "type": "verify.attempt",
       "round": 1,
       "limit": 3,
@@ -249,7 +268,7 @@
       "message": "Verification attempt 1 of 3 failed (exit 1)."
     },
     {
-      "event_id": 27,
+      "event_id": 29,
       "type": "run.verification.exhausted",
       "run_id": "run_fixture",
       "rounds": 3,
@@ -267,10 +286,10 @@
       "limit": 5,
       "stopped": true,
       "message": "No progress: the same action repeated 5 times; wrapping up with a report.",
-      "event_id": 28
+      "event_id": 30
     },
     {
-      "event_id": 29,
+      "event_id": 31,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

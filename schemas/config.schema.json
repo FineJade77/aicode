@@ -136,6 +136,45 @@
         }
       },
       "additionalProperties": true
+    },
+    "hooks": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Commands run around tool events. 'post_edit' runs after an edit lands (format what was written) and cannot veto it; 'pre_bash' runs before a shell command and refuses it on a non-zero exit, which is how a lint gate before commit works. Hook commands go through the same execution, policy and audit path as Agent commands, and are ignored entirely in an untrusted workspace because a hook is code chosen by whoever wrote the repository.",
+      "items": {
+        "type": "object",
+        "required": [
+          "event",
+          "command"
+        ],
+        "properties": {
+          "event": {
+            "enum": [
+              "post_edit",
+              "pre_bash"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shell command. {path} and {command} are substituted shell-quoted."
+          },
+          "match": {
+            "type": "string",
+            "description": "Glob against the edited path or the shell command; omit to match everything."
+          },
+          "timeout": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 600
+          },
+          "blocking": {
+            "type": "boolean",
+            "description": "pre_bash only: refuse the command when the hook fails. Default true."
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": true

@@ -22,6 +22,7 @@ from app.models.provider import (
 )
 from app.security import stable_hash
 from app.tools.edit import file_hash
+from app.tools.hooks import hook_event_payload, run_hooks
 
 
 class AgentLoop:
@@ -760,6 +761,23 @@ async def execute_edit(
         )
         marker = " stale" if "Stale" in exc.__class__.__name__ else ""
         return ToolCallResult(f"[edit failed{marker}] {exc}", ok=False)
+    # Runs after the edit is on disk, so it cannot veto it — a formatter's job is
+    # to fix up what was written, not to gate it. Its output goes back to the
+    # model because a reformat changes the file the model believes it just wrote.
+    hook_outcome = await run_hooks(
+        context,
+        "post_edit",
+        target=proposal.path,
+        values={"path": proposal.path},
+    )
+    if hook_outcome.ran or hook_outcome.reason:
+        await session.events.put(
+            hook_event_payload("post_edit", hook_outcome, path=proposal.path, tool_call_id=call.id)
+        )
+        # The file on disk may no longer match what was applied, so the read
+        # record has to be refreshed or the next edit would be called stale.
+        if hook_outcome.ran:
+            record_written_file(session, workspace, proposal)
     duration_ms = elapsed_ms(started, runtime)
     patch_hash = stable_hash(proposal.diff)
     if runtime.trace is not None:

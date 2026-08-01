@@ -393,6 +393,27 @@ macOS 之外目前不支持：Linux 需要 landlock 或 bubblewrap，而**声称
 
 取值非法时回落到"继承 Runtime 设置"，而不是回落到宽松默认。
 
+### hooks：在工具事件上挂命令
+
+两个触发点，对应两件真实需求：`post_edit` 在编辑落盘后跑（格式化刚写的文件），`pre_bash` 在 shell 命令前跑，**非零退出会拒绝该命令**——"提交前必须过 lint"就是这么实现的。
+
+```json
+{
+  "hooks": [
+    { "event": "post_edit", "match": "*.py", "command": "ruff format {path}" },
+    { "event": "pre_bash", "match": "git commit*", "command": "make lint-python" }
+  ]
+}
+```
+
+`{path}` / `{command}` substitution **一律 shell 转义**：仓库里可以存在名为 `a; rm -rf ~.py` 的文件，原样拼进命令行就把"格式化我刚写的文件"变成了任意命令执行。
+
+三条纪律：
+
+- **hook 命令与 Agent 命令走同一条执行、policy 与审计路径**。否则等于开了一个绕过 policy 的旁路——把命令写进配置文件不该成为绕开 deny 列表的方法。审计记录以 `hook.<event>` 标记，落点 backend 与 Agent 命令一致。
+- **untrusted workspace 完全不跑 hook**。`.aicode/config.json` 是跟着仓库来的,hook 就是仓库作者选的代码;仅仅因为用户打开了这个目录就执行它,等于 clone 一个恶意仓库就足以执行其命令。不跑会**明确报出来**,而不是静默跳过——没触发的 hook 不能看起来像通过了的 hook。
+- **`post_edit` 不能否决编辑**(它跑的时候文件已经在盘上了),失败只上报;能拒绝的只有 `pre_bash`。hook 改写文件后会刷新 read 记录,否则模型对同一文件的下一次编辑会被判为 stale。
+
 命令被路由到 docker 但 Docker 不可用时，`bash` 会**直接失败并说明如何处理**，不会静默回退到宿主机执行——回退会让这个安全边界失去意义。同理，沙箱不会隐式拉取镜像：镜像缺失立即失败并提示 `docker pull`，`aicode doctor` 也会提前报告缺失的镜像。
 
 Host shell 同时经过命令风险与路径风险检查：

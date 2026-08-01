@@ -33,6 +33,8 @@ EVENT_TYPES = frozenset(
         "edit.applied",
         "edit.rejected",
         "edit.auto_approved",
+        "hook.finished",
+        "hook.blocked",
         "usage.recorded",
         "context.budget",
         "error",

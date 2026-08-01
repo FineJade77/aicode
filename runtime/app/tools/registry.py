@@ -47,6 +47,7 @@ from app.tools.command import run_command, run_shell_command
 from app.tools.edit import file_hash
 from app.tools.file import ListFilesTool
 from app.tools.glob import DEFAULT_GLOB_RESULTS, MAX_GLOB_RESULTS, GlobTool
+from app.tools.hooks import run_hooks
 from app.tools.related import RelatedFilesTool
 from app.tools.review import ReviewDiffTool
 
@@ -530,6 +531,7 @@ def build_tool_context(
         session=session,
         approvals=approvals,
         bash_backend=project_config.execution.agent_bash_backend or settings.execution.agent_bash_backend,
+        hooks=project_config.hooks,
     )
 
 
@@ -992,6 +994,17 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
             ),
             risk_level="high",
             data={"backend": "docker", "status": "unavailable", "trust_level": context.trust_level},
+        )
+    gate = await run_hooks(context, "pre_bash", target=command, values={"command": command})
+    if not gate.ok:
+        # The hook refused, so the command must not run. Reported as a tool
+        # failure rather than an error so the model can react to the lint output
+        # instead of the turn ending.
+        return ToolResult(
+            success=False,
+            error=f"blocked by project hook: {gate.reason}\n{gate.output}".strip(),
+            risk_level="medium",
+            data={"status": "blocked_by_hook", "hook": gate.blocked_by, "hooks_ran": gate.ran},
         )
     result = await run_shell_command(
         command,

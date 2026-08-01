@@ -910,9 +910,20 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - `ExecutionRequest.__post_init__` 的 backend 白名单同步放行 `os`（原先只认 host/docker，新 backend 会在构造期就被拒）。
 - 验证：Python 580 项 + 1 skip（其中 19 项新增，非 macOS 上按平台跳过）、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（无 baseline 变更）、clean-home install E2E 通过。
 
-### `[ ]` T-045 hooks
+### `[x]` T-045 hooks
 
 对应：评审 E2。范围：允许在工具事件上挂命令（写入后 format、提交前 lint 门禁）。**hook 命令必须与 Agent 命令走同一执行与审计路径**，否则等于开了一个绕过 policy 的旁路。
+
+完成记录（2026-08-01）：
+
+- 两个触发点：`post_edit`（编辑落盘后，格式化）与 `pre_bash`（shell 命令前，非零退出即拒绝该命令）。`.aicode/config.json` 的 `hooks` 数组声明，含 `match` glob、`timeout`、`blocking`。
+- **hook 命令走 `run_shell_command` → `ExecutionService` → 审计，并同样经过 `PolicyEngine.gate_bash`**。这是任务的硬约束：绕开就等于"把命令写进配置文件即可绕过 deny 列表"。审计以 `hook.<event>` 标记；backend 由同一个 `resolve_bash_backend` 决定，沙箱化 workspace 不会因声明 hook 而多出宿主机执行的侧路。`test_a_hook_cannot_reach_past_policy` 与 `test_hook_execution_is_audited_like_an_agent_command` 覆盖。
+- **untrusted workspace 完全不执行 hook**（范围外但必要）。`.aicode/config.json` 随仓库分发，hook 就是仓库作者选的代码——只要打开目录就执行它，等于 clone 一个恶意仓库便足以运行其命令。与"不做静默降级"同源：不执行会**显式上报**，因为没触发的 hook 不能与通过了的 hook 长得一样。
+- **`{path}` / `{command}` 替换一律 `shlex.quote`**。仓库可以包含名为 `a; rm -rf ~.py` 的文件，原样拼接会把"格式化刚写的文件"变成任意命令执行——这是注入不是排版。`test_a_hostile_filename_cannot_run_a_second_command` 用真实文件验证。
+- `post_edit` 结构上无法否决编辑（运行时文件已落盘），失败只上报；能拒绝的只有 `pre_bash`。**hook 改写文件后刷新 read 记录**，否则模型对同一文件的下一次编辑会被 read-before-write 判为 stale——这一条由端到端测试（真实 loop 跑一次编辑 + 格式化 hook）钉住。
+- 未知 event 名直接丢弃而非落到默认值：拼错不能把命令悄悄挂到另一个触发点上。
+- 新增事件 `hook.finished` / `hook.blocked` 同步进 `events.py` 允许表、`schemas/events.schema.json` 与 SSE fixture；Go renderer 给出可读输出而不是原始 JSON dump，跳过原因也会渲染。
+- 验证：Python 670 项 + 1 skip（其中 20 项新增）、Go 全量、gofmt、go vet、ruff、eval-smoke PASS。
 
 ### `[ ]` T-046 session fork
 

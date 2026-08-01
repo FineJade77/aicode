@@ -30,8 +30,22 @@ class ToolContext:
     run_id: str = ""
     tool_call_id: str = ""
     trust_level: str = "trusted"
-    # "auto" | "host" | "docker" — resolved against trust_level at call time.
+    # "auto" | "host" | "docker" | "os" — resolved against trust_level at call time.
     bash_backend: str = "auto"
+    # Project-declared commands attached to tool events. Typed loosely for the
+    # same reason as `session`: the tool layer does not import the project config
+    # model just to carry it.
+    hooks: list[Any] = field(default_factory=list)
+
+    def resolved_bash_backend(self) -> str:
+        """The concrete backend this context's shell commands land on.
+
+        Hooks run wherever Agent commands run, so a sandboxed workspace does not
+        gain a host-executing side channel by declaring one.
+        """
+        from app.tools.registry import resolve_bash_backend
+
+        return resolve_bash_backend(self.bash_backend, self.trust_level)
 
 
 @dataclass(slots=True)
