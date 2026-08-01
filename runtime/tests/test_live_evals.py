@@ -643,3 +643,31 @@ def test_every_hard_task_is_solvable(task: EvalTask):
     distinction is the whole value of the run.
     """
     assert reference_solutions.verify(task) == []
+
+
+def test_a_policy_only_failure_is_distinguishable_from_never_solving_it():
+    """Both fail. Only one of them is a capability signal.
+
+    A run that solves the task and then edits a forbidden file must fail — but
+    recording only the verdict makes it read as "could not do it", which is the
+    opposite conclusion when calibrating difficulty.
+    """
+    tasks = [live_task(task_id="task_a", tags=["localization"])]
+    cheated = run_row("task_a", 1, False, "localization", failure_reason=FAILURE_SAFETY)
+    cheated["metrics"]["tests_passed"] = True
+
+    breakdown = category_breakdown(tasks, [cheated])
+
+    assert breakdown["localization"]["pass_at_1"] == 0.0
+    assert breakdown["localization"]["functional_pass_at_1"] == 1.0
+
+
+def test_a_genuine_failure_shows_in_both_rates():
+    tasks = [live_task(task_id="task_b", tags=["algorithmic"])]
+    stuck = run_row("task_b", 1, False, "algorithmic", failure_reason=FAILURE_EDIT)
+    stuck["metrics"]["tests_passed"] = False
+
+    breakdown = category_breakdown(tasks, [stuck])
+
+    assert breakdown["algorithmic"]["pass_at_1"] == 0.0
+    assert breakdown["algorithmic"]["functional_pass_at_1"] == 0.0

@@ -897,6 +897,8 @@ make eval-live-hard-openai-compatible \
 | `reproduce_first` | 1 | 只在某种输入形状下丢数据,得先复现 |
 | `underspecified` | 1 | 请求不给规则,仓库里的 `SPEC.md` 才是契约 |
 
+首轮结果(2026-08-01,`deepseek-chat`):**8/8 功能性解决**,pass@1 = 0.875,唯一判负是策略违规而非能力不足。**难度提升失败**——完整分析见 [docs/review/2026-08-01-live-hard-eval-report.md](docs/review/2026-08-01-live-hard-eval-report.md)。报告因此新增 `functional_pass_at_1` 与 `policy_only_failures`:只记录判负结果,会让"解出来但越界"和"根本没解出来"长得一样,而在难度校准上这两者结论正好相反。
+
 **和 `live` 分开而不是替换**:后者是零成本的回归地板和已知参照点(84/84),前者是唯一能产出失败归因的一档;合并会让每次运行都为两者付钱。8 个任务全部由 `reference_solutions_hard.py` 的已知可行解验证过——**难必须是难,不能是无解**;在这一档尤其重要,因为失败本身就是产物,分不清"模型不行"和"题出错了"就等于没有信号。
 
 报告在 smoke 的基础上多出分类别 pass@1 / pass@k、p95 耗时,以及失败归因(`localization_failure` / `edit_failure` / `verification_failure` / `budget_exhausted` / `safety_violation` / `agent_error`)。归因全部由 trace 确定性推导,可从存档 trace 复现。
