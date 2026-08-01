@@ -775,6 +775,24 @@ make eval-live REPETITIONS=1        # 先跑一遍看看
 make eval-live LIVE_MODEL=claude-opus-5
 ```
 
+跑 OpenAI-compatible endpoint（DeepSeek、Ollama、vLLM、LM Studio 等）：
+
+```bash
+export OPENAI_API_KEY="..."         # 变量名由 AICODE_OPENAI_API_KEY_ENV 决定
+make eval-live-openai-compatible REPETITIONS=1
+
+# 换模型时价格与上下文窗口必须一起给，否则成本列描述的是一个从没被收过的价格
+make eval-live-openai-compatible \
+  OC_BASE_URL=https://api.deepseek.com/v1 \
+  OC_MODEL=deepseek-v4-pro \
+  OC_CONTEXT_WINDOW=131072 \
+  OC_INPUT_PER_1M=0.28 OC_OUTPUT_PER_1M=0.42
+```
+
+任务里 pin 的是 Anthropic 作为**参考 profile**（保证已发布数字可复现）；`--live-profile` 是一个 JSON,merge 进每个 live task 的 profile。**provider / context_window / 价格必须一起覆盖**——三者不独立:只换 provider 会留下原来的 200k 窗口和 Anthropic 价格,于是同时撒两个谎(harness 以为自己有并不存在的上下文因而从不压缩,报告按一个从没跑过的模型计价)。覆盖值会被重新校验而不是就地打补丁,非法 provider 或负价格在这里就失败,而不是在付费跑到一半时以困惑的形式冒出来。
+
+`make eval-live-openai-compatible` 的默认值描述的是 DeepSeek 公开的 `deepseek-chat`。换任何别的模型都要自己给 `OC_MODEL` / `OC_CONTEXT_WINDOW` 与两个价格。key 只从环境变量读,**不会去读 CLI 的 `config.toml`**。
+
 **scripted suite 仍然是 CI 门禁**,live suite 不进 PR CI。零成本、零抖动的回归检测是 live suite 给不了的,所以它是并行新增的第二条链路而不是替代品。`make eval-live` 会花真钱,因此不在 `make test` 里。
 
 28 个任务分五类:

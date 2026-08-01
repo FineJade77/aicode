@@ -733,6 +733,8 @@ live 的预算是**硬停**而非事后统计：超限中止运行，因为超�
 
 live settings 取环境里的 credential 与 base URL，但**不取**环境里的 model route、context window 与价格——那三样来自 task，否则报告的成本列描述的是开发者 shell 恰好设成了什么。
 
+task 里 pin 的 profile 是**参考 profile**，保证已发布数字可复现；`--live-profile`（JSON，merge 进 profile）用于把同一套任务集重定向到别的 provider。整个 profile 作为**一个单元**覆盖，而不是只开放 provider：provider、context window 与价格并不独立，只换 provider 会留下原窗口与原价格，于是同时产生两个静默错误——harness 以为自己有并不存在的上下文因而从不压缩，报告按一个从未运行过的模型计价。覆盖值走完整校验而非就地打补丁，非法 provider 或负价格在启动时失败，而不是在付费跑到一半时以困惑的形式出现。
+
 ### mutation check
 
 "Agent 补了测试"这件事没法靠"套件通过"判定——空测试文件也通过。`checks.mutations` 声明一处蓄意缺陷，grader 把它打进工作区**副本**再跑测试命令，要求失败。

@@ -30,7 +30,7 @@ from app.tools.runtime import DefaultToolRuntime
 from app.tools.workspace import LocalWorkspaceRuntime
 from app.usage.pricing import ModelPrice
 from evals import EVAL_CONTRACT_VERSION, REPORT_SCHEMA_VERSION, RUNNER_VERSION, TRACE_SCHEMA_VERSION
-from evals.contracts import EvalTask, load_task, task_digest
+from evals.contracts import EvalTask, ModelProfile, load_task, task_digest
 from evals.graders.deterministic import GradeContext, grade_task
 from evals.provider import LiveEvalProvider, ScriptedEvalProvider
 from evals.trace import (
@@ -84,15 +84,16 @@ async def run_suite(
     baseline_path: Path | None = None,
     keep_workspaces: bool = False,
     live_model: str | None = None,
+    live_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("repetitions must be at least 1")
     tasks = [(path, load_task(path)) for path in task_paths]
-    if live_model:
-        # Applied to live tasks only. Silently rewriting a scripted task's model
-        # would make its recorded baseline meaningless.
+    # Applied to live tasks only. Silently rewriting a scripted task's profile
+    # would make its recorded baseline meaningless.
+    if live_profile or live_model:
         tasks = [
-            (path, task.model_copy(update={"live_model": live_model}) if task.is_live else task)
+            (path, override_live_profile(task, live_profile, live_model) if task.is_live else task)
             for path, task in tasks
         ]
     # Checked before any directory is created or any request is sent: a live
@@ -413,6 +414,36 @@ def build_settings(task: EvalTask) -> Settings:
             "pricing": pricing,
         }
     )
+
+
+def override_live_profile(
+    task: EvalTask,
+    live_profile: dict[str, Any] | None,
+    live_model: str | None,
+) -> EvalTask:
+    """Retarget a live task at a different provider or model.
+
+    The whole profile is overridable as one unit rather than the provider alone,
+    because provider, context window and price are not independent. Pointing an
+    Anthropic-pinned task at an OpenAI-compatible endpoint while keeping the
+    original 200k window and per-token prices produces two silent lies: the
+    harness believes it has context it does not have and never compacts, and the
+    report's cost column prices the run against a model that never ran.
+
+    Re-validated rather than patched in place, so an unsupported provider or a
+    negative price is rejected here instead of surfacing as a confusing failure
+    part-way through a paid run.
+    """
+    merged = {**task.profile.model_dump(), **(live_profile or {})}
+    profile = ModelProfile.model_validate(merged)
+    update: dict[str, Any] = {"profile": profile}
+    # `--live-model` is shorthand and applies last, so it wins over a `model`
+    # inside `--live-profile`.
+    if live_model:
+        update["live_model"] = live_model
+    elif live_profile and "model" in live_profile:
+        update["live_model"] = profile.model
+    return task.model_copy(update=update)
 
 
 def build_provider(task: EvalTask, settings: Settings) -> Any:

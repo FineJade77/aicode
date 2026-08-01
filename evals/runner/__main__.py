@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -25,6 +26,17 @@ def parse_args() -> argparse.Namespace:
             "task set can be run against several models without editing the tasks."
         ),
     )
+    parser.add_argument(
+        "--live-profile",
+        help=(
+            "Live tasks only: JSON merged into each task's profile, e.g. "
+            '\'{"provider": "openai_compatible", "model": "deepseek-chat", '
+            '"context_window": 65536, "input_per_1m": 0.28, "output_per_1m": 0.42}\'. '
+            "Provider, context window and price move together because they are not "
+            "independent: retargeting the provider alone would keep the original "
+            "window and prices, which misreports both compaction and cost."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -45,6 +57,14 @@ async def async_main() -> int:
     baseline = args.baseline
     if baseline is not None and not baseline.is_absolute():
         baseline = REPOSITORY_ROOT / baseline
+    live_profile = None
+    if args.live_profile:
+        try:
+            live_profile = json.loads(args.live_profile)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"--live-profile is not valid JSON: {exc}") from exc
+        if not isinstance(live_profile, dict):
+            raise SystemExit("--live-profile must be a JSON object")
     try:
         report = await run_suite(
             tasks,
@@ -53,6 +73,7 @@ async def async_main() -> int:
             baseline_path=baseline,
             keep_workspaces=args.keep_workspaces,
             live_model=args.live_model,
+            live_profile=live_profile,
         )
     except RuntimeError as exc:
         # A refused preflight is a configuration problem the user can fix, not a

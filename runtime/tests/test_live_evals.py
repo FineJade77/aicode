@@ -32,6 +32,7 @@ from evals.runner.core import (
     category_breakdown,
     discover_tasks,
     failure_reason,
+    override_live_profile,
     percentile,
     preflight_live_tasks,
     task_category,
@@ -228,6 +229,51 @@ def test_build_provider_picks_the_mode(monkeypatch):
 
     scripted = load_task(EVAL_ROOT / "tasks" / "smoke" / "single_file_fix.json")
     assert not isinstance(build_provider(scripted, build_settings(scripted)), LiveEvalProvider)
+
+
+def test_the_profile_override_retargets_provider_window_and_price_together():
+    """Retargeting the provider alone would misreport compaction and cost."""
+    task = live_task()
+    override = {
+        "provider": "openai_compatible",
+        "model": "deepseek-chat",
+        "context_window": 65536,
+        "input_per_1m": 0.28,
+        "output_per_1m": 0.42,
+    }
+
+    retargeted = override_live_profile(task, override, None)
+    settings = build_settings(retargeted)
+
+    assert retargeted.profile.provider == "openai_compatible"
+    assert settings.provider.type == "openai_compatible"
+    # The window the harness plans compaction against must be the real one.
+    assert settings.context.model_context_windows["openai_compatible:deepseek-chat"] == 65536
+    price = settings.pricing.model_prices["openai_compatible/deepseek-chat"]
+    assert (price.input_per_1m, price.output_per_1m) == (0.28, 0.42)
+
+
+def test_the_profile_override_is_validated_not_patched():
+    """A bad override must fail here, not part-way through a paid run."""
+    with pytest.raises(ValueError):
+        override_live_profile(live_task(), {"provider": "not_a_provider"}, None)
+
+
+def test_live_model_wins_over_a_model_inside_the_profile_override():
+    task = override_live_profile(live_task(), {"model": "deepseek-chat"}, "deepseek-reasoner")
+    assert task.live_model == "deepseek-reasoner"
+    assert build_settings(task).models.main == "deepseek-reasoner"
+
+
+def test_a_profile_override_alone_still_selects_the_model():
+    task = override_live_profile(live_task(), {"model": "deepseek-chat"}, None)
+    assert build_settings(task).models.main == "deepseek-chat"
+
+
+def test_the_override_leaves_scripted_tasks_alone():
+    """Rewriting a scripted task's profile would void its recorded baseline."""
+    scripted = load_task(EVAL_ROOT / "tasks" / "smoke" / "single_file_fix.json")
+    assert not scripted.is_live
 
 
 @pytest.mark.asyncio

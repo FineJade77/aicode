@@ -80,7 +80,32 @@ eval-live:
 		--suite live \
 		--repetitions $(REPETITIONS) \
 		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
 		--output-root "$(EVAL_OUTPUT_ROOT)"
+
+# The tasks pin Anthropic as their reference profile. This retargets the same
+# task set at an OpenAI-compatible endpoint, overriding provider, context window
+# and price together: keeping the Anthropic 200k window and per-token prices
+# would misreport both compaction and cost.
+#
+# Every value is overridable because none of them is knowable from here. The
+# defaults describe DeepSeek's public `deepseek-chat`; a different model needs
+# at least OC_MODEL, OC_CONTEXT_WINDOW and the two prices, or the report's cost
+# column will confidently describe a price that was never charged.
+#
+# The key goes in whichever variable AICODE_OPENAI_API_KEY_ENV names
+# (OPENAI_API_KEY by default) — it is never read from the CLI's config.toml.
+OC_BASE_URL ?= https://api.deepseek.com/v1
+OC_MODEL ?= deepseek-chat
+OC_CONTEXT_WINDOW ?= 65536
+OC_MAX_OUTPUT_TOKENS ?= 8192
+OC_INPUT_PER_1M ?= 0.28
+OC_OUTPUT_PER_1M ?= 0.42
+eval-live-openai-compatible:
+	AICODE_PROVIDER_TYPE=openai_compatible \
+	AICODE_OPENAI_BASE_URL="$(OC_BASE_URL)" \
+	$(MAKE) eval-live REPETITIONS=$(REPETITIONS) \
+		LIVE_PROFILE='{"provider":"openai_compatible","model":"$(OC_MODEL)","context_window":$(OC_CONTEXT_WINDOW),"max_output_tokens":$(OC_MAX_OUTPUT_TOKENS),"input_per_1m":$(OC_INPUT_PER_1M),"output_per_1m":$(OC_OUTPUT_PER_1M)}'
 
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals
