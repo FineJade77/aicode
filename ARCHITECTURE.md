@@ -684,10 +684,22 @@ Agent `bash` 的落点由 `execution.agent_bash_backend` 与 workspace trust lev
 | `auto`（默认） | host | docker |
 | `host` | host | host |
 | `docker` | docker | docker |
+| `os` | OS 沙箱 | OS 沙箱 |
 
 - Runtime 级：环境变量 `AICODE_AGENT_BASH_BACKEND`。
 - 项目级：`.aicode/config.json` 的 `execution.agentBashBackend`；取值非法时回落到"继承 Runtime 设置"，而不是回落到宽松默认——配置里的拼写错误绝不能悄悄削弱沙箱。
+- macOS 之外不支持 `os`：Linux 需要 landlock 或 bubblewrap，而声称一条并未生效的边界比明说不支持更糟，因此非 macOS 上选 `os` 会直接失败。
 - system prompt 会声明当前的执行环境（是否禁网），使模型不会围绕它并不具备的能力做计划。
+
+#### OS 级沙箱（`os`）
+
+平台自带沙箱（macOS seatbelt）作为容器之外的第二种隔离后端。它启动是毫秒级、不依赖任何镜像，因此**"默认沙箱"对 trusted workspace 也成立**——容器太重正是 trusted 至今裸跑的原因。它比容器弱：同一文件系统命名空间、同一内核、无资源限制。因此它是一个**独立选项，而不是 `auto` 替用户做的替换**；`auto` 的语义保持不变。
+
+profile 采用 `(allow default)` + 定点拒绝，而不是 `(deny default)` + 白名单。deny-by-default 需要枚举真实工具链触碰的每一个 mach service、sysctl 与共享内存区；名单列漏不会削弱沙箱，只会让编译器以"莫名其妙的工具失败"的形式崩掉。真正要守的两条——**工作区之外不可写**与**禁网**——不需要那份名单也能强制。protected paths 另行禁读，且必须排在广泛读许可**之后**（seatbelt 取最后一条匹配规则）。
+
+系统临时目录保持可写：无法创建临时文件的构建工具不是被沙箱化了，只是坏了。profile 里的路径经过转义——路径含引号会提前终止字符串并改变规则语义，那是注入而非排版问题。
+
+后台命令不走 `ExecutionRequest`，因此沙箱包装在那条路径上**显式再做一次**；否则选了 OS 沙箱恰好会豁免最需要它的长时命令。
 
 **不做静默降级**：当命令被路由到 docker 但 Docker CLI 不可用时，`bash` 直接失败并提示用户启动 Docker、执行 `aicode project trust add`，或显式改配置为 `host`。回退到宿主机执行会把一个安全边界变成安慰剂，因此这条路径由 `test_bash_fails_loudly_when_sandbox_is_unavailable` 与评测任务 `untrusted_bash_sandboxed` 双重锁定。
 

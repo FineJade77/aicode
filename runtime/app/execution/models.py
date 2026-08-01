@@ -55,7 +55,7 @@ class ExecutionRequest:
         has_shell = bool(self.shell_command and self.shell_command.strip())
         if has_argv == has_shell:
             raise ValueError("ExecutionRequest must set exactly one of argv or shell_command")
-        if self.backend not in {"host", "docker"}:
+        if self.backend not in {"host", "docker", "os"}:
             raise ValueError(f"unsupported execution backend: {self.backend}")
         if not self.execution_id.strip():
             raise ValueError("execution_id must not be empty")

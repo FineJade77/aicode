@@ -895,9 +895,20 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - 进程组终止用 T-035 时重写的 pid 断言（`process_helpers`）验证，不是靠 marker 计时推断；跑完全量套件后实测无残留进程。
 - 验证：Python 561 项 + 1 skip、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（仅 `tool_specs_sha256` 变更）、clean-home install E2E 通过。
 
-### `[ ]` T-044 OS 级沙箱
+### `[x]` T-044 OS 级沙箱
 
 对应：评审 E1。Codex 用 seatbelt / landlock，启动毫秒级、无镜像依赖。当前 trusted workspace 只能裸跑，正是因为容器太重（T-015 因此要求显式预拉镜像）。OS 级沙箱能让"默认沙箱"对 trusted 也成立。契约已就绪，属新增 backend 而非改结构。
+
+完成记录（2026-08-01）：
+
+- 新增 `app/execution/sandbox_os.py`（macOS seatbelt）与 backend 取值 `os`，贯通 Runtime settings、`.aicode/config.json`、`schemas/config.schema.json`、README 与 ARCHITECTURE。包装 host backend 而非重写：进程组、超时、取消、输出抽干都已解决，唯一差别是启动 shell 的 argv。
+- **profile 用 `(allow default)` + 定点拒绝，不是 `(deny default)` + 白名单**。deny-by-default 要枚举真实工具链触碰的每个 mach service / sysctl / 共享内存区；名单列漏不会削弱沙箱，只会让编译器以"莫名其妙的工具失败"崩掉。真正要守的两条——工作区外不可写、禁网——不需要那份名单也能强制。protected paths 另行禁读且必须排在广泛读许可**之后**（seatbelt 取最后一条匹配规则）。路径做转义：含引号的路径会提前终止字符串并改变规则语义，那是注入不是排版。
+- **刻意没有改 `auto` 的语义**，尽管任务背景提到"让默认沙箱对 trusted 也成立"。翻默认值要么给 untrusted 悄悄降级隔离强度（seatbelt 弱于容器：同一文件系统命名空间、同一内核、无资源限制），要么给 trusted 加上禁网/受限写而打断现有工作流——两者都不该作为"新增一个 backend"的副作用发生。`os` 是显式选项，`auto` 行为不变，`test_auto_is_unchanged_by_adding_the_backend` 钉住这一点。是否翻默认值留给用户单独决定。
+- macOS 之外直接失败并说明原因：Linux 需要 landlock 或 bubblewrap，**声称一条并未生效的边界比明说不支持更糟**。沙箱不可用时与 Docker 不可用同源——拒绝，绝不回退到裸跑。
+- **实现中发现并堵上一个自己刚造的洞**：后台命令（T-043）不走 `ExecutionRequest`，因此选了 `os` 之后后台命令会**完全不受沙箱约束**——恰好豁免了最需要它的长时命令。改为在后台路径显式再包一层 seatbelt，profile 文件随进程结束清理。`test_background_commands_are_sandboxed_too` 覆盖。
+- **第一版逃逸测试是空过的**：把逃逸目标放在 `tmp_path` 附近，而系统临时目录是刻意保持可写的（构建工具写不了临时文件不是被沙箱化，只是坏了），于是测试必然通过却什么都没证明。改为写 `~` 下的目标——那既在工作区和临时目录之外，也正是这条边界真正要保护的地方（`~/.ssh`、`~/.aws`、shell rc）。
+- `ExecutionRequest.__post_init__` 的 backend 白名单同步放行 `os`（原先只认 host/docker，新 backend 会在构造期就被拒）。
+- 验证：Python 580 项 + 1 skip（其中 19 项新增，非 macOS 上按平台跳过）、Go 全量、gofmt、go vet、ruff、eval-smoke PASS（无 baseline 变更）、clean-home install E2E 通过。
 
 ### `[ ]` T-045 hooks
 

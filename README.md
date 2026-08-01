@@ -375,10 +375,15 @@ export AICODE_BUDGET_MAX_TOTAL_COST="5.0"         # 0 表示关闭
 | `auto`（默认） | host | docker |
 | `host` | host | host |
 | `docker` | docker | docker |
+| `os` | OS 沙箱 | OS 沙箱 |
 
 ```bash
-export AICODE_AGENT_BASH_BACKEND="auto"   # auto | host | docker
+export AICODE_AGENT_BASH_BACKEND="auto"   # auto | host | docker | os
 ```
+
+`os` 使用平台自带的沙箱（macOS seatbelt），启动是毫秒级、不需要任何镜像，因此**trusted workspace 也可以默认沙箱**——容器太重正是 trusted 至今裸跑的原因。代价是它比容器弱：同一个文件系统命名空间、同一个内核、没有资源限制。它保证的是两件事：**工作区之外不可写**，以及**禁网**（protected paths 另行禁读）。因为强弱不同，`auto` 不会替用户做这个替换；要用就显式选它。
+
+macOS 之外目前不支持：Linux 需要 landlock 或 bubblewrap，而**声称一条并未真正生效的边界比明说不支持更糟**，因此非 macOS 上选 `os` 会直接失败并说明原因。
 
 项目级覆盖写在 `.aicode/config.json`：
 

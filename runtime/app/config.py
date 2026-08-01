@@ -85,9 +85,16 @@ class ExecutionSettings(BaseModel):
     untrusted workspaces into the Docker sandbox. `host` restores the pre-sandbox
     behaviour for machines without Docker; `docker` is the strictest setting and
     sandboxes every Agent command regardless of trust.
+
+    `os` sandboxes every command with the platform sandbox (macOS seatbelt):
+    milliseconds to start and no image to pull, which makes it usable on trusted
+    workspaces where the container cost was the reason they ran bare. It is a
+    weaker boundary than a container — same filesystem namespace, same kernel, no
+    resource limits — so it is a separate choice rather than a substitute
+    `auto` makes on the user's behalf.
     """
 
-    agent_bash_backend: Literal["auto", "host", "docker"] = "auto"
+    agent_bash_backend: Literal["auto", "host", "docker", "os"] = "auto"
 
 
 class ContextSettings(BaseModel):
@@ -182,7 +189,7 @@ def _non_negative_float_env(name: str, default: float) -> float:
 
 def _agent_bash_backend_env() -> str:
     value = os.getenv("AICODE_AGENT_BASH_BACKEND", "auto").strip().casefold()
-    return value if value in {"auto", "host", "docker"} else "auto"
+    return value if value in {"auto", "host", "docker", "os"} else "auto"
 
 
 def _parse_positive_int_map(raw: str | None) -> dict[str, int]:

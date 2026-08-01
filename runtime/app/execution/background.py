@@ -11,6 +11,7 @@ shutdown.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time
 import uuid
 from contextlib import suppress
@@ -41,6 +42,9 @@ class BackgroundProcess:
     produced_chars: int = 0
     exit_code: int | None = None
     stopped: bool = False
+    # Files that exist only for this process (a sandbox profile). Removed when it
+    # ends, so a long-lived daemon does not accumulate them.
+    cleanup_paths: tuple[Path, ...] = ()
 
     @property
     def running(self) -> bool:
@@ -107,6 +111,7 @@ class BackgroundProcessManager:
         workspace: Path,
         env_allowlist: tuple[str, ...] | None = None,
         session_id: str = "",
+        cleanup_paths: tuple[Path, ...] = (),
     ) -> BackgroundProcess:
         live = [entry for entry in self.processes.values() if entry.running]
         if len(live) >= MAX_BACKGROUND_PROCESSES:
@@ -139,6 +144,7 @@ class BackgroundProcessManager:
             process=process,
             started_at=time.monotonic(),
             session_id=session_id,
+            cleanup_paths=cleanup_paths,
         )
         self.processes[entry.handle_id] = entry
         entry.reader = asyncio.create_task(self._drain(entry))
@@ -163,6 +169,7 @@ class BackgroundProcessManager:
         with suppress(ProcessLookupError):
             await entry.process.wait()
         entry.exit_code = entry.process.returncode
+        _remove_cleanup_paths(entry)
 
     def get(self, handle_id: str) -> BackgroundProcess:
         entry = self.processes.get(handle_id)
@@ -219,4 +226,14 @@ class BackgroundProcessManager:
                 entry.reader.cancel()
                 with suppress(asyncio.CancelledError, Exception):
                     await entry.reader
+            _remove_cleanup_paths(entry)
         self.processes.clear()
+
+
+def _remove_cleanup_paths(entry: BackgroundProcess) -> None:
+    for path in entry.cleanup_paths:
+        with suppress(OSError):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)

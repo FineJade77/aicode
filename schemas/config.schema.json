@@ -78,9 +78,10 @@
           "enum": [
             "auto",
             "host",
-            "docker"
+            "docker",
+            "os"
           ],
-          "description": "Where the Agent's bash tool runs. 'auto' (default) keeps trusted workspaces on the host and sandboxes untrusted ones; 'host' always runs on the host; 'docker' always sandboxes. Omit to inherit the Runtime-wide AICODE_AGENT_BASH_BACKEND setting."
+          "description": "Where the Agent's bash tool runs. 'auto' (default) keeps trusted workspaces on the host and sandboxes untrusted ones; 'host' always runs on the host; 'docker' always sandboxes in a container; 'os' always sandboxes with the platform sandbox (macOS seatbelt), which starts in milliseconds and needs no image but is a weaker boundary than a container. Omit to inherit the Runtime-wide AICODE_AGENT_BASH_BACKEND setting."
         }
       },
       "additionalProperties": true

@@ -263,7 +263,7 @@ async def test_background_is_refused_on_the_docker_backend(tmp_path):
     )
     result = await DEFAULT_REGISTRY.run("bash", {"command": "sleep 60", "background": True}, context)
     assert not result.success
-    assert "host backend" in result.error
+    assert "Docker backend" in result.error
     assert service.status()["background"] == 0
 
 

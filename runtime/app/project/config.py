@@ -182,7 +182,7 @@ def parse_execution_config(raw: Any) -> ExecutionConfig:
     backend = str(raw.get("agentBashBackend") or "").strip().casefold()
     # An unknown value falls back to "inherit" rather than to a permissive
     # default: a typo in project config must never silently weaken the sandbox.
-    return ExecutionConfig(agent_bash_backend=backend if backend in {"auto", "host", "docker"} else "")
+    return ExecutionConfig(agent_bash_backend=backend if backend in {"auto", "host", "docker", "os"} else "")
 
 
 def parse_workspaces(raw: Any) -> list[WorkspaceRef]:

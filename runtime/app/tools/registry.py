@@ -3,7 +3,9 @@ from __future__ import annotations
 import inspect
 import os
 import re
+import shlex
 import shutil
+import tempfile
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
@@ -18,6 +20,12 @@ from app.config import settings
 from app.execution.background import BackgroundProcessError
 from app.execution.docker import docker_available, missing_image_hint
 from app.execution.models import ResourceLimits
+from app.execution.sandbox_os import (
+    SEATBELT_BINARY,
+    build_seatbelt_profile,
+    os_sandbox_available,
+    unavailable_reason,
+)
 from app.project.config import load_project_config
 from app.security import redact_known_environment_secrets
 from app.tools.ask import AskUserTool
@@ -532,10 +540,8 @@ def resolve_bash_backend(configured: str, trust_level: str) -> str:
     host with the full local toolchain, while anything else is pushed into the
     Docker sandbox. `host` and `docker` are escape hatches that ignore trust.
     """
-    if configured == "host":
-        return "host"
-    if configured == "docker":
-        return "docker"
+    if configured in {"host", "docker", "os"}:
+        return configured
     return "host" if trust_level == "trusted" else "docker"
 
 
@@ -658,18 +664,32 @@ async def start_background_command(context: ToolContext, command: str, backend: 
         return ToolResult(
             success=False,
             error=(
-                "background commands are only supported on the host backend, and this workspace's commands "
+                "background commands are not supported on the Docker backend, and this workspace's commands "
                 "are routed to the Docker sandbox. Run it in the foreground, or trust the workspace with "
                 "`aicode project trust add`."
             ),
             risk_level="high",
             data={"backend": backend, "status": "unsupported"},
         )
+    launch, cleanup_paths = _background_launch(context, command, backend)
+    if launch is None:
+        # Routed to a sandbox that cannot be applied. Starting it unconfined
+        # would remove the boundary silently, which is worse than not starting.
+        return ToolResult(
+            success=False,
+            error=(
+                f"This command was routed to the OS-level sandbox, but {unavailable_reason()}. "
+                "Set execution.agentBashBackend to \"host\", or run it in the foreground."
+            ),
+            risk_level="high",
+            data={"backend": backend, "status": "unavailable"},
+        )
     try:
         entry = await manager.start(
-            command,
+            launch,
             workspace=context.workspace,
             session_id=context.session_id,
+            cleanup_paths=cleanup_paths,
         )
     except BackgroundProcessError as exc:
         return ToolResult(success=False, error=str(exc), risk_level="medium")
@@ -681,6 +701,38 @@ async def start_background_command(context: ToolContext, command: str, backend: 
         ),
         data={"handle": entry.handle_id, "status": "running", "backend": "host"},
     )
+
+
+def _background_launch(
+    context: ToolContext,
+    command: str,
+    backend: str,
+) -> tuple[str | None, tuple[Path, ...]]:
+    """Wrap a background command in the sandbox its backend requires.
+
+    Background commands do not go through `ExecutionRequest`, so the sandboxing
+    the foreground path gets for free has to be applied here explicitly —
+    otherwise selecting the OS sandbox would silently exempt exactly the
+    long-running commands it most needs to cover.
+    """
+    if backend != "os":
+        return command, ()
+    if not os_sandbox_available():
+        return None, ()
+    workspace = context.workspace.expanduser().resolve()
+    profile = build_seatbelt_profile(
+        writable_paths=(workspace, Path(tempfile.gettempdir()).resolve()),
+        masked_paths=tuple(
+            path if path.is_absolute() else workspace / path
+            for path in (Path(entry) for entry in context.protected_paths)
+        ),
+        allow_network=True,
+    )
+    handle, profile_path = tempfile.mkstemp(prefix="aicode-seatbelt-", suffix=".sb")
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write(profile)
+    wrapped = f"{SEATBELT_BINARY} -f {shlex.quote(profile_path)} /bin/sh -c {shlex.quote(command)}"
+    return wrapped, (Path(profile_path),)
 
 
 async def read_background_output(context: ToolContext, arguments: dict[str, Any]) -> ToolResult:
@@ -914,6 +966,19 @@ async def run_bash(context: ToolContext, arguments: dict[str, Any]) -> ToolResul
     backend = resolve_bash_backend(context.bash_backend, context.trust_level)
     if arguments.get("background"):
         return await start_background_command(context, command, backend)
+    if backend == "os" and not os_sandbox_available():
+        # Same rule as the Docker branch below: a command routed to a sandbox
+        # must never fall back to running unconfined, because that turns the
+        # boundary into a placebo without telling anyone.
+        return ToolResult(
+            success=False,
+            error=(
+                f"This command was routed to the OS-level sandbox, but {unavailable_reason()}. "
+                "Set execution.agentBashBackend to \"host\" or \"docker\"."
+            ),
+            risk_level="high",
+            data={"backend": "os", "status": "unavailable", "trust_level": context.trust_level},
+        )
     if backend == "docker" and not docker_available():
         # Deliberately no fallback to host execution. Routing an untrusted
         # workspace's command to the host because the sandbox is missing would

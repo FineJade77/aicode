@@ -8,6 +8,7 @@ from app.execution.background import BackgroundProcessManager
 from app.execution.docker import DockerExecutionBackend
 from app.execution.host import HostExecutionBackend
 from app.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus
+from app.execution.sandbox_os import OsSandboxExecutionBackend
 
 
 class ExecutionBackend(Protocol):
@@ -25,10 +26,12 @@ class ExecutionService:
         audit: Any = None,
         host: HostExecutionBackend | None = None,
         docker: ExecutionBackend | None = None,
+        os_sandbox: ExecutionBackend | None = None,
     ) -> None:
         self.audit = audit
         self.host = host or HostExecutionBackend()
         self.docker = docker or DockerExecutionBackend(self.host)
+        self.os_sandbox = os_sandbox or OsSandboxExecutionBackend(self.host)
         self._active: dict[str, ExecutionBackend] = {}
         # Background commands live here rather than in a separate service so
         # daemon shutdown reaps them through the same `cancel_all` that already
@@ -38,7 +41,7 @@ class ExecutionService:
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         if request.execution_id in self._active:
             raise ValueError(f"execution_id already exists: {request.execution_id}")
-        backend: ExecutionBackend = self.host if request.backend == "host" else self.docker
+        backend = self._backend_for(request.backend)
         self._active[request.execution_id] = backend
         self._record("execution.started", request, None)
         try:
@@ -59,6 +62,13 @@ class ExecutionService:
             self._active.pop(request.execution_id, None)
         self._record("execution.finished", request, result)
         return result
+
+    def _backend_for(self, name: str) -> ExecutionBackend:
+        if name == "host":
+            return self.host
+        if name == "os":
+            return self.os_sandbox
+        return self.docker
 
     async def cancel(self, execution_id: str) -> bool:
         backend = self._active.get(execution_id)
