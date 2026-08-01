@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -589,6 +589,58 @@ class SessionStore:
         self._last_session_id = session.session_id
         self._insert_session(session)
         return session
+
+    def fork(self, session_id: str, *, message_id: int | None = None) -> Session:
+        """Derive a new session carrying history up to and including `message_id`.
+
+        "Try a different approach from here" otherwise means re-running the whole
+        conversation. Implemented on the existing append-only tables rather than
+        with a new mechanism: the fork is just another session whose messages and
+        compactions were written the ordinary way.
+
+        History is copied rather than shared. Sharing rows would make the two
+        sessions' futures alias each other — appending to one would extend the
+        other's past — which is the opposite of what a fork is for.
+        """
+        source = self.get(session_id)
+        if source is None:
+            raise ValueError(f"session not found: {session_id}")
+        if message_id is not None and message_id not in source.message_ids:
+            # Refused rather than clamped: silently forking from a different
+            # point than the one asked for produces a session that looks right
+            # and contains the wrong history.
+            raise ValueError(f"message {message_id} does not belong to session {session_id}")
+        cutoff = message_id if message_id is not None else (source.message_ids[-1] if source.message_ids else 0)
+
+        forked = self.create(source.workspace)
+        id_map: dict[int, int] = {}
+        for old_id, message in zip(source.message_ids, source.messages, strict=False):
+            if old_id > cutoff:
+                break
+            id_map[old_id] = self.append_message(forked, message)
+
+        for entry in source.compactions:
+            if entry.end_message_id > cutoff:
+                continue
+            start = id_map.get(entry.start_message_id)
+            end = id_map.get(entry.end_message_id)
+            if start is None or end is None:
+                # Message ids are global, so an unremapped bound would point at
+                # some other session's rows. Dropping the entry costs the token
+                # saving; keeping it would corrupt the projection.
+                continue
+            self.append_compaction(
+                forked,
+                replace(entry, compaction_id=None, session_id=forked.session_id, start_message_id=start, end_message_id=end),
+            )
+
+        # The plan carries over: a fork continues the same work, and losing the
+        # todo list is worse than inheriting one that may be a step ahead of the
+        # fork point. `read_files` deliberately does not — it is in-memory by
+        # design, and the guarantee is "seen in *this* conversation".
+        if source.plan:
+            forked.set_plan(list(source.plan))
+        return forked
 
     def get(self, session_id: str) -> Session | None:
         self._ensure_schema()

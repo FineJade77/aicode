@@ -91,3 +91,29 @@ async def test_context_service_returns_compaction_contract_for_in_memory_adapter
     assert result.status == "compacted"
     assert result.compaction is not None
     assert result.compaction["session_id"] == session.session_id
+
+
+@pytest.mark.asyncio
+async def test_session_service_fork_returns_a_new_snapshot(tmp_path: Path) -> None:
+    trace = AuditLogger(path=tmp_path / "audit.jsonl")
+    sessions = InMemorySessionRepository()
+    service = SessionService(sessions, trace, LocalWorkspaceRuntime())
+    created = await service.create(str(tmp_path))
+    source = service.require(created.session_id)
+    source.append_message({"role": "user", "content": "first"})
+    source.append_message({"role": "assistant", "content": "second"})
+
+    forked = await service.fork(created.session_id)
+
+    assert isinstance(forked, SessionSnapshot)
+    assert forked.session_id != created.session_id
+    assert [m["content"] for m in forked.messages] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_session_service_fork_rejects_an_unknown_session(tmp_path: Path) -> None:
+    from app.application.errors import NotFound
+
+    service = SessionService(InMemorySessionRepository(), AuditLogger(path=tmp_path / "a.jsonl"), LocalWorkspaceRuntime())
+    with pytest.raises(NotFound):
+        await service.fork("sess_missing")

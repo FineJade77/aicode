@@ -12,6 +12,7 @@ const HelpText = `Usage:
   aicode session show <session_id|--last>
   aicode session resume <session_id|--last> <message>
   aicode session cancel <session_id|--last>
+  aicode session fork <session_id|--last> [--message N]
   aicode session prune [--max-sessions N] [--max-age-days N]
 `
 
@@ -38,6 +39,8 @@ func Run(cfg config.Config, args []string) error {
 		return runResume(cfg, args[1:])
 	case "cancel":
 		return runCancel(cfg, args[1:])
+	case "fork":
+		return runFork(cfg, args[1:])
 	default:
 		return fmt.Errorf("unknown session command: %s\n\n%s", args[0], HelpText)
 	}

@@ -522,6 +522,12 @@ Runtime 持久化以下内容：
 
 `messages` 是 append-only source of truth，compaction 只定义发给模型的可重建 projection，不删除或覆盖原始历史。恢复 session 时选择最近一个仍指向有效 message range 的 schema v1 compaction，并拼接其后的原始消息。压缩边界以完整消息组为单位：assistant tool calls 与其 tool results 不会拆开，未完成 tool call 不能进入摘要。
 
+**Session fork** 直接建立在这两个结构上：`fork(session_id, message_id)` 派生一个新 session，把截止到该消息的历史照常 append 进去，因此分叉产物就是一个普通 session，没有引入第二套机制。
+
+历史**复制而非共享**：共享行会让两个 session 的未来互相延长对方的过去。compaction 条目的 `start_message_id` / `end_message_id` 必须**重映射**到新写入的 message id——message id 是全局自增的，原样搬运会指向别的 session 的行，让 fork 的 projection 去摘要一段不属于它的消息；映射不上的条目宁可丢弃（代价只是少省一点 token），也不写悬空引用。越过分叉点的 compaction 直接不带过去。
+
+不属于该 session 的 `message_id` 直接报错而非就近裁剪：静默分叉到另一个点，产出的 session 看起来正确、历史却是错的。`plan` 随 fork 带走（同一件事的延续），`read_files` 不带——它按设计只存在于内存，保证的是"在**这轮**对话里见过该文件的当前内容"，fork 后本就应重读。
+
 compaction 在每次模型调用前按该路由的 capability 主动发生。摘要优先使用 `summarizer` 路由，并对摘要请求本身做 context 上限裁剪；provider 失败时使用可审计的本地确定性摘要，保留全部原始消息，并在 `context.budget` 事件标记 fallback 类型。主 provider 报告 context overflow 时只做一次强制 compaction + retry，重复 overflow 不再重试。
 
 **折叠是摘要之前的一档。** 此前只有两级——写入时按工具截断，以及越过阈值后对整段历史做有损摘要——所以只超出阈值一点点也要付一次模型调用，并丢掉本可以只靠丢弃旧工具输出就保住的细节。中间这一档把较早的 tool 结果替换成一行引用，保留最近若干组的原文；`keep` 从大往小试，只折叠到刚好装得下为止。

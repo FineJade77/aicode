@@ -925,9 +925,19 @@ T-038 → T-039 → T-040 有真实依赖：文件失效判定要先存在，摘
 - 新增事件 `hook.finished` / `hook.blocked` 同步进 `events.py` 允许表、`schemas/events.schema.json` 与 SSE fixture；Go renderer 给出可读输出而不是原始 JSON dump，跳过原因也会渲染。
 - 验证：Python 670 项 + 1 skip（其中 20 项新增）、Go 全量、gofmt、go vet、ruff、eval-smoke PASS。
 
-### `[ ]` T-046 session fork
+### `[x]` T-046 session fork
 
 对应：评审 E3。"从这里换个方案试试"当前只能重跑整轮。范围：从指定 message id 派生新 session，复用既有 append-only messages + compaction projection 结构。
+
+完成记录（2026-08-01）：
+
+- `SessionStore.fork(session_id, message_id=None)`：截止该消息的历史照常 append 进新 session，因此分叉产物就是一个普通 session，**没有引入第二套机制**。省略 `message_id` 即从当前末尾分叉。
+- **历史复制而非共享**。共享行会让两个 session 的未来互相延长对方的过去——正是 fork 要避免的。`test_forked_history_is_copied_not_shared` 用双向追加验证。
+- **compaction 边界必须重映射**。message id 是全局自增的，把 `start_message_id` / `end_message_id` 原样搬过去会指向**别的 session 的行**，让 fork 的 projection 去摘要一段不属于它的消息。映射不上的条目宁可丢弃（代价只是少省一点 token）也不写悬空引用；越过分叉点的 compaction 不带过去。
+- **不属于该 session 的 `message_id` 直接报错，不做就近裁剪**：静默分叉到另一个点，产出的 session 看起来正确、历史却是错的。
+- `plan` 随 fork 带走（同一件事的延续）；`read_files` **不带**——它按设计只存在于内存，保证的是"在这轮对话里见过该文件的当前内容"，fork 后本就应重读。这条差别由测试显式钉住，否则很容易被"顺手也复制一下"改错。
+- 贯通 `SessionRepository` 协议、`InMemorySessionRepository`、`SessionService.fork`（记 `session.forked` trace，新 session 发 `session.created` 且带 `forked_from`）、`POST /v1/sessions/{id}/fork`、Go client `ForkSession` 与 `aicode session fork <id|--last> [--message N]`。
+- 验证：Python 681 项 + 1 skip（其中 11 项新增）、Go 全量、gofmt、go vet、ruff、eval-smoke PASS。
 
 ## M11：增效与评测触发项
 

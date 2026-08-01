@@ -33,6 +33,31 @@ class InMemorySessionRepository:
     def get(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
 
+    def fork(self, session_id: str, *, message_id: int | None = None) -> Session:
+        """Branch a session at a message.
+
+        Message ids here are positions rather than database rows, so the mapping
+        the SQLite store has to do is not needed — but the same refusal is: a
+        cutoff that is not one of this session's messages would silently produce
+        different history than was asked for.
+        """
+        source = self._sessions.get(session_id)
+        if source is None:
+            raise ValueError(f"session not found: {session_id}")
+        if message_id is not None and message_id not in source.message_ids:
+            raise ValueError(f"message {message_id} does not belong to session {session_id}")
+        cutoff = message_id if message_id is not None else (source.message_ids[-1] if source.message_ids else 0)
+
+        forked = self.create(source.workspace)
+        for old_id, message in zip(source.message_ids, source.messages, strict=False):
+            if old_id > cutoff:
+                break
+            forked.messages.append(dict(message))
+            forked.message_ids.append(old_id)
+        if source.plan:
+            forked.set_plan(list(source.plan))
+        return forked
+
     def list(self, *, limit: int | None = None, offset: int = 0) -> list[dict]:
         ordered = sorted(self._sessions.values(), key=lambda item: item.updated_at, reverse=True)
         window = ordered[max(0, offset) :]

@@ -305,6 +305,22 @@ export AICODE_SESSION_RETENTION_MAX_AGE_DAYS="90"    # 0 表示关闭
 
 `aicode sessions prune` 不带参数时套用上面的配置；带参数时以参数为准。清理会一并删除对应的 messages、events 和 compactions。**正在运行或有未决 approval 的 session 永不删除**，即使命中了保留条件——它即将写回状态。返回值里的 `retained_live` 就是这样被跳过的数量。
 
+### fork session：从某条消息换个方案重来
+
+```bash
+aicode session fork <session_id|--last>              # 从当前末尾分叉
+aicode session fork <session_id> --message 42        # 从第 42 条消息分叉
+aicode session resume <新的 session_id> "换个思路：..."
+```
+
+"从这里换个方案试试"原本只能重跑整轮。fork 复用既有的 append-only messages + compaction projection 结构——分叉出来的就是一个普通 session，它的消息和 compaction 是照常写进去的，没有新机制。
+
+三条语义：
+
+- **历史是复制而非共享**。共享行会让两个 session 的未来互相污染对方的过去:向其中一个追加消息会同时延长另一个的历史,那正好是 fork 要避免的。
+- **compaction 的边界会重映射**。message id 是全局自增的,原样搬过去会指向别的 session 的行,让 fork 的 projection 去"摘要"一段不属于它的消息。映射不上的 compaction 宁可丢弃(代价是少省一点 token),也不写一条悬空引用。
+- **`--message` 传了不属于该 session 的 id 会直接报错**,不做就近裁剪:静默分叉到另一个点,产出的 session 看起来对、历史却是错的。plan 会带过去(fork 是同一件事的延续),`read_files` 不会——它按设计只存在于内存中,保证的是"在**这轮**对话里见过该文件的当前内容",fork 后本就该重读。
+
 审计日志会记录 session、tool call、approval、edit、usage、final、error、execution 等事件。敏感字段会脱敏；edit 审计记录 `patch_hash` 而不是完整 diff；Host/Docker execution 都记录 command hash 而不是原始命令。
 
 审计日志是安全证据链，因此**队列满时不丢弃事件**，而是降级为同步写入——丢一条记录会让"没有危险命令的记录"和"没有发生危险命令"变得不可区分。写入失败会重试，持续失败时在 stderr 报告一次并通过 `aicode daemon status` 的 `audit_writer.healthy` 暴露。

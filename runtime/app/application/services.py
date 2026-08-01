@@ -60,6 +60,28 @@ class SessionService:
         )
         return SessionSnapshot.from_session(session)
 
+    async def fork(self, session_id: str, *, message_id: int | None = None) -> SessionSnapshot:
+        self.require(session_id)
+        try:
+            forked = self.sessions.fork(session_id, message_id=message_id)
+        except ValueError as exc:
+            raise InvalidRequest(str(exc)) from exc
+        self.trace.record(
+            "session.forked",
+            session_id=forked.session_id,
+            workspace=forked.workspace,
+            data={"source_session_id": session_id, "message_id": message_id},
+        )
+        await forked.events.put(
+            {
+                "type": "session.created",
+                "session_id": forked.session_id,
+                "workspace": forked.workspace,
+                "forked_from": session_id,
+            }
+        )
+        return SessionSnapshot.from_session(forked)
+
     def require(self, session_id: str) -> AgentSession:
         session = self.sessions.get(session_id)
         if session is None:

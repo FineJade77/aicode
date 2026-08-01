@@ -42,6 +42,12 @@ type SendMessageResponse struct {
 	RunID  string `json:"run_id"`
 }
 
+type ForkSessionResponse struct {
+	SessionID       string `json:"session_id"`
+	SourceSessionID string `json:"source_session_id"`
+	MessageCount    int    `json:"message_count"`
+}
+
 type CancelRunResponse struct {
 	Status string  `json:"status"`
 	RunID  *string `json:"run_id"`
@@ -267,6 +273,20 @@ func (c Client) Compact(ctx context.Context, sessionID string) (CompactResponse,
 func (c Client) CancelRun(ctx context.Context, sessionID string) (CancelRunResponse, error) {
 	var out CancelRunResponse
 	if err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/cancel", struct{}{}, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// ForkSession branches a session at a message. A nil messageID forks at the
+// tip, which is the useful default for "keep this history, try another way".
+func (c Client) ForkSession(ctx context.Context, sessionID string, messageID *int) (ForkSessionResponse, error) {
+	var out ForkSessionResponse
+	payload := struct {
+		MessageID *int `json:"message_id,omitempty"`
+	}{MessageID: messageID}
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/fork"
+	if err := c.postJSON(ctx, path, payload, &out); err != nil {
 		return out, err
 	}
 	return out, nil

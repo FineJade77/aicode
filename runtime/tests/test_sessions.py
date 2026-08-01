@@ -923,3 +923,148 @@ def test_a_v4_database_gains_the_structured_column_without_losing_compactions(tm
         assert conn.execute("pragma user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {row["name"] for row in conn.execute("pragma table_info(compactions)").fetchall()}
         assert "structured" in columns
+
+
+def seeded_session(store: SessionStore, count: int = 4):
+    session = store.create(workspace="/repo")
+    for index in range(count):
+        store.append_message(session, {"role": "user", "content": f"m{index}"})
+    return session
+
+
+def test_fork_copies_history_up_to_the_chosen_message(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+
+    forked = store.fork(source.session_id, message_id=source.message_ids[1])
+
+    assert [m["content"] for m in forked.messages] == ["m0", "m1"]
+    assert forked.workspace == source.workspace
+    assert forked.session_id != source.session_id
+
+
+def test_fork_without_a_message_id_branches_at_the_tip(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+
+    forked = store.fork(source.session_id)
+
+    assert [m["content"] for m in forked.messages] == ["m0", "m1", "m2", "m3"]
+
+
+def test_forked_history_is_copied_not_shared(tmp_path: Path) -> None:
+    """Sharing rows would make each session's future extend the other's past."""
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store, count=2)
+    forked = store.fork(source.session_id)
+
+    store.append_message(forked, {"role": "user", "content": "only-in-fork"})
+    store.append_message(source, {"role": "user", "content": "only-in-source"})
+
+    store._sessions.clear()
+    assert [m["content"] for m in store.get(source.session_id).messages] == ["m0", "m1", "only-in-source"]
+    assert [m["content"] for m in store.get(forked.session_id).messages] == ["m0", "m1", "only-in-fork"]
+
+
+def test_fork_survives_a_reload(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+    forked = store.fork(source.session_id, message_id=source.message_ids[2])
+
+    store._sessions.clear()
+    reloaded = store.get(forked.session_id)
+
+    assert [m["content"] for m in reloaded.messages] == ["m0", "m1", "m2"]
+
+
+def test_fork_rejects_a_message_from_another_session(tmp_path: Path) -> None:
+    """Clamping would produce a session that looks right and holds wrong history."""
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+    other = seeded_session(store)
+
+    with pytest.raises(ValueError, match="does not belong"):
+        store.fork(source.session_id, message_id=other.message_ids[0])
+
+
+def test_fork_of_a_missing_session_is_an_error(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "s.sqlite")
+    with pytest.raises(ValueError, match="session not found"):
+        store.fork("sess_nope")
+
+
+def test_fork_remaps_compaction_bounds_onto_the_new_messages(tmp_path: Path) -> None:
+    """Message ids are global, so an unremapped bound points at other rows.
+
+    Carrying the entry over verbatim would leave the fork's projection
+    summarising messages that belong to a different session.
+    """
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+    store.append_compaction(
+        source,
+        CompactionEntry(
+            compaction_id=None,
+            session_id=source.session_id,
+            schema_version=COMPACTION_SCHEMA_VERSION,
+            start_message_id=source.message_ids[0],
+            end_message_id=source.message_ids[1],
+            summary="- earlier work",
+            provider="fake",
+            model="fake",
+            prompt_version="v1",
+            before_tokens=10,
+            after_tokens=5,
+            context_window=1000,
+        ),
+    )
+
+    forked = store.fork(source.session_id)
+
+    (entry,) = forked.compactions
+    assert entry.session_id == forked.session_id
+    assert entry.start_message_id == forked.message_ids[0]
+    assert entry.end_message_id == forked.message_ids[1]
+    assert entry.summary == "- earlier work"
+
+
+def test_a_compaction_past_the_fork_point_is_left_behind(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+    store.append_compaction(
+        source,
+        CompactionEntry(
+            compaction_id=None,
+            session_id=source.session_id,
+            schema_version=COMPACTION_SCHEMA_VERSION,
+            start_message_id=source.message_ids[2],
+            end_message_id=source.message_ids[3],
+            summary="- later work",
+            provider="fake",
+            model="fake",
+            prompt_version="v1",
+            before_tokens=10,
+            after_tokens=5,
+            context_window=1000,
+        ),
+    )
+
+    forked = store.fork(source.session_id, message_id=source.message_ids[1])
+
+    assert forked.compactions == []
+
+
+def test_fork_carries_the_plan_but_not_the_read_record(tmp_path: Path) -> None:
+    """`read_files` is in-memory by design: the guarantee is "seen in *this*
+    conversation", so a fork must re-read rather than inherit the claim."""
+    from app.sessions.store import PlanItem
+
+    store = SessionStore(tmp_path / "s.sqlite")
+    source = seeded_session(store)
+    source.set_plan([PlanItem(text="ship it", status="pending")])
+    source.record_read("a.py", "hash-a")
+
+    forked = store.fork(source.session_id)
+
+    assert [item.text for item in forked.plan] == ["ship it"]
+    assert forked.read_hash("a.py") is None

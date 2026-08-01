@@ -50,6 +50,18 @@ class CreateSessionResponse(BaseModel):
     session_id: str
 
 
+class ForkSessionRequest(BaseModel):
+    # Omitted means "fork at the tip", which is the useful default for
+    # "branch from where we are and try something else".
+    message_id: int | None = Field(default=None, ge=1)
+
+
+class ForkSessionResponse(BaseModel):
+    session_id: str
+    source_session_id: str
+    message_count: int
+
+
 class SendMessageResponse(BaseModel):
     status: Literal["accepted", "queued"]
     run_id: str
@@ -260,6 +272,19 @@ async def get_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
         return runtime.session_service.get(session_id).to_dict()
     except ApplicationError as exc:
         raise_http_error(exc)
+
+
+@app.post("/v1/sessions/{session_id}/fork", response_model=ForkSessionResponse)
+async def fork_session(session_id: str, request: ForkSessionRequest, runtime: RuntimeDep) -> ForkSessionResponse:
+    try:
+        forked = await runtime.session_service.fork(session_id, message_id=request.message_id)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+    return ForkSessionResponse(
+        session_id=forked.session_id,
+        source_session_id=session_id,
+        message_count=len(forked.messages),
+    )
 
 
 @app.post("/v1/sessions/{session_id}/messages", response_model=SendMessageResponse)

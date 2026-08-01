@@ -435,3 +435,57 @@ func unauthorizedResponse() *http.Response {
 		Body:       io.NopCloser(strings.NewReader(`{"detail":"unauthorized"}`)),
 	}
 }
+
+func TestForkSessionSendsTheMessageID(t *testing.T) {
+	var gotPath string
+	var body map[string]any
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return jsonResponse(`{"session_id":"sess_new","source_session_id":"sess_1","message_count":3}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	messageID := 7
+	response, err := api.ForkSession(ctx, "sess_1", &messageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/sessions/sess_1/fork" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if body["message_id"] != float64(7) {
+		t.Fatalf("message_id = %#v", body["message_id"])
+	}
+	if response.SessionID != "sess_new" || response.MessageCount != 3 {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestForkSessionOmitsTheMessageIDWhenForkingAtTheTip(t *testing.T) {
+	var body map[string]any
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return jsonResponse(`{"session_id":"sess_new","source_session_id":"sess_1","message_count":9}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if _, err := api.ForkSession(ctx, "sess_1", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Omitted rather than sent as null, so the server's "fork at the tip"
+	// default is what applies.
+	if _, present := body["message_id"]; present {
+		t.Fatalf("message_id should be omitted, got %#v", body)
+	}
+}
