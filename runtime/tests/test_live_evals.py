@@ -671,3 +671,22 @@ def test_a_genuine_failure_shows_in_both_rates():
 
     assert breakdown["algorithmic"]["pass_at_1"] == 0.0
     assert breakdown["algorithmic"]["functional_pass_at_1"] == 0.0
+
+
+def test_the_agent_toolchain_is_recorded_but_not_gated():
+    """Recorded because it changes results; not baselined because it is per-machine.
+
+    The harness pins fixtures, tasks and prompts by digest and then hands Agent
+    commands the developer's PATH. Baselining that would fail every other
+    machine; leaving it unrecorded makes two disagreeing runs look identical.
+    """
+    from evals.trace import agent_toolchain, source_versions
+
+    versions = source_versions(REPOSITORY_ROOT)
+    assert "agent_toolchain" in versions
+    assert "python3=" in agent_toolchain()
+
+    baseline = json.loads(
+        (EVAL_ROOT / "baselines" / "deterministic-smoke.v1.json").read_text(encoding="utf-8")
+    )
+    assert "agent_toolchain" not in baseline["source_versions"]

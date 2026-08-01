@@ -14,7 +14,7 @@
     "aicode_version": "0.1.0",
     "compaction_prompt_version": "aicode.compaction.v2",
     "eval_contract": "1.0",
-    "eval_harness_sha256": "c50aa3d96ef9dd587def5ca4166c0ada3d221dd99b379cb6f853abab6db9e8bd",
+    "eval_harness_sha256": "a024c493ad1f5b78d56d4be95f105cb92892927e13f579e1782b1ca42192964d",
     "eval_runner": "scripted-v1",
     "eval_schema_sha256": "471ecc3b7da2af27a6f0a2bb5780d76ef8a9ea22051a668efe6020849a219c2c",
     "fixture_set_sha256": "792b289271b143f886b2e4a13ff0ac0d57511c07fdf0e9e94519ce01f03b8383",

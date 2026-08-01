@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shlex
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +176,7 @@ def source_versions(repository_root: Path) -> dict[str, str]:
         eval_schema_digest.update(b"\0")
     return {
         "aicode_version": (repository_root / "VERSION").read_text(encoding="utf-8").strip(),
+        "agent_toolchain": agent_toolchain(),
         "eval_contract": EVAL_CONTRACT_VERSION,
         "eval_runner": RUNNER_VERSION,
         "eval_harness_sha256": harness_digest.hexdigest(),
@@ -231,3 +233,21 @@ def tool_specs_digest(repository_root: Path) -> str:
 def canonical_digest(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256_text(encoded)
+
+
+def agent_toolchain() -> str:
+    """What `python`, `python3` and `pytest` resolve to for Agent commands.
+
+    The harness pins fixtures, tasks, prompts and model profiles by digest, and
+    then hands Agent shell commands the developer's own PATH. That leaks: on a
+    machine where bare `python` is Python 2.7, the Agent spends turns
+    discovering a broken toolchain that has nothing to do with the task, and the
+    same suite behaves differently elsewhere. Recording it does not remove the
+    variable, but it stops the variable from being invisible when two runs
+    disagree.
+    """
+    resolved = []
+    for name in ("python", "python3", "pytest"):
+        path = shutil.which(name)
+        resolved.append(f"{name}={path or 'missing'}")
+    return " ".join(resolved)

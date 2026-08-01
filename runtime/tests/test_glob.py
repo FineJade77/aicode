@@ -163,3 +163,27 @@ def test_glob_is_read_only_and_needs_no_approval() -> None:
     assert spec.read_only is True
     assert spec.approval == "none"
     assert spec.input_schema["properties"]["limit"]["default"] == DEFAULT_GLOB_RESULTS
+
+
+@pytest.mark.asyncio
+async def test_a_glued_double_star_gets_a_correction_not_just_a_complaint(tmp_path):
+    """pathlib names the rule but not the fix, leaving the model a turn to guess."""
+    result = await DEFAULT_REGISTRY.run(
+        "glob", {"pattern": "**test*"}, ToolContext(workspace=tmp_path)
+    )
+
+    assert not result.success
+    assert "use `**/test*`" in result.error
+
+
+@pytest.mark.asyncio
+async def test_a_well_formed_double_star_still_works(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "test_a.py").write_text("x", encoding="utf-8")
+
+    result = await DEFAULT_REGISTRY.run(
+        "glob", {"pattern": "**/test*"}, ToolContext(workspace=tmp_path)
+    )
+
+    assert result.success
+    assert "pkg/test_a.py" in result.text

@@ -43,7 +43,14 @@ class GlobTool:
         try:
             candidates = sorted(root.glob(pattern))
         except (OSError, ValueError) as exc:
-            return ToolResult(success=False, error=f"invalid pattern: {exc}")
+            # Say how to fix it, not just what broke. The common case is `**`
+            # glued to a name (`**test*`), where pathlib's raw message names the
+            # rule but not the correction — leaving the model to guess, and to
+            # spend a turn guessing.
+            hint = ""
+            if "**" in pattern and not _double_star_is_own_component(pattern):
+                hint = " — `**` must be its own path component: use `**/test*`, not `**test*`"
+            return ToolResult(success=False, error=f"invalid pattern: {exc}{hint}")
 
         matches: list[str] = []
         truncated = False
@@ -96,3 +103,8 @@ def reject_escaping_pattern(pattern: str) -> str:
     if ".." in parts:
         return "pattern must not escape the workspace"
     return ""
+
+
+def _double_star_is_own_component(pattern: str) -> bool:
+    """Whether every `**` in the pattern stands alone between separators."""
+    return all(part == "**" for part in pattern.split("/") if "**" in part)
