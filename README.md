@@ -873,8 +873,18 @@ make eval-live-openai-compatible \
 `live` 全过(84/84),因此**说不出 Agent 在哪里失败**。`live_hard` 是并行新增的更难一档,8 个任务,难点是**因与果的距离**——失败的测试指向的模块不是该改的那个。难度来自间接层级而不是代码量:强模型读得很快。
 
 ```bash
-make eval-live-hard REPETITIONS=1
-make eval-live-hard OC_MODEL=... LIVE_PROFILE='...'   # 同 eval-live 的覆盖方式
+export OPENAI_API_KEY="..."                          # 变量名由 AICODE_OPENAI_API_KEY_ENV 决定
+make eval-live-hard-openai-compatible REPETITIONS=1
+
+make eval-live-hard REPETITIONS=1                    # 用任务里 pin 的 Anthropic profile
+```
+
+两档共用同一份 OpenAI-compatible profile 定义(`OC_LIVE_PROFILE`),覆盖方式也相同——换模型时**上下文窗口与价格必须跟着一起给**:
+
+```bash
+make eval-live-hard-openai-compatible \
+  OC_MODEL=deepseek-v4-pro OC_CONTEXT_WINDOW=131072 \
+  OC_INPUT_PER_1M=<price> OC_OUTPUT_PER_1M=<price>
 ```
 
 类别命名的是**难在哪儿**而不是任务形状,这样分类别通过率才直接回答那个被 gate 的问题:
