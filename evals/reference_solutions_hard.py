@@ -216,3 +216,9 @@ def defaults():
 }
 
 HARD_SOLUTIONS.update(SCALE_SOLUTIONS)
+
+# The size-curve tier: identical fix at four repository sizes, so any difference
+# in measured effort is attributable to size and nothing else.
+from evals.reference_solutions_curve import CURVE_SOLUTIONS  # noqa: E402
+
+HARD_SOLUTIONS.update(CURVE_SOLUTIONS)

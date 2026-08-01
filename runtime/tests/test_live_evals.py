@@ -738,3 +738,55 @@ def test_the_planted_defect_does_not_stand_out_by_shape():
 )
 def test_every_scale_task_is_solvable(task: EvalTask):
     assert reference_solutions.verify(task) == []
+
+
+# --- the size curve -----------------------------------------------------------
+
+
+def curve_tasks() -> list[EvalTask]:
+    return [load_task(path) for path in discover_tasks(suite="live_scale_curve")]
+
+
+def test_the_curve_spans_a_wide_size_ladder():
+    """Two nearby sizes cannot separate a flat curve from a rising one."""
+    sizes = sorted(
+        len(list((EVAL_ROOT / "fixtures" / task.fixture / "handlers").glob("*.py"))) - 1
+        for task in curve_tasks()
+    )
+
+    assert sizes == [10, 30, 100, 300]
+
+
+def test_only_size_varies_across_the_curve():
+    """Any difference in measured effort must be attributable to size alone.
+
+    Same request, same budgets, same model: if those drifted, the curve would be
+    measuring the drift instead.
+    """
+    tasks = curve_tasks()
+    assert len({task.user_request for task in tasks}) == 1
+    assert len({task.budgets.model_dump_json() for task in tasks}) == 1
+    assert len({task.profile.model_dump_json() for task in tasks}) == 1
+
+
+def test_the_defect_sits_away_from_both_ends():
+    """A bug in the first or last module is findable by habit, not by search."""
+    for task in curve_tasks():
+        handlers = sorted(
+            path for path in (EVAL_ROOT / "fixtures" / task.fixture / "handlers").glob("*.py")
+            if path.name != "__init__.py"
+        )
+        broken = [
+            index
+            for index, path in enumerate(handlers)
+            if "weight" in path.read_text(encoding="utf-8")
+        ]
+        assert len(broken) == 1, task.task_id
+        assert 0 < broken[0] < len(handlers) - 1, task.task_id
+
+
+@pytest.mark.parametrize(
+    "task", [pytest.param(task, id=task.task_id) for task in curve_tasks()]
+)
+def test_every_curve_task_is_solvable(task: EvalTask):
+    assert reference_solutions.verify(task) == []

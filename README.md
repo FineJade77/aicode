@@ -911,6 +911,17 @@ make eval-live-scale-openai-compatible REPETITIONS=1
 
 **如果这一档能区分而 `live_hard` 不能,那正是 T-047(repo map / 符号索引)在等的证据。**
 
+#### live_scale_curve:同一个缺陷,四种仓库规模
+
+三档全部功能性满分,**通过率已经不再携带信息**。会动的是检索成本。这一档把缺陷、任务描述、预算、模型全部固定,只改模块数量(10 / 30 / 100 / 300),测的是 `tool_calls` 与 `input_tokens` 随规模怎么长。
+
+```bash
+make eval-live-scale-curve-openai-compatible REPETITIONS=1
+python3 scripts/eval_curve.py .artifacts/evals/live_scale_curve-<id>
+```
+
+输出是一张效率–规模表加一个增长指数(log 效率 / log 模块数):**接近 0 表示规模基本免费,repo map 收益有限;明显上翘表示检索就是成本,而那正是 T-047 要压的东西。** 缺陷刻意不放在首尾(靠习惯就能找到,不算检索),由测试钉住;同样钉住的还有"四档之间只有规模在变"——请求、预算、profile 若有漂移,曲线量的就是漂移而不是规模。
+
 **和 `live` 分开而不是替换**:后者是零成本的回归地板和已知参照点(84/84),前者是唯一能产出失败归因的一档;合并会让每次运行都为两者付钱。8 个任务全部由 `reference_solutions_hard.py` 的已知可行解验证过——**难必须是难,不能是无解**;在这一档尤其重要,因为失败本身就是产物,分不清"模型不行"和"题出错了"就等于没有信号。
 
 报告在 smoke 的基础上多出分类别 pass@1 / pass@k、p95 耗时,以及失败归因(`localization_failure` / `edit_failure` / `verification_failure` / `budget_exhausted` / `safety_violation` / `agent_error`)。归因全部由 trace 确定性推导,可从存档 trace 复现。

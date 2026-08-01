@@ -108,6 +108,19 @@ eval-live-scale:
 		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
 		--output-root "$(EVAL_OUTPUT_ROOT)"
 
+# One defect at four repository sizes. Every tier so far scores a functional
+# pass@1 of 1.000, so the verdict has stopped carrying information; this measures
+# retrieval cost against size instead. Read the shape with
+# `python3 scripts/eval_curve.py <report-dir>` — whether the curve bends upward
+# or stays flat is what decides T-047.
+eval-live-scale-curve:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live_scale_curve \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 # --- OpenAI-compatible retargeting -------------------------------------------
 #
 # The tasks pin Anthropic as their reference profile. These targets retarget the
@@ -142,6 +155,9 @@ eval-live-hard-openai-compatible:
 
 eval-live-scale-openai-compatible:
 	$(OC_ENV) $(MAKE) eval-live-scale REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
+
+eval-live-scale-curve-openai-compatible:
+	$(OC_ENV) $(MAKE) eval-live-scale-curve REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
 
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals
