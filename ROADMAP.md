@@ -1,367 +1,320 @@
 # aicode Roadmap
 
-更新日期：2026-07-27
+更新日期：2026-08-02
 
-本文是当前项目的状态路线图，用来回答三个问题：
+本文是**能力状态清单**，回答三个问题：
 
 1. 哪些核心能力已经完成。
-2. 哪些能力已经有 MVP，但还值得升级。
-3. 后续继续做时，哪些任务优先级最高。
+2. 哪些能力有 MVP，但还值得升级。
+3. 剩下的事情按什么顺序做，以及**凭什么判断该不该做**。
 
-具体实施顺序以 [本地 Coding Agent 优化执行路线](LOCAL_AGENT_ROADMAP.md) 为准。该文档把本路线图中的剩余能力收敛为 P0/P1/P2 工作包，包含目标架构、依赖关系、验收标准、质量门槛和 Issue 拆分；本文继续作为能力状态清单维护。
+具体到任务粒度的执行顺序、依赖和完成记录见 [TASKS.md](TASKS.md)。本文不重复那些细节，只维护状态。
 
 状态标记：
 
-- `[x]` 已完成：当前代码已经落地，可运行或已有测试覆盖。
-- `[~]` 部分完成：已有可用 MVP，但还需要增强体验、边界或测试。
+- `[x]` 已完成：代码已落地，有测试覆盖。
+- `[~]` 部分完成：有可用 MVP，但还需增强体验、边界或测试。
 - `[ ]` 待实现：尚未落地，或只存在设计意图。
 
 ## 1. 路线图原则
 
-- 本地优先：默认在用户本机 workspace 内工作。
-- CLI-first：Go CLI 是主要用户入口，Python Runtime 是唯一 Agent 大脑。
-- 安全前置：写入、shell、项目规则和模型输出都必须经过边界约束。
-- 可恢复：session、事件、approval 和 usage 尽量持久化，避免 daemon 重启后状态丢失。
-- 模型驱动：Agent Loop 由模型通过工具调用探索和执行，规则层只做安全、裁剪和确定性辅助。
-- 文档跟实现同步：README、ARCHITECTURE、ROADMAP 应反映当前代码，而不是旧设计愿景。
+- **本地优先**：默认在用户本机 workspace 内工作。
+- **CLI-first**：Go CLI 是主要用户入口，Python Runtime 是唯一 Agent 大脑。
+- **安全前置**：写入、shell、项目规则和模型输出都必须经过边界约束；边界不可由被检查的仓库自行放宽。
+- **可恢复**：session、事件、approval 和 usage 尽量持久化，避免 daemon 重启后状态丢失。
+- **模型驱动**：Agent Loop 由模型通过工具调用探索和执行，规则层只做安全、裁剪和确定性辅助。
+- **不做假成功**：任何"看起来在工作但实际没有"的降级路径都按缺陷处理。
+- **证据先于投入**：需要靠猜才能判断价值的能力（索引、subagent、记忆检索），必须先由评测产出失败归因才启动。
+- **文档跟实现同步**：README、ARCHITECTURE、ROADMAP 反映当前代码，而不是旧设计愿景。
 
 ## 2. 当前总览
 
+### 2.1 基础设施
+
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| CLI + daemon | `[x]` | Go CLI 自动启动/停止/查询 Python Runtime。 |
-| HTTP + SSE | `[x]` | 本机 API、SSE event stream、daemon token auth。 |
-| 可嵌入 Runtime 分层 | `[x]` | Application contract v2、Application Runtime、Agent Core ports 与 adapters composition root 已落地；HTTP/SSE contract v2 可由 Go client 查询。 |
-| Agent Loop v2 | `[x]` | 原生 function calling，模型自主调用工具。 |
-| 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic。 |
-| 工具系统 | `[x]` | 读文件、搜索、列文件、相关文件、bash、edit、review_diff。 |
-| Edit approval | `[x]` | inline diff、单次批准、session accept-all、stale 检测。 |
-| Policy Engine | `[x]` | allow / ask / deny 三态，review/commit-message 只读防线。 |
-| Session store | `[x]` | SQLite session/message/event/approval 持久化。 |
+| CLI + daemon | `[x]` | Go CLI 自动启动/停止/查询 Python Runtime，命令按五分类组织。 |
+| HTTP + SSE | `[x]` | 本机 API、SSE event stream、daemon token 鉴权（fail-closed）。 |
+| 可嵌入 Runtime 分层 | `[x]` | Application contract v2、Agent Core ports、adapters composition root；两条架构守卫锁定 import 无副作用与同进程多 Runtime。 |
+| stdio JSONL RPC（SDK） | `[x]` | `app/sdk/`，protocol v1，与 HTTP 共用同一个 ApplicationRuntime。 |
+| 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home E2E 已接入 CI。 |
+| 安装诊断 | `[x]` | `aicode runtime doctor [--json]` 检查安装、版本、Python/依赖、端口、provider 和 Docker。 |
+| 依赖管理 | `[x]` | Python runtime/dev extra、Go Makefile 入口收敛，锁文件提供可复现安装。 |
+| 静态检查 | `[x]` | 仓库根 `ruff.toml`（覆盖 runtime 与 evals），`make lint-python` 已接入 CI。 |
+
+### 2.2 Agent 能力
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| Agent Loop | `[x]` | 原生 function calling，模型自主调用工具；单一历史来源，无内存 transcript 副本。 |
+| 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic，含 jitter 退避与 `Retry-After`。 |
+| 工具系统 | `[x]` | 12 个内置工具；`ToolSpec` 单一声明，policy 与 loop 不再各持名单。 |
+| 只读工具并发 | `[x]` | 连续只读调用成组并发（上限 8），结果按调用顺序写回。 |
+| 计划状态 | `[x]` | `update_plan` + `plan.updated`，跨 daemon 重启可见，随 fork 带走。 |
+| 批量编辑 | `[x]` | 同文件多处替换一次审批；任一不匹配整体失败，不半应用。 |
+| 后台与长时命令 | `[x]` | `bash(background=true)` + `read_output` / `stop_command`，进程组级清理。 |
+| 中途提问 | `[x]` | `ask_user` 复用 approval broker；超时与拒绝明确区分。 |
+| 五类单轮闸门 | `[x]` | 步数 / token / 成本 / 验证轮次 / 重复动作，共用同一条收尾路径。 |
+| 三级上下文管理 | `[x]` | 写入截断 → 折叠旧工具输出 → 结构化摘要；`pending` 由代码续接。 |
+| 失效读取检测 | `[x]` | 按读取当时的 hash 比对，过期内容不以事实形态进入摘要。 |
+| Session fork | `[x]` | 从任意消息派生新 session；历史复制而非共享，compaction 边界重映射。 |
+| MCP 外部工具 | `[~]` | stdio transport 已接入并强制审批；HTTP transport 未做。 |
+| 上下文索引 | `[~]` | `related_files` + `glob` 启发式已完成；符号 / import / test mapping 未做，见 §4.1。 |
+
+### 2.3 安全与可运维
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| Policy Engine | `[x]` | allow / ask / deny 三态；bash 按 shell 语句边界切分后最严者胜。 |
+| Edit approval | `[x]` | inline diff、单次批准、session accept-all、read-before-write、stale 检测。 |
+| Project Trust | `[x]` | 默认 untrusted；仓库外 store 绑定 canonical 路径与 credential-free remote。 |
+| Shell/secret 边界 | `[x]` | 路径风险、mandatory protected paths、symlink 防逃逸、env allowlist、secret 脱敏。 |
+| 统一执行后端 | `[x]` | Host / Docker / OS 沙箱共用 execution contract、终态、取消、资源策略和 audit。 |
+| OS 级沙箱 | `[~]` | macOS seatbelt 已完成；Linux（landlock / bubblewrap）未做。 |
+| Docker Sandbox | `[~]` | test/build/lint MVP 完成，仍缺可控写入挂载和 artifact 导出。 |
+| 项目 hooks | `[x]` | `post_edit` / `pre_bash`，与 Agent 命令共用 policy 与审计路径；untrusted 不执行。 |
+| Session store | `[x]` | SQLite 持久化 + WAL 复用连接 + 迁移 ladder + 分页 + 保留策略（默认关闭）。 |
 | Pending approval 恢复 | `[x]` | 重启后未决 approval 标记 expired/rejected 并补事件。 |
-| Usage | `[x]` | token/cost 本地统计，按 session/day/model 查看。 |
-| Review rules | `[x]` | 确定性 review finding，支持配置禁用和阈值。 |
-| Docker Sandbox | `[~]` | test/build/lint MVP 已完成，仍缺写入挂载和 artifact 导出。 |
-| 单语言交互 | `[x]` | Runtime prompt、CLI、工具、策略、doctor 与 fixtures 统一英文；Application contract v2 已删除 language 字段。 |
-| 配置收敛 | `[~]` | 推荐 `main/reviewer/summarizer`，遗留键仍需迁移期兼容。 |
-| 依赖管理 | `[x]` | Python runtime/dev extra 和 Go Makefile 入口已收敛，`requirements(-dev).lock.txt` 提供可复现安装。 |
-| 版本化本地安装 | `[x]` | CLI、Runtime、venv 和 manifest 一体安装，clean-home install/start/stop E2E 已接入 CI。 |
-| 安装诊断 | `[x]` | `aicode doctor [--json]` 检查安装、版本、Python/依赖、端口、provider 和 Docker。 |
-| 统一执行后端 | `[x]` | Runtime Host/Docker backend 统一 execution contract、终态、取消、资源策略和 audit。 |
-| Project Trust | `[x]` | 默认 untrusted；仓库外 trust store 绑定 canonical workspace 与 credential-free Git remote。 |
-| Shell/secret 边界 | `[x]` | shell 路径风险、mandatory protected paths、symlink 防逃逸、Host env allowlist 和 SSE/audit secret 脱敏。 |
-| 上下文索引 | `[~]` | `related_files` 启发式已完成；符号/import/test mapping 尚未做。 |
-| 常驻 REPL | `[x]` | `aicode chat` 支持 persistent session、status/model/compact/new/resume、steer/follow-up/cancel，以及 TTY/non-TTY 稳定行为。 |
-| CLI 高级体验 | `[~]` | 基础可用，仍可做分文件审批、折叠展示、PR 描述等。 |
+| 审计可靠性 | `[x]` | 队列满降级同步写入而非丢弃；按大小轮转；健康度经 `runtime status` 暴露。 |
+| 分布式追踪 | `[x]` | 可选 OTLP，`run → tool.call → execution`；JSONL 仍是真相来源。 |
+| Usage | `[x]` | token/cost 本地统计，按 session/day/purpose/model/provider 查看。 |
+| Prompt caching | `[~]` | Anthropic 断点、cache token 与分档计价已实现，**量化对照数据未产出**。 |
+| Review rules | `[x]` | 18 条确定性规则，支持配置禁用和阈值。 |
+
+### 2.4 评测
+
+| 档次 | 状态 | 它回答什么 |
+| --- | --- | --- |
+| `smoke`（scripted，5 任务） | `[x]` | Agent Loop 实现是否正确。CI 门禁，零成本零抖动。 |
+| `live`（28 任务） | `[x]` | Agent 能否完成常规真实任务。**已满分，无区分度。** |
+| `live_hard`（8 任务） | `[x]` | 因与果分离时还能不能定位。**设计假设被证伪，仍无区分度。** |
+| `live_scale`（2 任务） | `[x]` | 规模本身构成难度吗。通过率满分，但检索成本出现 4× 信号。 |
+| `live_scale_curve`（4 任务） | `[~]` | 检索成本随规模怎么长。**首轮曲线因出题破绽作废，待重跑。** |
+| 参考解校验 | `[x]` | 每道题都有经校验的可行解，"难"和"无解"能分开。 |
 
 ## 3. 已完成能力
 
-### 3.1 基础运行链路
+按交付批次组织。逐项的背景、取舍与完成记录见 [TASKS.md](TASKS.md) 对应任务号。
 
-- [x] Go CLI 根命令和常用子命令。
-- [x] Python FastAPI Runtime。
-- [x] CLI 自动启动 Runtime daemon。
-- [x] `daemon start/status/stop`。
-- [x] Runtime 本机 token 鉴权。
-- [x] `make install` 安装版本化 Runtime、独立 venv 和原子 manifest。
-- [x] daemon 按环境覆盖、安装 manifest、源码 checkout 顺序解析 Runtime。
-- [x] `aicode doctor [--json]` 提供只读、可操作且可机器解析的本地诊断。
+### 3.1 基础运行链路（M0–M3）
+
+- [x] Go CLI 五分类命令与旧扁平命令兼容重写。
+- [x] Python FastAPI Runtime，CLI 自动启动 daemon。
+- [x] Runtime 本机 token 鉴权，**fail-closed**：未配置 token 即拒绝而非放行。
+- [x] `make install` 安装版本化 Runtime、独立 venv 和原子 manifest；三级 Runtime 解析顺序。
+- [x] `aicode runtime doctor [--json]` 只读、可操作、可机器解析的本地诊断。
 - [x] clean-home install/reinstall/rollback/doctor/start/status/stop E2E。
-- [x] `POST /v1/sessions` 创建 session。
-- [x] `POST /v1/sessions/{id}/messages` 发起 run。
-- [x] `GET /v1/sessions/{id}/events` SSE 事件流。
-- [x] `assistant.delta` 流式输出。
-- [x] `run.started`、`tool.started`、`tool.output`、`approval.*`、`edit.*`、`usage.recorded`、`final` 等事件。
-- [x] 当前 run 取消、阶段/最后进度观测，以及取消后继续消费 session 队列。
-- [x] `aicode chat` 常驻 REPL、同 session follow-up、safe-boundary steer 和手动持久化 compaction。
+- [x] Session / run / SSE 完整链路，`assistant.delta` 流式输出，`Last-Event-ID` 恢复。
+- [x] SSE 终止保证：按 run 过滤的流必定抵达终态事件，含 keep-alive 心跳。
+- [x] 当前 run 取消、阶段与最后进度观测，取消后继续消费队列。
+- [x] `aicode chat` 常驻 REPL：同 session follow-up、safe-boundary steer、手动 compaction。
+- [x] Application contract v2 与 Agent Core ports 分层，`bootstrap.py` 为唯一 composition root。
+- [x] stdio JSONL RPC（SDK），强制握手、有界队列真背压、关停先排空再取消 writer。
 
-### 3.2 Agent Loop v2
+### 3.2 模型与配置
 
-- [x] 使用模型原生 tools / tool_use 驱动主循环。
-- [x] 历史消息作为主要状态，支持多轮继续。
-- [x] 工具 schema 按 mode 裁剪。
-- [x] 工具调用结果写回 history 后继续推理。
-- [x] 编辑后自动提示模型验证。
-- [x] 历史压缩和 summarizer 路由。
-- [x] 未配置 provider 时明确报错，不回退 stub 模型。
-
-### 3.3 模型和配置
-
-- [x] OpenAI-compatible provider。
-- [x] Anthropic provider。
+- [x] OpenAI-compatible provider 与 Anthropic provider。
 - [x] `main` / `reviewer` / `summarizer` 三角色模型路由。
-- [x] provider timeout 配置。
-- [x] 本地 pricing 配置。
-- [x] `aicode models` 查看当前路由。
-- [x] 遗留 `models.default/planner/coder` 从用户文档和推荐配置中移除。
-- [~] 旧配置键仍保留读取兼容，后续需要正式迁移提示或清理策略。
+- [x] 版本化 Provider Profile：auth mode、capability、context window、tokenizer 策略。
+- [x] `aicode runtime models [--json]` 查看路由与 capability 来源；`models probe` 分阶段探测。
+- [x] `tool_calling=false` / `streaming=false` 在请求前快速失败，禁止从正文猜 tool JSON。
+- [x] 可重试状态码使用 equal jitter 退避，优先采用 `Retry-After`（60 秒上限）。
+- [x] 本地 pricing 配置与成本估算；`unpriced_model_calls` 区分"免费"与"没配价格"。
+- [x] 遗留 `models.default/planner/coder` 从文档和推荐配置移除，仅保留读取兼容。
+- [~] 旧配置键尚无正式迁移提示。
 
-### 3.4 工具和安全策略
+### 3.3 工具与安全策略
 
-- [x] `read_file`。
-- [x] `search`。
-- [x] `list_files`。
-- [x] `related_files`。
-- [x] `bash`。
-- [x] `edit_file`。
-- [x] `review_diff`。
-- [x] Policy Engine 三态：`allow` / `ask` / `deny`。
-- [x] 高风险 bash 命令识别。
-- [x] 写入工具必须经过 approval。
-- [x] protected paths。
-- [x] 非 UTF-8 文件拒绝编辑。
-- [x] stale patch 检测。
-- [x] review mode 只暴露只读工具。
-- [x] commit-message mode 不暴露工具。
-- [x] explain mode 硬只读：不暴露 `bash` / `edit_file`，Policy 层同时拒绝对应工具调用。
-- [x] Project Trust 存储在仓库外；仓库配置和 rules 不能自行提升 trust。
-- [x] untrusted workspace 的项目命令需要 approval 或 Docker sandbox。
-- [x] shell 同时分析命令风险、路径风险、glob、home、`../` 和 symlink 逃逸。
-- [x] `.env*`、SSH/GPG/cloud credentials、包管理凭证和私钥是不可移除的 mandatory protected paths。
-- [x] file/search/list/related/edit 与 shell 共享 protected path 边界。
-- [x] Host 子进程使用环境变量 allowlist 和隔离 HOME，不继承 provider/runtime secret。
-- [x] 已知 Runtime secret 不进入 tool output、SSE 或 audit，也不能直接写文件/拼入 shell。
+- [x] 12 个内置工具：`read_file` `search` `glob` `list_files` `related_files` `review_diff` `bash` `edit_file` `read_output` `stop_command` `ask_user` `update_plan`。
+- [x] `ToolSpec` 单一声明：模型看 schema、policy 读 `read_only`、loop 读 `approval`，三者不可漂移。
+- [x] Policy Engine 三态；bash 按 shell 语句边界切分后逐条分类，最严者胜。
+- [x] 写入工具必须经过 approval；`deny` 不可由 approval 覆盖。
+- [x] read-before-write 强制；非 UTF-8 文件拒绝编辑；stale patch 三种情形分别给出可执行提示。
+- [x] protected paths：mandatory 清单不可移除，file/search/glob/list/related/edit 与 shell 共享边界。
+- [x] Project Trust 存储在仓库外；仓库配置、rules、memory 均不能自行提升 trust。
+- [x] untrusted workspace：bash 进沙箱、项目命令需审批、hooks 完全不执行。
+- [x] Host 子进程环境变量 allowlist 与隔离 HOME；Runtime 内部 `git`/`rg` 拒绝 PATH hijack。
+- [x] 已知 Runtime secret 不进入 tool output、SSE 或 audit，也不能写文件或拼入 shell。
+- [x] review / commit-message / explain 三种只读 mode 的 schema 裁剪与 policy 硬拒绝分离实现。
+- [x] MCP 外部工具强制 `approval="gate"`，命名空间隔离，环境 allowlist，故障隔离。
 
-### 3.5 Edit Approval
+### 3.4 Agent Loop 正确性
 
-- [x] `edit_file` 生成 unified diff。
-- [x] CLI 展示 inline diff。
-- [x] `y` 批准单次编辑。
-- [x] `a` 批准本 session 后续非 protected 编辑。
-- [x] 其它输入拒绝编辑。
-- [x] 应用前再次检查 `old_text`。
-- [x] `edit.applied` 事件记录 `patch_hash`。
-- [x] 审计日志不记录完整 diff。
-- [x] daemon 重启后 pending approval 标记 expired/rejected。
+- [x] 单一历史来源：不维护内存 transcript，每轮从 session 重建。
+- [x] 连续只读调用并发（上限 8），结果按调用顺序写回，`ToolContext` 独立副本。
+- [x] 五类单轮闸门共用同一条收尾路径，收尾调用不再过闸，不递归。
+- [x] 验证闸门机制化：`VerifyTracker` 记账，达上限产出"改了什么、为何仍失败"。
+- [x] 打转检测：同时跟"相同调用"与"相同失败"两条计数，警告每 episode 只发一次。
+- [x] 三级上下文管理与结构化摘要，`pending` / `open_failures` 由代码续接。
+- [x] 失效读取检测，按读取当时的 hash 而非滚动记录比对。
 
-### 3.6 Session、恢复和 Usage
+### 3.5 持久化与可运维
 
-- [x] SQLite session store。
-- [x] messages 持久化。
-- [x] events 持久化。
-- [x] approval 状态持久化。
-- [x] `aicode sessions`。
-- [x] `aicode resume --last`。
-- [x] `aicode resume <session_id>`。
-- [x] SSE `Last-Event-ID` 恢复。
-- [x] token usage 记录。
-- [x] cost 本地估算。
-- [x] `aicode usage`。
-- [x] `aicode usage --today`。
-- [x] `aicode usage --session <session_id>`。
+- [x] SQLite session/message/event/approval/compaction 持久化。
+- [x] WAL 单连接复用（写入 5.2ms → 1.1ms）；schema 迁移 ladder 与版本上界拒绝。
+- [x] 会话列表分页（69.4ms → 1.2ms）与保留策略（默认关闭，活跃 session 永不删除）。
+- [x] Session fork：历史复制、compaction 边界重映射、非法 message id 直接报错。
+- [x] 审计日志不静默丢弃、按大小轮转、健康度可查询。
+- [x] 可选 OTLP 追踪，装饰器模式叠加在 JSONL 之上。
+- [x] approval 四态终结（accepted / rejected / timed_out / missing），超时不读作拒绝。
 
-### 3.7 Review
+### 3.6 执行环境
 
-- [x] `aicode review`。
-- [x] reviewer 模型路由。
-- [x] review mode 只读工具。
-- [x] `review_diff` 确定性规则。
-- [x] secret、敏感路径、debug 输出、大 diff、TODO/FIXME、前端 XSS、反序列化、TLS/权限等规则。
-- [x] `.aicode/config.json` 中配置 disabled rules、large diff threshold、max findings。
-- [x] `aicode review-rules`。
-- [x] `aicode config review list/docs/enable/disable/set/unset/prune`。
+- [x] Host / Docker / OS 沙箱统一 ExecutionBackend，共享终态、取消、进程组终止与 audit。
+- [x] Agent bash 按 trust 级别进入 Docker 沙箱；`auto|host|docker|os` 四种配置。
+- [x] OS 级沙箱（macOS seatbelt）：allow-default + 定点拒绝，保证工作区外不可写与禁网。
+- [x] 沙箱不可用时**明确失败**，不回退宿主机；镜像缺失不隐式拉取。
+- [x] 后台进程管理挂在 ExecutionService 上，复用 lifespan 清理路径。
+- [x] 项目 hooks 与 Agent 命令共用执行、policy 与审计路径。
 
-### 3.8 Docker Sandbox
+### 3.7 评测与文档
 
-- [x] `aicode --sandbox docker test`。
-- [x] `aicode --sandbox docker build`。
-- [x] `aicode --sandbox docker lint`。
-- [x] 读取项目 `commands.test/build/lint`。
-- [x] workspace 只读挂载。
-- [x] 默认禁网。
-- [x] 不传 `.env*`。
-- [x] 遮蔽仓库根目录 `.env*`。
-- [x] 允许少量 cache env。
-- [x] CPU、内存、PID 限制。
-- [x] sandbox audit event。
-- [x] CLI sandbox 下沉 Runtime，与 Agent Host 命令共享 ExecutionService。
-- [x] execution timeout/cancel 终止完整进程组，正常 daemon stop 先清理活跃 execution。
-- [~] 还没有可选写入挂载。
-- [~] 还没有 artifact 导出。
+- [x] scripted smoke suite 进 CI，baseline 固定 policy/prompt/tool-spec digest。
+- [x] live harness：`LiveEvalProvider` 与 scripted 表面完全一致，无 mode 分支。
+- [x] mutation check：新增测试类任务必须抓到蓄意缺陷。
+- [x] 参考解校验：每题可解，且每条 mutation 被两份不同写法的解抓到。
+- [x] 失败归因确定性推导，无 LLM-as-judge。
+- [x] 四档 live 任务集与对应 Makefile target（含 OpenAI-compatible 重定向）。
+- [x] README、ARCHITECTURE 按当前实现重写（2026-08-02）。
 
-### 3.9 文档
+## 4. 待定：由证据触发
 
-- [x] README 已按当前实现重写。
-- [x] ARCHITECTURE 已按当前实现重写。
-- [x] ROADMAP 已改为当前状态路线图。
+这一节的能力**都不缺设计，缺的是该不该做的证据**。它们共用一条纪律：只由评测产出的失败归因触发，不按直觉排期。
 
-## 4. 既有增量 Backlog
+### 4.1 repo map / 符号索引（T-047）
 
-这一组记录 2026-07-26 前已识别的小型增量及完成状态，不再表示全局执行顺序。未完成事项应并入优化执行路线对应工作包，避免形成第二套优先级。
+`related_files` 是启发式黑箱，模型无法理解它为何给出这些结果。业界更有效的是 repo map（tree-sitter 抽符号签名按引用关系排序注入）。
 
-### 4.1 收敛安全语义
+**书面触发条件**：失败归因中"定位失败"占比显著。**当前未满足**——四档 live 的功能性通过率全部满分，归因分布是空的。
 
-- [x] 把 `explain` 升级为硬只读 mode。
-  - [x] Runtime 不向 `explain` 暴露 `bash` / `edit_file`（`tool_schemas_for_mode`）。
-  - [x] Policy 把 `explain` 加入 read-only mode（`READ_ONLY_MODES`）。
-  - [x] 文档同步说明（ARCHITECTURE.md Modes 表、Policy 小节、Current Gaps）。
-  - [x] 增加测试覆盖（`test_registry.py`、`test_policy_gate.py`）。
+但 `live_scale` 给出了一个非通过率的信号：工具调用从易档 6.8 涨到规模档 27.0（4×），而模型调用只从 6.1 涨到 9.5（1.6×）——**模型没多想，是在多找**。这是成本信号而非失败信号，是否据此启动需要显式决定，不能用"差不多满足"代替。
 
-- [ ] 为 pending approval 恢复补端到端测试。
-  - 覆盖 daemon restart。
-  - 覆盖 session store reload。
-  - 覆盖 SSE 中 `approval.expired` + `tool.rejected` / `edit.rejected`。
-  - 覆盖重复恢复不重复补事件。
+`live_scale_curve` 就是为把这个决定变成数字而建的：同一缺陷埋进 10/30/100/300 个模块，看效率随规模的增长指数。**首轮曲线已作废**（缺陷模块含唯一 token，模型 grep 一次即命中，量的是出题破绽不是检索成本），缺陷已改为交叉引用错误并加测试挡住这类破绽，**待重跑**。
 
-- [ ] 为 prompt 安全层级增加回归测试。
-  - `.aicode/rules.md` 不能覆盖系统安全策略。
-  - 英文 system prompt 明确 project rules 的安全边界。
-  - review/commit-message/explain mode 的 prompt 约束保持一致。
+- [ ] 重跑 `live_scale_curve` 并读出增长指数。
+- [ ] 按曲线形状决定：接近平坦 → 不做；明显上翘 → 启动。
+- [ ] tree-sitter 符号抽取（Python / TypeScript / Go）。
+- [ ] 按引用关系排序注入。
+- [ ] 评估 `related_files` 是否应被取代。
 
-### 4.2 收敛配置体验
+### 4.2 检索式项目记忆（T-023）
 
-- [ ] 给遗留 `models.default/planner/coder` 增加迁移提示。
-  - `config show/list/docs` 不推荐旧键。
-  - 如果检测到旧键，提示迁移到 `models.main/reviewer/summarizer`。
-  - 保持短期兼容，避免破坏旧用户配置。
+`.aicode/memory/*.md` 按主题拆分的带 frontmatter 小文件取代当前全量注入的单一 `memory.md`，按当前任务关键词/路径检索注入。
 
-- [ ] 统一 provider 配置命名。
-  - CLI 文档、README、Runtime env 注入保持一致。
-  - Anthropic timeout 配置在 CLI 中完整可见。
-  - 明确各 provider 的错误重试策略，并通过测试固定行为。
-  - `aicode models --json` 能辅助排查 provider 配置。
+**触发条件**：评测显示跨会话重复解释同一项目约定造成可观测的 token 浪费。**当前未满足。**
 
-### 4.3 依赖管理
+### 4.3 subagent（T-048）
 
-- [x] Python 运行依赖集中到 `runtime/pyproject.toml`。
-- [x] Python 测试依赖集中到 `runtime[dev]` extra。
-- [x] Go module 通过根目录 `go.work` 管理。
-- [x] 根目录 `Makefile` 提供 `make deps`、`make test-go`、`make test-python`、`make test`。
-- [x] Python 依赖锁文件：`runtime/requirements.lock.txt`（运行依赖）与 `runtime/requirements-dev.lock.txt`（含测试依赖），由 `make lock-python`（基于 `uv pip compile --universal`）生成，`make deps-python` 和 CI 均从锁文件安装。
-- [ ] 评估是否需要 Go 工具依赖 pinning，例如 lint 工具的 `tools.go`。
-- [x] CI 中固定依赖安装和 cache 路径：`.github/workflows/ci.yml` 通过 `make deps-python`（锁文件）安装，`setup-python` 启用 `cache: pip`。
+**触发条件**：评测显示主上下文被探索过程显著污染。**当前未满足。**
 
-### 4.4 补齐 Docker Sandbox MVP
+任何 subagent 必须复用预算、Policy、ExecutionBackend、approval 与 trace——否则它就是一条绕过所有闸门的旁路。
 
-- [ ] 支持可控写入目录。
-  - 默认仍只读。
-  - 用户显式开启后挂载临时 writable workdir。
-  - 不把 `.env*` 或 secret 写入容器。
+### 4.4 模型横向对比与上下文消融（T-026）
 
-- [ ] 支持 artifact 导出。
-  - 允许导出测试报告、coverage、build output。
-  - artifact 路径必须在受控目录内。
-  - 审计日志记录 artifact 元信息。
+同一 live 任务集跑多个模型产出成本–成功率曲线；消融 `compact_threshold` 与 `related_files`。指标已实现，只需喂真实数据。
 
-- [x] 增加 ExecutionBackend/sandbox 集成测试（Docker daemon 与本地镜像可用时运行真实容器，否则明确 skip）。
-  - test/build/lint 命令选择。
-  - 禁网参数。
-  - `.env*` mask。
-  - resource limit。
-  - audit command hash。
+**部分已做**：`live_hard` 换弱模型（`deepseek-v4-flash`）跑出与强模型**完全一致**的结果，这排除了"任务集有区分度只是对强模型太易"。剩下的横向对比需要更有区分度的任务集才有意义。
 
-## 5. 候选中期能力
+## 5. 待定：不依赖证据
 
-### 5.1 上下文引擎
+这一节是已知缺失的机制或收尾工作，不需要评测数据就能判断该做。
 
-当前 `related_files` 已能解决一部分源码/测试同名、引用搜索和邻近文件问题。下一步不建议把复杂索引塞回 Agent Loop，而是作为可选只读工具逐步增强。
+### 5.1 prompt caching 的量化数据（T-014）
 
-该方向由执行路线的 WP2.4 管理：只有任务级 eval 证明文本搜索是主要失败原因时才启动，不默认排在交互模式、本地 provider 和评测体系之前。
+代码与测试已完成，任务仍未关闭——**验收要求的是数字，不是代码**：同一真实 session 连续 5 轮，开启与关闭 caching 的 `input_tokens` 与 `estimated_cost` 对比。
 
-- [ ] SQLite workspace index。
-- [ ] 文件 mtime/hash 缓存。
-- [ ] symbol table。
-- [ ] import/dependency graph。
-- [ ] source/test mapping。
-- [ ] TypeScript symbol extraction。
-- [ ] Python symbol extraction。
-- [ ] Go symbol extraction。
-- [ ] `related_files` 使用索引结果增强排序。
-- [ ] 大仓库下的增量更新策略。
+阻塞原因是环境而非实现：本机未配置 `ANTHROPIC_API_KEY`，且当前 provider（DeepSeek）走自动上下文缓存、不认 `cache_control`，这条路径拿不到对照数据。
 
-验收：
+- [ ] 配置 Anthropic key 后跑 5 轮 × 开/关两组，把对照写进 README。
 
-```bash
-aicode "解释登录流程，并指出前端和后端接口在哪里对应"
-```
+### 5.2 Docker Sandbox 收尾
 
-应能自动找到关键入口、调用链和测试文件，并保持只读。
+- [ ] 可控写入目录：默认仍只读，显式开启后挂载临时 writable workdir，不把 secret 写入容器。
+- [ ] artifact 导出：测试报告、coverage、build output；路径必须在受控目录内，审计记录 artifact 元信息。
 
-### 5.2 Provider Reliability
+### 5.3 Linux OS 沙箱
 
-- [ ] per-route health check。
-- [ ] provider fallback。
-- [ ] 模型不可用时给出可操作诊断。
-- [ ] 429/5xx backoff 策略可配置。
-- [ ] usage 里区分重试消耗和最终输出。
+- [ ] landlock 或 bubblewrap 后端。当前非 macOS 上选 `os` 直接失败——声称一条并未生效的边界比明说不支持更糟，因此这条不能靠"尽力而为"实现。
 
-验收：
+### 5.4 MCP HTTP transport
 
-```bash
-aicode models --json
-```
+- [ ] 当前只有 stdio。发布一个未经充分测试的第二 transport 比不发布更糟，因此这条需要配套的协议测试而不只是客户端代码。
 
-应能看出每个 route 的 provider、model、配置来源和健康状态。
+### 5.5 配置与 provider 收尾
 
-### 5.3 CLI UX
+- [ ] 遗留 `models.default/planner/coder` 的迁移提示（检测到旧键时提示迁移，保持短期兼容）。
+- [ ] per-route health check 与 provider fallback。
+- [ ] usage 中区分重试消耗与最终输出。
+- [ ] 评估 Go 工具依赖 pinning（如 lint 工具的 `tools.go`）。
+
+### 5.6 测试补齐
+
+- [ ] pending approval 恢复的端到端测试：daemon restart、session store reload、SSE 中 `approval.expired` + `tool.rejected` / `edit.rejected`、重复恢复不重复补事件。
+- [ ] prompt 安全层级回归测试：`.aicode/rules.md` 不能覆盖系统安全策略，三种只读 mode 的 prompt 约束保持一致。
+
+### 5.7 CLI 体验
 
 - [ ] 工具调用折叠展示。
 - [ ] 分文件 approve / reject。
-- [ ] 对同一 edit 增加“追加要求后重新生成”。
-- [ ] 大改动前展示简短 plan 并请求确认。
+- [ ] 对同一 edit 追加要求后重新生成。
 - [ ] 失败原因摘要。
-- [ ] `aicode pr-description`。
-- [ ] `aicode explain <symbol>` 更精准。
-- [x] CLI 固定文案统一英文。
-
-验收：
-
-```bash
-aicode "重构这个模块，但保持行为一致"
-```
-
-应能先给出改动边界，分步骤提出 patch，每次写入前展示 diff，最后汇总验证结果。
+- [ ] `aicode task pr-description`。
 
 ## 6. 长期方向
 
-这些方向有价值，但不应挤占当前本地 Agent 核心闭环。
+有价值，但不应挤占当前本地 Agent 核心闭环：
 
-- [ ] IDE 插件。
-- [ ] Web UI。
-- [ ] 远端企业审计控制台。
-- [ ] SSO / workspace policy 管理。
+- [ ] IDE 插件（必须复用 Application contract v2，不得复制 Agent 逻辑）。
+- [ ] Web UI / 全屏 TUI。
+- [ ] 远端企业审计控制台、SSO / workspace policy 管理。
 - [ ] 云端隔离执行环境。
 - [ ] embedding 检索。
 - [ ] PR 自动评论。
 - [ ] 跨仓库写入。
 - [ ] 多 Agent 协作执行。
 
-## 7. 暂不做
+## 7. 明确不做
 
-- [ ] 不做无确认的大规模文件删除。
-- [ ] 不做默认联网 sandbox。
-- [ ] 不做自动读取用户全磁盘。
-- [ ] 不做项目规则覆盖系统安全策略。
-- [ ] 不做 provider 未配置时的 stub 假成功。
-- [ ] 不做自动部署生产环境。
+这些不是"以后再说"，是设计上的拒绝：
+
+- 不做无确认的大规模文件删除。
+- 不做默认联网 sandbox。
+- 不做自动读取用户全磁盘。
+- 不做项目规则覆盖系统安全策略。
+- 不做 provider 未配置时的 stub 假成功。
+- 不做沙箱不可用时回退宿主机执行。
+- 不做自动部署生产环境。
+- 不做 LLM-as-judge 评分。
 
 ## 8. Definition Of Done
 
 新增功能完成时需要满足：
 
-- 有最小测试覆盖。
-- 有失败路径处理。
+- 有最小测试覆盖，有失败路径处理。
 - 涉及写入时必须经过 approval flow。
 - 涉及进程执行时必须经过统一 ExecutionBackend 和 Policy。
 - 涉及模型调用时必须记录 usage。
 - 涉及安全策略时必须记录 audit。
-- 涉及 Agent 行为时必须提供对应 eval 或说明尚缺的评测覆盖。
+- 涉及 Agent 行为时必须提供对应 eval，或明确说明尚缺的评测覆盖。
+- 新增 SSE event 必须三处同步登记（`events.py`、`events.schema.json`、fixture + Go renderer）。
+- 改动 policy / prompt / 工具声明必须重新生成 eval baseline，且不得为通过而放宽 `minimum_metrics`。
 - 涉及用户可见行为时同步 README 或 ARCHITECTURE。
-- 涉及路线图状态变化时同步本文件。
+- 涉及路线图状态变化时同步本文件与 [TASKS.md](TASKS.md)。
 
 推荐验证命令：
 
 ```bash
-make test-go
-make test-python
+make test          # Go + Python
+make lint-python
+make eval-smoke
 ```
 
-文档变更至少运行：
+## 9. 下一轮
 
-```bash
-git diff --check
-```
+一句话：**重跑 `live_scale_curve`，读出增长指数，然后才决定 T-047。**
 
-## 9. 下一轮建议
+四档 live 的功能性通过率全部满分，因此通过率已经不携带信息；唯一在动的是检索成本，而量它的那条曲线首轮量到的是出题破绽（已修，待重跑）。在拿到重跑结果之前：
 
-M0–M2 与 WP1.4 已完成。下一步建议先实际使用常驻 REPL 收集 trace/eval 证据；需要 IDE、脚本嵌入时再启动 WP2.1 SDK/stdio JSONL RPC，并强制复用 Application contract v2。索引、subagent 和插件继续只由评测结果触发。
+- T-023 / T-026 / T-047 / T-048 的触发条件仍未满足，不启动。
+- 优先做 §5 里不依赖证据的收尾项——它们不需要等任何数据。
+- 若曲线明显上翘，T-047 转为第一优先；若接近平坦，则说明规模基本免费，索引方向应整体降级，转而在"真模糊需求""长时程多步"这两根轴上重新出题。
