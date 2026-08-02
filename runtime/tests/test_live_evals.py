@@ -10,6 +10,8 @@ calling a real model.
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -769,6 +771,37 @@ def test_only_size_varies_across_the_curve():
     assert len({task.profile.model_dump_json() for task in tasks}) == 1
 
 
+def test_no_module_carries_a_token_its_peers_lack():
+    """The defect must not be findable by one grep, or the curve measures nothing.
+
+    The first version of this tier planted a `weight` token that appeared in the
+    broken handler and nowhere else; the model read the test, grepped it, and
+    found the module in one hit at every size — an O(1) lookup that made the
+    curve look flat regardless of repository size. A defect has to be a
+    *cross-reference* error, invisible to token search, for size to be the thing
+    being measured.
+    """
+    for task in curve_tasks():
+        handlers = [
+            path
+            for path in (EVAL_ROOT / "fixtures" / task.fixture / "handlers").glob("*.py")
+            if path.name != "__init__.py"
+        ]
+        vocabularies = {
+            path.name: set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", path.read_text(encoding="utf-8")))
+            for path in handlers
+        }
+        for name, vocabulary in vocabularies.items():
+            elsewhere = set().union(
+                *(other for key, other in vocabularies.items() if key != name)
+            )
+            unique = vocabulary - elsewhere
+            # Its own module name is inherently unique and is not a giveaway:
+            # it identifies the file, it does not mark it as broken.
+            unique -= {pathlib.Path(name).stem}
+            assert not unique, f"{task.task_id}: {name} carries unique tokens {sorted(unique)}"
+
+
 def test_the_defect_sits_away_from_both_ends():
     """A bug in the first or last module is findable by habit, not by search."""
     for task in curve_tasks():
@@ -779,7 +812,8 @@ def test_the_defect_sits_away_from_both_ends():
         broken = [
             index
             for index, path in enumerate(handlers)
-            if "weight" in path.read_text(encoding="utf-8")
+            # The defect is a handler filtering on a name that is not its own.
+            if f'!= "{path.stem}"' not in path.read_text(encoding="utf-8")
         ]
         assert len(broken) == 1, task.task_id
         assert 0 < broken[0] < len(handlers) - 1, task.task_id

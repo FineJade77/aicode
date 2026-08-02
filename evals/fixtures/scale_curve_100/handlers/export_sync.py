@@ -10,7 +10,7 @@ def handle(records):
     """
     total = 0
     for record in records:
-        if record.get("kind") != "export_sync":
+        if record.get("kind") != "invoice_queue":
             continue
         total += 1
     return Result(name="export_sync", total=total)

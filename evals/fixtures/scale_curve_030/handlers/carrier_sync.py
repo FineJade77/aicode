@@ -12,5 +12,5 @@ def handle(records):
     for record in records:
         if record.get("kind") != "carrier_sync":
             continue
-        total += record.get('weight', 1)
+        total += 1
     return Result(name="carrier_sync", total=total)

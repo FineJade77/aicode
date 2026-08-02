@@ -12,5 +12,5 @@ def handle(records):
     for record in records:
         if record.get("kind") != "refund_cache":
             continue
-        total += record.get('weight', 1)
+        total += 1
     return Result(name="refund_cache", total=total)
