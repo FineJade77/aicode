@@ -796,9 +796,13 @@ def test_no_module_carries_a_token_its_peers_lack():
                 *(other for key, other in vocabularies.items() if key != name)
             )
             unique = vocabulary - elsewhere
-            # Its own module name is inherently unique and is not a giveaway:
-            # it identifies the file, it does not mark it as broken.
-            unique -= {pathlib.Path(name).stem}
+            # Tokens derived from the module's own name are inherently unique
+            # and are not giveaways: they identify the file, they do not mark it
+            # as broken. Everything else being unique is the thing to catch.
+            stem = pathlib.Path(name).stem
+            identity = {stem, *stem.split("_")}
+            identity |= {word.capitalize() for word in identity}
+            unique -= identity
             assert not unique, f"{task.task_id}: {name} carries unique tokens {sorted(unique)}"
 
 
