@@ -453,6 +453,7 @@ async def execute_tool_calls(
     """
     outcome = StepOutcome()
     edits_so_far = edits_applied_before
+    await prepare_edit_batch(session, calls, runtime, context)
     for group in consecutive_tool_groups(calls, runtime):
         if len(group) > 1:
             session.mark_agent_progress(f"tool.parallel({len(group)})")
@@ -764,6 +765,94 @@ async def execute_gated(
     )
 
 
+async def prepare_edit_batch(
+    session: AgentSession,
+    calls: list[ToolCallRequest],
+    runtime: AgentRuntime,
+    context: Any,
+) -> None:
+    """Ask once about a turn's edits instead of once per file, in order.
+
+    Serial prompting makes the user decide on the first file without having seen
+    the second. That is not a smaller version of the same question — a change
+    only makes sense as a whole, and approving half of one is exactly the
+    outcome nobody wants.
+
+    Only *distinct* paths are batched. Two edits to one file must stay serial:
+    the second is built against the content the first produced, so showing both
+    up front would display a diff that no longer applies by the time it runs.
+
+    The built proposals are kept and reused at execution time, so what the user
+    approved is what gets written rather than a rebuild that could differ.
+    """
+    if runtime.tools is None or session.auto_accept_edits:
+        return
+    edits = [call for call in calls if call.name == "edit_file"]
+    if len(edits) < 2:
+        return
+    proposals: dict[str, Any] = {}
+    paths: list[str] = []
+    for call in edits:
+        try:
+            proposal = runtime.tools.build_edit_proposal(context, call.arguments)
+        except Exception:
+            # A proposal that will not build is reported by the normal serial
+            # path, where the error reaches the model attached to its own call.
+            return
+        if proposal.path in paths:
+            return
+        proposals[call.id] = proposal
+        paths.append(proposal.path)
+
+    decision = await request_approval(
+        session,
+        "edit",
+        {
+            "paths": paths,
+            "items": [
+                {
+                    "path": proposals[call.id].path,
+                    "kind": proposals[call.id].kind,
+                    "diff": proposals[call.id].diff,
+                    "tool_call_id": call.id,
+                }
+                for call in edits
+            ],
+            "diff": "\n".join(proposals[call.id].diff for call in edits),
+        },
+        runtime,
+    )
+    selected = set(selected_paths(session, decision, paths))
+    session.pending_edit_batch = {
+        call.id: {"proposal": proposals[call.id], "accepted": proposals[call.id].path in selected, "decision": decision}
+        for call in edits
+    }
+
+
+def selected_paths(session: AgentSession, decision: ApprovalDecision, paths: list[str]) -> list[str]:
+    if decision is ApprovalDecision.ACCEPTED:
+        return list(paths)
+    if decision is not ApprovalDecision.PARTIAL:
+        return []
+    chosen = latest_selection(session, "edit")
+    # A selection naming nothing recognisable is treated as approving nothing:
+    # applying everything because the subset failed to parse is the one outcome
+    # a partial approval was meant to prevent.
+    return [path for path in paths if path in chosen]
+
+
+def latest_selection(session: AgentSession, kind: str) -> set[str]:
+    newest = None
+    selection: tuple[str, ...] = ()
+    for approval in getattr(session, "approvals", {}).values():
+        if approval.kind != kind or approval.resolution != "partial":
+            continue
+        if newest is None or approval.created_at >= newest:
+            newest = approval.created_at
+            selection = approval.selection
+    return set(selection)
+
+
 async def execute_edit(
     session: AgentSession,
     request: AgentRequest,
@@ -775,6 +864,15 @@ async def execute_edit(
         raise RuntimeError("AgentRuntime is missing a tool runtime or clock adapter")
     started = runtime.clock.monotonic()
     workspace = Path(request.workspace)
+    # Decided already, as part of a batch the user saw in one piece. The
+    # proposal is the one that was shown, not a rebuild.
+    batched = session.pending_edit_batch.pop(call.id, None) if hasattr(session, "pending_edit_batch") else None
+    if batched is not None:
+        proposal = batched["proposal"]
+        decision = ApprovalDecision.ACCEPTED if batched["accepted"] else batched["decision"]
+        return await _finish_edit(
+            session, request, call, runtime, context, proposal, decision, started, workspace
+        )
     try:
         proposal = runtime.tools.build_edit_proposal(context, call.arguments)
     except Exception as exc:
@@ -800,9 +898,24 @@ async def execute_edit(
             {"path": proposal.path, "kind": proposal.kind, "diff": proposal.diff, "tool_call_id": call.id},
             runtime,
         )
+    return await _finish_edit(
+        session, request, call, runtime, context, proposal, decision, started, workspace
+    )
 
+
+async def _finish_edit(
+    session: AgentSession,
+    request: AgentRequest,
+    call: ToolCallRequest,
+    runtime: AgentRuntime,
+    context: Any,
+    proposal: Any,
+    decision: ApprovalDecision,
+    started: float,
+    workspace: Path,
+) -> ToolCallResult:
+    assert runtime.tools is not None
     if decision is not ApprovalDecision.ACCEPTED:
-        reason = approval_failure_text(decision, "apply this edit")
         await session.events.put(
             {
                 "type": "edit.rejected",
@@ -811,6 +924,17 @@ async def execute_edit(
                 "resolution": str(decision),
             }
         )
+        if decision is ApprovalDecision.REVISE:
+            guidance = pending_guidance(session, "edit")
+            return ToolCallResult(
+                revision_note(f"edit {proposal.path}", guidance) if guidance
+                # A `revise` with nothing attached is a plain refusal; saying
+                # "the user explained" when they did not would be a lie the
+                # model then tries to act on.
+                else f"[{approval_failure_text(ApprovalDecision.REJECTED, 'apply this edit')}] {proposal.path}",
+                ok=False,
+            )
+        reason = approval_failure_text(decision, "apply this edit")
         return ToolCallResult(f"[{reason}] {proposal.path}", ok=False)
 
     try:
@@ -946,6 +1070,25 @@ async def request_approval(
     )
 
 
+def pending_guidance(session: AgentSession, kind: str) -> str:
+    """The guidance text from the most recently resolved approval of this kind.
+
+    Read from session state rather than returned by the broker so the broker's
+    signature — and every embedder implementing it — keeps carrying just the
+    decision. The text is an attribute of the approval, and that is where it
+    already lives.
+    """
+    latest = ""
+    newest = None
+    for approval in getattr(session, "approvals", {}).values():
+        if approval.kind != kind or approval.resolution != "revise":
+            continue
+        if newest is None or approval.created_at >= newest:
+            newest = approval.created_at
+            latest = approval.response
+    return latest.strip()
+
+
 def record_written_file(session: AgentSession, workspace: Path, proposal: Any) -> None:
     target = workspace / proposal.path
     if proposal.kind == "delete" or not target.is_file():
@@ -970,6 +1113,21 @@ def approval_failure_text(decision: ApprovalDecision, action: str) -> str:
     if decision is ApprovalDecision.MISSING:
         return f"approval to {action} could not be found, so it was not performed"
     return f"user rejected the request to {action}"
+
+
+def revision_note(action: str, guidance: str) -> str:
+    """Turn a guided refusal into an instruction the model can act on.
+
+    A bare rejection tells the model to stop, and stopping is right when the
+    user simply does not want the change. When they said *how* they want it
+    instead, reporting only the refusal throws away the answer and invites the
+    model to abandon a plan that was one revision away from correct.
+    """
+    return (
+        f"The user did not approve the request to {action}, and asked for it to be done "
+        f"differently: {guidance}\n"
+        "Revise the approach accordingly and propose it again; do not repeat the same proposal."
+    )
 
 
 def turn_budget(runtime: AgentRuntime) -> TurnBudget:

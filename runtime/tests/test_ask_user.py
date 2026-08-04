@@ -299,5 +299,18 @@ async def test_a_cancelled_run_releases_a_pending_question(tmp_path):
     assert result.data["status"] in {"declined", "timed_out"}
 
 
-def test_decisions_stay_four_state():
-    assert {member.value for member in ApprovalDecision} == {"accepted", "rejected", "timed_out", "missing"}
+def test_every_distinct_approval_outcome_stays_distinct():
+    """The point is which outcomes must never collapse into each other.
+
+    Originally four: "the user said no" and "nobody answered" had been the same
+    `False`, and the model abandoned correct plans over unattended requests. Two
+    more joined for the same reason — a partial acceptance is not a full one
+    (work happened, but not all of it), and a refusal carrying instructions is
+    not a bare refusal (one says stop, the other says how). Counting members
+    would break on every addition; what has to hold is that none of these six
+    share a value.
+    """
+    values = [member.value for member in ApprovalDecision]
+
+    assert set(values) >= {"accepted", "partial", "rejected", "revise", "timed_out", "missing"}
+    assert len(values) == len(set(values))

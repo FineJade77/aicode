@@ -139,8 +139,14 @@ class PendingApproval:
     resolution: str = ""
     # The user's text for requests that ask something rather than gate something.
     # An approval answers "may I?"; a question answers "which one?", and a bool
-    # cannot carry that.
+    # cannot carry that. Also carries revision guidance for a `revise`
+    # resolution: "not like that, do X" is not expressible as a refusal.
     response: str = ""
+    # For a request covering several items, the ones the user accepted. Empty on
+    # an all-or-nothing decision; a partial acceptance always names its subset
+    # rather than encoding it as "accepted with exceptions", which would leave
+    # the exceptions unstated.
+    selection: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -341,6 +347,12 @@ class Session:
     # the totals are therefore a lower bound. In-memory only: after a restart
     # there is no stream left to account for.
     in_flight_model_call: dict[str, Any] | None = field(default=None, repr=False)
+    # Decisions for a batch of edits the user was shown together, keyed by tool
+    # call id: `{call_id: {"proposal": ..., "accepted": bool}}`. Per-run state
+    # like `read_files`, and carried on the session for the same reason — the
+    # alternative is threading it through four call layers including the
+    # parallel one, where it has no business being.
+    pending_edit_batch: dict[str, Any] = field(default_factory=dict, repr=False)
     plan_writer: Callable[[list[PlanItem]], None] | None = field(default=None, repr=False)
     message_appender: Callable[[dict[str, Any]], int | None] | None = field(default=None, repr=False)
     compaction_appender: Callable[[CompactionEntry], CompactionEntry] | None = field(default=None, repr=False)
@@ -466,6 +478,7 @@ class Session:
         self.current_run_started_at = None
         self.current_run_last_progress_at = None
         self.in_flight_model_call = None
+        self.pending_edit_batch = {}
 
     def begin_model_call(self, *, purpose: str, model: str | None) -> None:
         self.in_flight_model_call = {
@@ -502,12 +515,14 @@ class Session:
         *,
         resolution: str = "",
         response: str = "",
+        selection: tuple[str, ...] | list[str] = (),
     ) -> bool:
         approval = self.approvals.get(approval_id)
         if approval is None or approval.accepted is not None:
             return False
         approval.accepted = accepted
         approval.response = response
+        approval.selection = tuple(selection)
         approval.resolution = resolution or ("accepted" if accepted else "rejected")
         approval.decision_event.set()
         return True
@@ -539,6 +554,13 @@ class Session:
             return ApprovalDecision.TIMED_OUT
         if approval.resolution == "timed_out":
             return ApprovalDecision.TIMED_OUT
+        # The resolution string is authoritative where it names a specific
+        # outcome; `accepted` alone cannot distinguish "all of it" from "these
+        # three", nor a bare refusal from one that came with instructions.
+        if approval.resolution == "partial":
+            return ApprovalDecision.PARTIAL
+        if approval.resolution == "revise":
+            return ApprovalDecision.REVISE
         return ApprovalDecision.ACCEPTED if approval.accepted else ApprovalDecision.REJECTED
 
 

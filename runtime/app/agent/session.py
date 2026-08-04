@@ -47,7 +47,15 @@ class ApprovalDecision(StrEnum):
     """
 
     ACCEPTED = "accepted"
+    # A subset was approved. Distinct from ACCEPTED because "apply what I
+    # picked" and "apply everything" differ in what actually happens, and
+    # distinct from REJECTED because work did get done.
+    PARTIAL = "partial"
     REJECTED = "rejected"
+    # Refused *as proposed*, with guidance attached. A plain rejection tells the
+    # model to stop; this one tells it what to do instead, which is the whole
+    # difference between abandoning a correct plan and fixing it.
+    REVISE = "revise"
     TIMED_OUT = "timed_out"
     MISSING = "missing"
 

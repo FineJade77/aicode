@@ -120,6 +120,11 @@ class MessageRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     approval_id: str
     accept_all: bool = False
+    # Approving a subset of a multi-item request. Empty means the whole request.
+    selection: list[str] = Field(default_factory=list)
+    # Refusing with instructions. Turns the outcome into `revise`, which the
+    # model is told about differently from a bare rejection.
+    guidance: str = Field(default="", max_length=4_000)
 
 
 class AnswerRequest(BaseModel):
@@ -349,6 +354,7 @@ async def approve(session_id: str, request: ApprovalRequest, runtime: RuntimeDep
             request.approval_id,
             accepted=True,
             accept_all=request.accept_all,
+            selection=request.selection,
         )
     except ApplicationError as exc:
         raise_http_error(exc)
@@ -367,7 +373,12 @@ async def answer(session_id: str, request: AnswerRequest, runtime: RuntimeDep) -
 async def reject(session_id: str, request: ApprovalRequest, runtime: RuntimeDep) -> dict[str, str]:
     session = require_session(runtime, session_id)
     try:
-        return runtime.approvals.resolve(session, request.approval_id, accepted=False)
+        return runtime.approvals.resolve(
+            session,
+            request.approval_id,
+            accepted=False,
+            guidance=request.guidance,
+        )
     except ApplicationError as exc:
         raise_http_error(exc)
 

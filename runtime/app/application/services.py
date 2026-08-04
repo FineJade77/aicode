@@ -360,7 +360,17 @@ class ApprovalService:
         *,
         accepted: bool,
         accept_all: bool = False,
+        selection: list[str] | None = None,
+        guidance: str = "",
     ) -> dict[str, str]:
+        # Four outcomes, not two. `selection` names the subset a partial
+        # acceptance applies to; `guidance` turns a refusal into "not like that,
+        # do X", which the model can act on where a bare no only stops it.
+        resolution = ""
+        if accepted and selection:
+            resolution = "partial"
+        elif not accepted and guidance.strip():
+            resolution = "revise"
         if accept_all and accepted:
             session.auto_accept_edits = True
             self.trace.record(
@@ -369,15 +379,31 @@ class ApprovalService:
                 workspace=session.workspace,
                 data={"approval_id": approval_id},
             )
-        if not session.resolve_approval(approval_id, accepted=accepted):
+        if not session.resolve_approval(
+            approval_id,
+            accepted=accepted,
+            resolution=resolution,
+            response=guidance.strip(),
+            selection=tuple(selection or ()),
+        ):
             raise NotFound("approval not found or already resolved")
+        status = resolution or ("accepted" if accepted else "rejected")
         self.trace.record(
             "approval.resolved",
             session_id=session.session_id,
             workspace=session.workspace,
-            data={"approval_id": approval_id, "accepted": accepted},
+            data={
+                "approval_id": approval_id,
+                "accepted": accepted,
+                "resolution": status,
+                # The count, not the paths: which files a user picked is not
+                # something the audit needs, and the paths are already in the
+                # edit events.
+                "selected": len(selection or ()),
+                "guided": bool(guidance.strip()),
+            },
         )
-        return {"status": "accepted" if accepted else "rejected", "approval_id": approval_id}
+        return {"status": status, "approval_id": approval_id}
 
     def answer(
         self,

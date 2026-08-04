@@ -159,11 +159,16 @@ type TrustListResponse struct {
 
 type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
+	// Refusing with instructions. The Runtime reports this to the model as
+	// "not like that, do X" rather than as a bare no.
+	Guidance string `json:"guidance,omitempty"`
 }
 
 type ApproveRequest struct {
 	ApprovalID string `json:"approval_id"`
 	AcceptAll  bool   `json:"accept_all"`
+	// The subset of a multi-file request to apply. Empty means all of it.
+	Selection []string `json:"selection,omitempty"`
 }
 
 type AnswerRequest struct {
@@ -376,7 +381,12 @@ func (c Client) RemoveTrust(ctx context.Context, workspace string) (TrustStatus,
 }
 
 func (c Client) Approve(ctx context.Context, sessionID string, approvalID string, acceptAll bool) error {
-	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
+	return c.ApproveSelection(ctx, sessionID, approvalID, acceptAll, nil)
+}
+
+// ApproveSelection approves a named subset of a multi-file request.
+func (c Client) ApproveSelection(ctx context.Context, sessionID string, approvalID string, acceptAll bool, selection []string) error {
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll, Selection: selection}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}
@@ -384,7 +394,12 @@ func (c Client) Approve(ctx context.Context, sessionID string, approvalID string
 }
 
 func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {
-	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+	return c.RejectWithGuidance(ctx, sessionID, approvalID, "")
+}
+
+// RejectWithGuidance refuses a request and says how it should be done instead.
+func (c Client) RejectWithGuidance(ctx context.Context, sessionID string, approvalID string, guidance string) error {
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/reject", ApprovalRequest{ApprovalID: approvalID, Guidance: guidance}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}

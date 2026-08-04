@@ -66,7 +66,7 @@
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | Policy Engine | `[x]` | allow / ask / deny 三态；bash 按 shell 语句边界切分后最严者胜。 |
-| Edit approval | `[x]` | inline diff、单次批准、session accept-all、read-before-write、stale 检测。 |
+| Edit approval | `[x]` | inline diff、单次批准、session accept-all、read-before-write、stale 检测；多文件一次审批可分文件选择，拒绝可附带修改指导。 |
 | Project Trust | `[x]` | 默认 untrusted；仓库外 store 绑定 canonical 路径与 credential-free remote。 |
 | Shell/secret 边界 | `[x]` | 路径风险、mandatory protected paths、symlink 防逃逸、env allowlist、secret 脱敏。 |
 | 统一执行后端 | `[x]` | Host / Docker / OS 沙箱共用 execution contract、终态、取消、资源策略和 audit。 |
@@ -273,8 +273,8 @@
 ### 5.7 CLI 体验
 
 - [x] 工具调用折叠展示。超过 16 行的工具输出在**显示上**折叠，保留头部（工具输出的信息在开头：文件的前几行、测试的第一个失败），并写明折叠了多少行**以及模型收到的是完整输出**——以为模型只看到头部的读者会误读它之后的每个决定。
-- [ ] 分文件 approve / reject。
-- [ ] 对同一 edit 追加要求后重新生成。
+- [x] 分文件 approve / reject。一轮里 ≥2 个 `edit_file` 且路径互不相同时，一次 approval 呈现全部 diff，CLI 支持 `y` / `a` / `r` / `1,3` / 其他=拒绝。同一文件的两次编辑仍串行——第二个 proposal 基于第一个的结果构建，提前展示会显示一份到执行时已失效的 diff。选择解析中越界索引**整体作废**而不是丢掉那一个：静默写入与用户所选不同的集合，比让他重打一次更糟。
+- [x] 对同一 edit 追加要求后重新生成。新增 `revise` 结果：拒绝时可附带"应该怎么做"，Runtime 把它作为指令交回模型（"用户没有批准，并要求改成 X；据此修改后重新提出，不要重复同一方案"），而不是只报一个"被拒绝"。空指导会退化为普通拒绝——说"用户解释了"而他没有，是模型会照着做的谎话。
 - [x] 失败原因摘要。`RunTracker` 收集本轮的拒绝、失败、预算终止、未应用的编辑与不可用的 MCP 服务器，在 `final` 时汇成一段机械账目。此前这些事件**在发生时**逐条打印，散落在几百行工具输出里；收尾的那句话由模型自己写，而它是唯一对答案有利害关系的叙述者。干净的运行保持沉默——总是打印的摘要会训练读者跳过它，然后在真正需要时它就不在了。已应用的编辑数会一并说明：失败发生在写入之后意味着工作区已被改动。
 - [x] `aicode task pr-description [--base <ref>]`。未指定 base 时按 `origin/main` → `origin/master` → `main` → `master` 探测并**打印用了哪个**（猜错要看得见）。**log 用两点、diff 用三点**：`log base...branch` 是对称差，会把 base 自己的提交列成本 PR 的一部分——这个 bug 是测试抓出来的，不是设计时想到的。
 

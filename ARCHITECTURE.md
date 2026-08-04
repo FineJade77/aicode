@@ -436,7 +436,24 @@ Policy 层（`agent/policy.py`）对每个工具调用做本地判定：
 
 同时解析路径参数与 glob：命中 mandatory/project protected path、用户 home、workspace 外绝对路径、`../` 或 symlink 逃逸时直接 deny。命令中出现已知 Runtime secret 的字面值同样 deny。
 
-### 8.2 审批事件
+### 8.2 审批结果的六种形态
+
+`ApprovalDecision` 刻意不是布尔：每一对都因为混淆过而付出过代价。
+
+| 结果 | 含义 | 为什么不能与相邻者合并 |
+| --- | --- | --- |
+| `accepted` | 全部照做 | — |
+| `partial` | 只做用户挑中的部分 | 当作 `accepted` 会写入用户没选的文件；当作 `rejected` 会丢掉他们选了的 |
+| `rejected` | 不要做 | — |
+| `revise` | 不要这样做，改成这样 | 当作 `rejected` 只告诉模型停下，扔掉了"怎么做"这个答案 |
+| `timed_out` | 没人回答 | 当作 `rejected` 会让模型因一次无人值守的请求放弃正确的计划 |
+| `missing` | 找不到该审批 | — |
+
+承载它们的字段：`PendingApproval.selection` 是 partial 明确点名的子集（而不是"接受但有例外"，那会让例外无处可写），`PendingApproval.response` 承载 revise 的指导文本。HTTP 侧 `/approve` 收 `selection`、`/reject` 收 `guidance`。
+
+**多文件一次审批**：一轮里若有 ≥2 个 `edit_file` 调用且路径互不相同，`prepare_edit_batch` 会先把全部 proposal 建好，用一次 approval 连同所有 diff 一起呈现，再按选择逐个应用。串行询问等于让用户在没看到第二个文件时就对第一个下判断——那不是同一个问题的缩小版。**同一文件的两次编辑不批量**：第二个 proposal 是基于第一个的结果构建的，提前展示会显示一份到执行时已经失效的 diff。批量建好的 proposal 会被复用，保证"批准的"与"写入的"是同一份。
+
+### 8.3 审批事件
 
 审批状态通过 SSE 暴露给 CLI。**实际存在的事件类型只有这些**（`app/events.py` 的 `EVENT_TYPES` 是唯一来源，未注册的类型在写入时抛错）：
 

@@ -72,3 +72,67 @@ async def test_run_cancellation_records_a_cancelled_resolution() -> None:
     assert approval.resolution == "cancelled"
     assert approval.to_dict()["status"] == "cancelled"
     assert await session.wait_for_approval(approval.approval_id, timeout_seconds=1) is ApprovalDecision.REJECTED
+
+
+# --- approval contract v2 -----------------------------------------------------
+#
+# Two outcomes were missing, and both were being forced into a bool. A subset
+# acceptance had to be sent as a full acceptance (applying things the user did
+# not pick) or a rejection (discarding things they did); a refusal with
+# instructions had to be sent as a bare refusal, which tells the model to stop
+# rather than what to do instead.
+
+
+@pytest.mark.asyncio
+async def test_a_subset_acceptance_reports_partial_and_names_it() -> None:
+    session = Session(session_id="sess_partial", workspace="/repo")
+    approval = session.create_approval("edit", {"paths": ["a.py", "b.py", "c.py"]})
+
+    session.resolve_approval(
+        approval.approval_id, accepted=True, resolution="partial", selection=("a.py", "c.py")
+    )
+    decision = await session.wait_for_approval(approval.approval_id)
+
+    assert decision is ApprovalDecision.PARTIAL
+    # The subset is named rather than encoded as "accepted with exceptions",
+    # which would leave the exceptions unstated.
+    assert session.approvals[approval.approval_id].selection == ("a.py", "c.py")
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_with_guidance_is_not_a_bare_refusal() -> None:
+    session = Session(session_id="sess_revise", workspace="/repo")
+    approval = session.create_approval("edit", {"path": "a.py"})
+
+    session.resolve_approval(
+        approval.approval_id, accepted=False, resolution="revise", response="use a dict instead"
+    )
+    decision = await session.wait_for_approval(approval.approval_id)
+
+    assert decision is ApprovalDecision.REVISE
+    assert session.approvals[approval.approval_id].response == "use a dict instead"
+
+
+@pytest.mark.asyncio
+async def test_an_unqualified_decision_still_reads_as_before() -> None:
+    """The additions must not change what an existing caller gets."""
+    session = Session(session_id="sess_plain", workspace="/repo")
+    accepted = session.create_approval("edit", {"path": "a.py"})
+    refused = session.create_approval("edit", {"path": "b.py"})
+
+    session.resolve_approval(accepted.approval_id, accepted=True)
+    session.resolve_approval(refused.approval_id, accepted=False)
+
+    assert await session.wait_for_approval(accepted.approval_id) is ApprovalDecision.ACCEPTED
+    assert await session.wait_for_approval(refused.approval_id) is ApprovalDecision.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_still_outranks_a_recorded_resolution() -> None:
+    """Nobody answering must never be reported as a decision somebody made."""
+    session = Session(session_id="sess_timeout", workspace="/repo")
+    approval = session.create_approval("edit", {"path": "a.py"})
+
+    decision = await session.wait_for_approval(approval.approval_id, timeout_seconds=0.01)
+
+    assert decision is ApprovalDecision.TIMED_OUT
