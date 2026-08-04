@@ -47,6 +47,26 @@ def growth_exponent(sizes: list[int], values: list[float]) -> float | None:
 
 def main(report_dir: str) -> int:
     report = json.loads((Path(report_dir) / "report.json").read_text(encoding="utf-8"))
+
+    # A run the provider cut short spent a fraction of the effort the task
+    # needed, so it does not lower the curve honestly — it lowers it toward
+    # zero. Refusing is the point: an outage flattens the exponent in exactly
+    # the direction that reads as "size is free", and a flat curve printed from
+    # three aborted runs is indistinguishable from a real one.
+    aborted = [
+        run["task_id"]
+        for run in report["runs"]
+        if run["metrics"].get("failure_reason") == "provider_unavailable"
+    ]
+    if aborted:
+        print(
+            f"refusing to plot: {len(aborted)} run(s) ended on a provider outage "
+            f"({', '.join(sorted(set(aborted)))}). Those runs measured the outage, "
+            "not retrieval. Rerun the suite.",
+            file=sys.stderr,
+        )
+        return 2
+
     rows: dict[int, dict] = {}
     for run in report["runs"]:
         size = module_count(run["task_id"])

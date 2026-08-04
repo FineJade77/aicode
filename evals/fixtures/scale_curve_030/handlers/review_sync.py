@@ -10,7 +10,7 @@ def handle(records):
     """
     total = 0
     for record in records:
-        if record.get("kind") != "review_sync":
+        if record.get("kind") != "account_sync":
             continue
         total += 1
     return Result(name="review_sync", total=total)

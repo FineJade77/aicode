@@ -1,17 +1,26 @@
 from aggregate import summarise
+from registry import HANDLERS
 
 
 def records_for(*names):
     return [{"kind": name, "id": index} for index, name in enumerate(names)]
 
 
-def test_every_handler_counts_its_own_records():
-    assert summarise(records_for("order_sync"))["processed"] == 1
+def total_for(kinds):
+    return summarise(records_for(*kinds))["processed"]
 
 
-def test_no_record_is_counted_twice():
-    assert summarise(records_for("customer_sync"))["processed"] == 1
+def test_alternating_kinds_total_correctly():
+    kinds = HANDLERS[::2]
+    # Both sides are bound before the comparison so the failure reports two
+    # integers. Calling into the assertion makes pytest print the slice it was
+    # given, which at 300 modules feeds the size of the repository into the
+    # transcript and turns the curve into a measurement of its own error text.
+    processed = total_for(kinds)
+    assert processed == len(kinds)
 
 
-def test_a_mixed_batch_totals_correctly():
-    assert summarise(records_for("customer_sync", "order_sync", "customer_sync"))["processed"] == 3
+def test_the_complementary_batch_totals_correctly():
+    kinds = HANDLERS[1::2]
+    processed = total_for(kinds)
+    assert processed == len(kinds)

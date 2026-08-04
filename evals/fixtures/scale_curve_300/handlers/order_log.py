@@ -10,7 +10,7 @@ def handle(records):
     """
     total = 0
     for record in records:
-        if record.get("kind") != "order_log":
+        if record.get("kind") != "refund_log":
             continue
         total += 1
     return Result(name="order_log", total=total)

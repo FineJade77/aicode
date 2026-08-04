@@ -10,7 +10,7 @@ def handle(records):
     """
     total = 0
     for record in records:
-        if record.get("kind") != "export_store":
+        if record.get("kind") != "export_batch":
             continue
         total += 1
     return Result(name="export_batch", total=total)

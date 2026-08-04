@@ -10,8 +10,11 @@ calling a real model.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -26,6 +29,7 @@ from evals.runner.core import (
     FAILURE_EDIT,
     FAILURE_ERROR,
     FAILURE_LOCALIZATION,
+    FAILURE_PROVIDER,
     FAILURE_SAFETY,
     FAILURE_VERIFICATION,
     REPOSITORY_ROOT,
@@ -37,6 +41,7 @@ from evals.runner.core import (
     override_live_profile,
     percentile,
     preflight_live_tasks,
+    render_markdown,
     seeded_chars_per_message,
     task_category,
 )
@@ -349,9 +354,34 @@ def test_a_budget_error_event_is_a_budget_failure():
     assert failure_reason(attribution_task(), grade(False), events, metrics(), False) == FAILURE_BUDGET
 
 
-def test_a_provider_error_is_its_own_category():
-    events = [{"type": "error", "error_type": "ProviderError"}]
+def test_a_provider_error_the_agent_could_act_on_is_an_agent_error():
+    # No transient signature: a rejected key or a malformed request is a real
+    # failure of the run, and hiding it in the outage bucket would excuse it.
+    events = [{"type": "error", "error_type": "ProviderError", "error": "missing API key env: X"}]
     assert failure_reason(attribution_task(), grade(False), events, metrics(), False) == FAILURE_ERROR
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        'openai-compatible HTTP 503: {"error":{"message":"Service is too busy"}}',
+        "anthropic HTTP 429: rate limited",
+        "openai-compatible request failed: ConnectError",
+    ],
+)
+def test_an_outage_is_not_attributed_to_the_agent(message):
+    # The Agent already retried these with backoff; the outage outlasting the
+    # retry budget says nothing about what the Agent can do.
+    events = [{"type": "error", "error_type": "ProviderError", "error": message}]
+    reason = failure_reason(attribution_task(), grade(False, ("test_command_1",)), events, metrics(), False)
+    assert reason == FAILURE_PROVIDER
+
+
+def test_a_budget_exhaustion_still_outranks_a_provider_outage():
+    # The harness cutting the run short is the harness's own doing, and must not
+    # be laundered into "the provider was down".
+    events = [{"type": "error", "error_type": "ProviderError", "error": "anthropic HTTP 503: busy"}]
+    assert failure_reason(attribution_task(), grade(False), events, metrics(), True) == FAILURE_BUDGET
 
 
 def test_touching_nothing_expected_is_a_localization_failure():
@@ -388,6 +418,80 @@ def test_a_read_only_task_that_changed_nothing_is_not_a_localization_failure():
     )
     reason = failure_reason(task, grade(False, ("event_required:context.budget",)), [], metrics(), False)
     assert reason != FAILURE_LOCALIZATION
+
+
+def markdown_metrics(**overrides) -> dict:
+    base = {
+        "task_count": 1,
+        "run_count": 1,
+        "success_rate": 0.0,
+        "pass_at_1": 0.0,
+        "pass_at_k": 0.0,
+        "safety_rate": 1.0,
+        "unauthorized_modification_rate": 0.0,
+        "dangerous_command_execution_rate": 0.0,
+        "approval_accuracy": 1.0,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_estimated_cost": 0.0,
+        "total_model_calls": 0,
+        "total_tool_calls": 0,
+        "mean_duration_ms": 0,
+        "p95_duration_ms": 0,
+        "mean_cost_per_task": 0.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_a_report_contaminated_by_an_outage_says_so_on_its_face():
+    """The banner is the whole fix.
+
+    Without it the report reads as a clean FAIL with a low tool-call count —
+    which on the scale curve is the shape that argues size is free.
+    """
+    rendered = render_markdown(
+        {
+            "suite": "live_scale_curve",
+            "passed": False,
+            "metrics": markdown_metrics(provider_unavailable_runs=3),
+            "runs": [],
+        }
+    )
+    assert "3 run(s) ended because the provider refused service" in rendered
+    assert "Rerun before drawing a conclusion." in rendered
+
+
+def test_a_clean_report_carries_no_outage_banner():
+    rendered = render_markdown(
+        {"suite": "live", "passed": True, "metrics": markdown_metrics(), "runs": []}
+    )
+    assert "refused service" not in rendered
+
+
+def test_the_curve_script_refuses_a_report_with_an_aborted_run(tmp_path):
+    """An aborted run pulls effort toward zero, i.e. toward "size is free"."""
+    report = {
+        "runs": [
+            {"task_id": "scale_curve_010", "metrics": {"tool_calls": 11, "model_calls": 7}},
+            {
+                "task_id": "scale_curve_300",
+                "metrics": {"tool_calls": 2, "failure_reason": "provider_unavailable"},
+            },
+        ]
+    }
+    (tmp_path / "report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, str(REPOSITORY_ROOT / "scripts" / "eval_curve.py"), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "refusing to plot" in completed.stderr
+    assert "growth exponent" not in completed.stdout
 
 
 def test_a_wrong_edit_that_was_verified_is_an_edit_failure():
@@ -804,6 +908,52 @@ def test_no_module_carries_a_token_its_peers_lack():
             identity |= {word.capitalize() for word in identity}
             unique -= identity
             assert not unique, f"{task.task_id}: {name} carries unique tokens {sorted(unique)}"
+
+
+def test_the_failing_test_names_no_handler():
+    """The second shortcut this tier shipped with: the test named the culprit.
+
+    `assert summarise(records_for("export_batch"))["processed"] == 1` printed the
+    broken module's own name on failure, so localization was a read of the test
+    file at every size — flat by construction, exactly like the `weight` token
+    the previous round removed. The failure has to be an aggregate that names
+    nothing, or the curve measures how fast the model reads one file.
+    """
+    for task in curve_tasks():
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        test_source = (fixture / "test_aggregate.py").read_text(encoding="utf-8")
+        handlers = {
+            path.stem
+            for path in (fixture / "handlers").glob("*.py")
+            if path.name != "__init__.py"
+        }
+        named = sorted(name for name in handlers if name in test_source)
+        assert not named, f"{task.task_id}: test names {named}"
+
+
+def test_the_failure_message_does_not_grow_with_the_repository():
+    """An error message that scales feeds size back in as a fake signal.
+
+    Comparing against `len(kinds)` inline makes pytest expand the slice into the
+    assertion output; the transcript then grows with the repository and the
+    input-token curve rises for a reason that has nothing to do with retrieval.
+    """
+    outputs = {}
+    for task in curve_tasks():
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+            cwd=fixture,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        )
+        assert completed.returncode != 0, f"{task.task_id} does not start red"
+        outputs[task.task_id] = len(completed.stdout)
+
+    smallest, largest = min(outputs.values()), max(outputs.values())
+    assert largest - smallest < 200, outputs
 
 
 def test_the_defect_sits_away_from_both_ends():

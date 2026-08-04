@@ -21,6 +21,7 @@ from app.agent.types import AgentRuntime
 from app.audit.logger import AuditLogger
 from app.config import ContextSettings, ModelSettings, PricingSettings, Settings
 from app.execution.service import ExecutionService
+from app.models.provider import RETRYABLE_STATUS
 from app.models.router import ModelRouter
 from app.project.trust import TrustStore
 from app.sessions.approvals import SessionApprovalBroker
@@ -71,6 +72,7 @@ UNCATEGORIZED = "uncategorized"
 # violated a safety boundary and failed its tests is a safety failure first.
 FAILURE_SAFETY = "safety_violation"
 FAILURE_BUDGET = "budget_exhausted"
+FAILURE_PROVIDER = "provider_unavailable"
 FAILURE_ERROR = "agent_error"
 FAILURE_LOCALIZATION = "localization_failure"
 FAILURE_VERIFICATION = "verification_failure"
@@ -531,6 +533,33 @@ def task_category(task: EvalTask) -> str:
     return UNCATEGORIZED
 
 
+def provider_was_unavailable(events: list[dict[str, Any]]) -> bool:
+    """True when the run died because the provider refused service, not the Agent.
+
+    The Agent already retries these statuses with backoff, so reaching here
+    means the outage outlasted the retry budget — nothing the Agent did or could
+    have done differently. Attributing it to `agent_error` makes an infra
+    outage indistinguishable from a capability failure in the one table the
+    gated roadmap tasks are read off, which is how a provider having a bad
+    afternoon turns into evidence about retrieval.
+
+    Matched on the message rather than a structured field because that is what
+    the trace stores; the status set is imported from the provider layer so the
+    two can never drift into disagreeing about what "transient" means.
+    """
+    for event in events:
+        if event.get("type") != "error" or str(event.get("error_type") or "") != "ProviderError":
+            continue
+        message = str(event.get("error") or "")
+        if any(f"HTTP {status}" in message for status in RETRYABLE_STATUS):
+            return True
+        # Connection reset, DNS failure, read timeout: the request never got an
+        # answer, which is the same class of non-signal as an explicit 503.
+        if "request failed:" in message:
+            return True
+    return False
+
+
 def failure_reason(
     task: EvalTask,
     grade: dict[str, Any],
@@ -558,6 +587,10 @@ def failure_reason(
     }
     if timed_out or failed.intersection(budget_checks) or "EvalBudgetExceeded" in error_types:
         return FAILURE_BUDGET
+    # Below budget so a run the harness itself cut short still reads as a budget
+    # failure, but above `agent_error`: an outage is not the Agent's behaviour.
+    if provider_was_unavailable(events):
+        return FAILURE_PROVIDER
     if error_types:
         return FAILURE_ERROR
     # Localization: the Agent never changed any file the task expects to change.
@@ -736,6 +769,15 @@ def build_report(
             1
             for result in results
             if not result["passed"] and result["metrics"].get("tests_passed")
+        ),
+        # Runs the provider refused to serve. These are not measurements of
+        # anything: every rate above is computed over runs that include them, so
+        # a non-zero count means the report describes the provider's day as much
+        # as the Agent's ability. Rerun rather than read.
+        "provider_unavailable_runs": sum(
+            1
+            for result in results
+            if result["metrics"].get("failure_reason") == FAILURE_PROVIDER
         ),
         "mean_duration_ms": mean_of([result["metrics"]["duration_ms"] for result in results]),
         # p95 alongside the mean because the tail is the number that decides
@@ -933,6 +975,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Duration mean / p95: {metrics['mean_duration_ms']} ms / {metrics['p95_duration_ms']} ms",
         f"- Mean cost per task: {metrics['mean_cost_per_task']:.8f}",
     ]
+    if metrics.get("provider_unavailable_runs"):
+        lines.append(
+            f"- **{metrics['provider_unavailable_runs']} run(s) ended because the provider refused "
+            "service** — those runs measured the outage, not the Agent, and every rate above is "
+            "computed over them. Rerun before drawing a conclusion."
+        )
     if metrics.get("unpriced_model_calls"):
         lines.append(
             f"- **{metrics['unpriced_model_calls']} model calls consumed tokens but priced to zero** — "

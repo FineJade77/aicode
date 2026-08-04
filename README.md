@@ -945,7 +945,11 @@ make eval-live-scale-curve-openai-compatible REPETITIONS=1
 python3 scripts/eval_curve.py .artifacts/evals/live_scale_curve-<id>
 ```
 
-输出是一张效率–规模表加一个增长指数（log 效率 / log 模块数）：**接近 0 表示规模基本免费，repo map 收益有限；明显上翘表示检索就是成本。** 缺陷刻意不放在首尾（靠习惯就能找到，不算检索），由测试钉住；同样钉住的还有"四档之间只有规模在变"——请求、预算、profile 若有漂移，曲线量的就是漂移而不是规模。
+输出是一张效率–规模表加一个增长指数（log 效率 / log 模块数）：**接近 0 表示规模基本免费，repo map 收益有限；明显上翘表示检索就是成本。**
+
+实测结果（12 次运行）：input tokens 指数 0.35、工具调用 0.12，**在 100 模块处走平**——规模涨 30 倍，检索只贵 3.2 倍。据此 repo map / 符号索引方向已降级。注意这条曲线的顶点合计仍只有约 137k input tokens，量的是"大量近乎相同的模块"，不是"仓库远大于上下文窗口"。
+
+这一档的出题破绽修过两轮，因此守卫也格外多：缺陷不放在首尾（靠习惯就能找到，不算检索）；任何模块都不得携带同侪没有的 token（否则一次 grep 即命中）；**测试文件不得出现任何 handler 名**（否则读测试就等于拿到答案）；**四档的失败输出长度必须接近**（把 `len(kinds)` 写进断言会让 pytest 展开整个切片，300 档凭空多出 150 个名字，会伪造出一条上升曲线）；以及"四档之间只有规模在变"——请求、预算、profile 若有漂移，曲线量的就是漂移而不是规模。
 
 ### 评分纪律
 
@@ -981,7 +985,7 @@ python3 scripts/eval_curve.py .artifacts/evals/live_scale_curve-<id>
 
 `live_hard` 首轮（2026-08-01，`deepseek-chat`）同样没能拉开差距：**8/8 功能性解决**，pass@1 = 0.875，唯一判负是策略违规而非能力不足。因与果的距离对读得快的模型不构成成本。
 
-因此才有 `live_scale` 与 `live_scale_curve`：**通过率已经不再携带信息，会动的是检索成本**。这条曲线的形状就是决定要不要做符号索引 / repo map 的证据。完整报告在 `docs/review/` 下（本地检出）。
+因此才有 `live_scale` 与 `live_scale_curve`：**通过率已经不再携带信息，会动的是检索成本**。这条曲线的形状就是决定要不要做符号索引 / repo map 的证据——实测次线性且走平，该方向已降级。完整报告在 `docs/review/` 下（本地检出）。
 
 ## 开发验证
 
@@ -1028,4 +1032,4 @@ GOCACHE=.cache/go-build GOMODCACHE=.cache/go-mod go test ./cli/...
 - Docker sandbox 目前不支持可选写入挂载和 artifact 导出。
 - OS 级沙箱只支持 macOS。
 - MCP 只支持 stdio transport。
-- tree-sitter 索引、持久化 symbol/import/test mapping 仍在路线图中——是否要做，由 `live_scale_curve` 的增长指数决定。
+- tree-sitter 索引、持久化 symbol/import/test mapping 已按 `live_scale_curve` 的结果降级：增长指数次线性（0.35）且在 100 模块处走平，模块数量这根轴上索引收益有限。仓库整体超出上下文窗口的情形尚未测过。

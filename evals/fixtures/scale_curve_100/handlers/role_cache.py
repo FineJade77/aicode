@@ -10,7 +10,7 @@ def handle(records):
     """
     total = 0
     for record in records:
-        if record.get("kind") != "role_cache":
+        if record.get("kind") != "export_cache":
             continue
         total += 1
     return Result(name="role_cache", total=total)

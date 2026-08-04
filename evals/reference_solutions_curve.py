@@ -9,79 +9,79 @@ from __future__ import annotations
 
 CURVE_SOLUTIONS: dict[str, dict[str, str]] = {
     "scale_curve_010": {
-        "handlers/order_sync.py": '''"""Order Sync handler."""
+        "handlers/product_sync.py": '''"""Product Sync handler."""
 
 from contracts import Result
 
 
 def handle(records):
-    """Summarise order_sync records.
+    """Summarise product_sync records.
 
     Returns a Result whose `total` is the number of records processed.
     """
     total = 0
     for record in records:
-        if record.get("kind") != "order_sync":
+        if record.get("kind") != "product_sync":
             continue
         total += 1
-    return Result(name="order_sync", total=total)
+    return Result(name="product_sync", total=total)
 ''',
     },
     "scale_curve_030": {
-        "handlers/export_sync.py": '''"""Export Sync handler."""
+        "handlers/review_sync.py": '''"""Review Sync handler."""
 
 from contracts import Result
 
 
 def handle(records):
-    """Summarise export_sync records.
+    """Summarise review_sync records.
 
     Returns a Result whose `total` is the number of records processed.
     """
     total = 0
     for record in records:
-        if record.get("kind") != "export_sync":
+        if record.get("kind") != "review_sync":
             continue
         total += 1
-    return Result(name="export_sync", total=total)
+    return Result(name="review_sync", total=total)
 ''',
     },
     "scale_curve_100": {
-        "handlers/export_sync.py": '''"""Export Sync handler."""
+        "handlers/role_cache.py": '''"""Role Cache handler."""
 
 from contracts import Result
 
 
 def handle(records):
-    """Summarise export_sync records.
+    """Summarise role_cache records.
 
     Returns a Result whose `total` is the number of records processed.
     """
     total = 0
     for record in records:
-        if record.get("kind") != "export_sync":
+        if record.get("kind") != "role_cache":
             continue
         total += 1
-    return Result(name="export_sync", total=total)
+    return Result(name="role_cache", total=total)
 ''',
     },
     "scale_curve_300": {
-        "handlers/export_batch.py": '''"""Export Batch handler."""
+        "handlers/order_log.py": '''"""Order Log handler."""
 
 from contracts import Result
 
 
 def handle(records):
-    """Summarise export_batch records.
+    """Summarise order_log records.
 
     Returns a Result whose `total` is the number of records processed.
     """
     total = 0
     for record in records:
-        if record.get("kind") != "export_batch":
+        if record.get("kind") != "order_log":
             continue
         total += 1
-    return Result(name="export_batch", total=total)
+    return Result(name="order_log", total=total)
 ''',
     },
 }
