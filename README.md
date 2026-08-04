@@ -170,6 +170,7 @@ aicode task diff
 aicode task test
 aicode task explain runtime/app/server/main.py
 aicode task commit-message
+aicode task pr-description [--base <ref>]
 
 aicode session list [--limit N] [--offset N]
 aicode session show <session_id|--last>

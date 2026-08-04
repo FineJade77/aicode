@@ -54,6 +54,7 @@ type Runner struct {
 	outputMu        sync.Mutex
 	previousSession *client.SessionResponse
 	firstError      error
+	tracker         *renderer.RunTracker
 }
 
 type inputLine struct {
@@ -612,6 +613,22 @@ func (runner *Runner) renderEvent(event map[string]any) {
 	runner.outputMu.Lock()
 	defer runner.outputMu.Unlock()
 	renderer.RenderEventTo(runner.Out, event)
+
+	// One tracker per run, reset when the next one starts: in a REPL the
+	// failures of an earlier turn are not an account of this one.
+	switch stringValue(event["type"]) {
+	case "run.started":
+		runner.tracker = renderer.NewRunTracker()
+	case "final":
+		if runner.tracker != nil {
+			runner.tracker.PrintSummaryTo(runner.Out)
+			runner.tracker = nil
+		}
+		return
+	}
+	if runner.tracker != nil {
+		runner.tracker.Observe(event)
+	}
 }
 
 func scanInput(ctx context.Context, reader io.Reader, output chan<- inputLine) {

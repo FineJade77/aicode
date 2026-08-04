@@ -61,10 +61,18 @@ func RunSimpleGet(cfg config.Config, path string) error {
 // StreamAndHandle streams run events to the terminal and resolves any
 // interactive approval prompts raised along the way.
 func StreamAndHandle(ctx context.Context, api client.Client, sessionID string, runID string) error {
-	return api.StreamRunEvents(ctx, sessionID, runID, func(event map[string]any) error {
+	// The individual failures are printed as they happen, scattered through
+	// whatever tool output came after them. The tracker replays them at the end
+	// as one account, so a run that stopped for a reason does not have to be
+	// reconstructed by scrolling.
+	tracker := renderer.NewRunTracker()
+	err := api.StreamRunEvents(ctx, sessionID, runID, func(event map[string]any) error {
 		renderer.RenderEvent(event)
+		tracker.Observe(event)
 		return handleInteractiveEvent(api, sessionID, event)
 	})
+	tracker.PrintSummaryTo(os.Stdout)
+	return err
 }
 
 func handleInteractiveEvent(api client.Client, sessionID string, event map[string]any) error {

@@ -415,6 +415,33 @@ func writeUsageGroup(out *strings.Builder, title string, value any) {
 	out.WriteString(table.String())
 }
 
+// FoldToolOutputLines is how much of a tool's output the transcript shows before
+// collapsing the rest. Zero disables folding.
+//
+// A `cat` of a large file or a full test run scrolls the actual conversation off
+// the screen, and the transcript is the thing the user is reading. The head is
+// kept rather than the tail because tool output leads with what it is —
+// a file's first lines, a test run's first failure.
+var FoldToolOutputLines = 16
+
+// FoldToolOutput collapses long tool output for display only.
+//
+// The count of hidden lines is stated, and so is the fact that the model saw all
+// of it: a reader who thinks the model only got 16 lines will misread every
+// decision it made from the rest.
+func FoldToolOutput(text string) string {
+	if FoldToolOutputLines <= 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= FoldToolOutputLines {
+		return text
+	}
+	hidden := len(lines) - FoldToolOutputLines
+	return strings.Join(lines[:FoldToolOutputLines], "\n") +
+		fmt.Sprintf("\n  … %d more lines folded for display; the model received the full output", hidden)
+}
+
 func RenderEvent(event map[string]any) {
 	RenderEventTo(os.Stdout, event)
 }
@@ -449,7 +476,7 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		}
 		text := strings.TrimSpace(stringValue(event["text"]))
 		if text != "" {
-			fmt.Fprintln(out, text)
+			fmt.Fprintln(out, FoldToolOutput(text))
 		}
 	case "context.budget":
 		if line := contextBudgetLine(event); line != "" {

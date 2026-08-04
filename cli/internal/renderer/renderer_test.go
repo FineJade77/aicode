@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -589,5 +590,93 @@ func TestModelRoutesTableDoesNotAdvertiseAFallback(t *testing.T) {
 
 	if strings.Contains(table, "fallback") {
 		t.Fatalf("table = %q", table)
+	}
+}
+
+func TestLongToolOutputIsFoldedForDisplayOnly(t *testing.T) {
+	lines := make([]string, 40)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("line %d", index)
+	}
+	output := captureRenderEvent(map[string]any{
+		"type": "tool.output",
+		"tool": "bash",
+		"text": strings.Join(lines, "\n"),
+	})
+
+	if !strings.Contains(output, "line 0") || !strings.Contains(output, "line 15") {
+		t.Fatalf("the head must survive: %q", output)
+	}
+	if strings.Contains(output, "line 39") {
+		t.Fatalf("the tail should be folded: %q", output)
+	}
+	if !strings.Contains(output, "24 more lines folded") {
+		t.Fatalf("the hidden count must be stated: %q", output)
+	}
+	// A reader who thinks the model only saw the head will misread every
+	// decision it made from the rest.
+	if !strings.Contains(output, "the model received the full output") {
+		t.Fatalf("output = %q", output)
+	}
+}
+
+func TestShortToolOutputIsNotFolded(t *testing.T) {
+	output := captureRenderEvent(map[string]any{"type": "tool.output", "tool": "bash", "text": "one\ntwo"})
+
+	if strings.Contains(output, "folded") {
+		t.Fatalf("output = %q", output)
+	}
+}
+
+func TestRunTrackerSummarisesWhatWentWrong(t *testing.T) {
+	tracker := NewRunTracker()
+	for _, event := range []map[string]any{
+		{"type": "tool.denied", "tool": "bash"},
+		{"type": "tool.denied", "tool": "bash"},
+		{"type": "tool.error", "tool": "read_file"},
+		{"type": "edit.applied", "path": "a.py"},
+		{"type": "edit.rejected", "path": "b.py"},
+		{"type": "run.budget.exceeded", "reason": "steps"},
+		{"type": "mcp.server.failed", "server": "files"},
+	} {
+		tracker.Observe(event)
+	}
+
+	summary := tracker.Summary()
+
+	for _, want := range []string{
+		"stopped on the steps budget",
+		"2 command(s) denied by policy: bash",
+		"1 tool failure(s): read_file",
+		"1 edit(s) not applied",
+		"MCP server(s) unavailable: files",
+		// A run that failed after writing files leaves the workspace modified,
+		// which changes what the user should do next.
+		"1 edit(s) were applied before this",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
+	}
+}
+
+func TestRunTrackerStaysSilentOnACleanRun(t *testing.T) {
+	// A summary that always prints teaches the reader to skip it, and then it is
+	// not there when it matters.
+	tracker := NewRunTracker()
+	tracker.Observe(map[string]any{"type": "tool.output", "tool": "read_file"})
+	tracker.Observe(map[string]any{"type": "edit.applied", "path": "a.py"})
+
+	if summary := tracker.Summary(); summary != "" {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
+func TestRunTrackerIgnoresUnknownEvents(t *testing.T) {
+	tracker := NewRunTracker()
+	tracker.Observe(map[string]any{"type": "some.future.event", "detail": "whatever"})
+
+	if summary := tracker.Summary(); summary != "" {
+		t.Fatalf("a future event type must not break the summary: %q", summary)
 	}
 }
