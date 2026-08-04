@@ -230,6 +230,15 @@ func UsageSummaryTable(value any) string {
 	out.WriteString(fmt.Sprintf("output_tokens: %v\n", root["total_output_tokens"]))
 	out.WriteString(fmt.Sprintf("total_tokens: %v\n", root["total_tokens"]))
 	out.WriteString(fmt.Sprintf("estimated_cost: $%s\n", stringValue(root["estimated_cost"])))
+	// Printed only when non-zero, and worded as a claim about the numbers above
+	// rather than as one more statistic: these calls burned tokens the provider
+	// never reported, so the totals are a floor, not a measurement.
+	if incomplete := stringValue(root["incomplete_calls"]); incomplete != "" && incomplete != "0" {
+		out.WriteString(fmt.Sprintf(
+			"incomplete_calls: %s (cut off before the provider reported usage; the totals above are a lower bound)\n",
+			incomplete,
+		))
+	}
 	if filters, ok := root["filters"].(map[string]any); ok {
 		if sessionID := stringValue(filters["session_id"]); sessionID != "" {
 			out.WriteString(fmt.Sprintf("session_id: %s\n", sessionID))

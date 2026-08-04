@@ -215,6 +215,22 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
     await session.events.put({"type": "final", "summary": summary})
 
 
+def counting_text_delta(session: AgentSession, inner: Any) -> Any:
+    """Wrap the delta callback so the session knows how far a stream got.
+
+    The character count is the only evidence of a cancelled call's size that
+    survives: the provider reports tokens once, in the frame that never arrives.
+    It is not a token count and must never be presented as one.
+    """
+
+    async def on_delta(text: str) -> None:
+        session.count_streamed_text(text)
+        if inner is not None:
+            await inner(text)
+
+    return on_delta
+
+
 async def complete_with_compaction(
     *,
     session: AgentSession,
@@ -235,6 +251,10 @@ async def complete_with_compaction(
         tools=tools,
         max_tokens=max_tokens,
     )
+    # Opened before the request and closed by `record_usage`, so a call that
+    # never reaches its `done` frame leaves a record behind saying so.
+    session.begin_model_call(purpose=purpose, model=model)
+    on_text_delta = counting_text_delta(session, on_text_delta)
     try:
         assert runtime.model_runtime is not None
         completion_args = {
@@ -1030,6 +1050,7 @@ async def record_usage(
     purpose: str,
     runtime: AgentRuntime,
 ) -> None:
+    session.end_model_call()
     payload = {
         "model": result.model,
         "provider": result.provider,

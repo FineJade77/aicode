@@ -521,3 +521,33 @@ func TestRenderHookBlockedShowsTheReason(t *testing.T) {
 		t.Fatalf("expected the failing hook, got %q", output)
 	}
 }
+
+func TestUsageSummaryDeclaresIncompleteCalls(t *testing.T) {
+	table := UsageSummaryTable(map[string]any{
+		"record_count":       float64(3),
+		"total_input_tokens": float64(100),
+		"estimated_cost":     0.001,
+		"incomplete_calls":   float64(2),
+	})
+
+	if !strings.Contains(table, "incomplete_calls: 2") {
+		t.Fatalf("table = %q", table)
+	}
+	// The count alone reads as trivia. What matters is that it changes how the
+	// totals above should be read.
+	if !strings.Contains(table, "lower bound") {
+		t.Fatalf("table = %q", table)
+	}
+}
+
+func TestUsageSummaryStaysQuietWhenNothingWasCutOff(t *testing.T) {
+	table := UsageSummaryTable(map[string]any{
+		"record_count":     float64(3),
+		"estimated_cost":   0.001,
+		"incomplete_calls": float64(0),
+	})
+
+	if strings.Contains(table, "incomplete_calls") {
+		t.Fatalf("a clean ledger must not carry a caveat: %q", table)
+	}
+}

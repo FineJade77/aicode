@@ -207,6 +207,51 @@ class RunCoordinator:
             return
         session.agent_runner_task = asyncio.create_task(self._process_runs(session))
 
+    async def _record_cancelled_model_call(
+        self,
+        session: AgentSession,
+        run_id: str,
+        record: dict[str, Any] | None,
+    ) -> None:
+        """Account for a model call the cancellation cut off.
+
+        Providers report usage once, in the final frame of the stream. Cancel
+        before it arrives and the tokens already generated are billed but never
+        recorded, so `aicode runtime usage` reports a total that is confidently
+        short — the same failure as a call priced at $0.00 because its model was
+        missing from the price table.
+
+        Written from here rather than from the loop because the loop's task is
+        already cancelled: every `await` inside it raises immediately, so it
+        cannot emit its own epitaph.
+
+        The token fields stay zero because zero is what is known. `complete:
+        false` is the part that carries meaning: it marks the total as a lower
+        bound instead of quietly folding an unknown into it.
+        """
+        if record is None:
+            return
+        payload = {
+            "run_id": run_id,
+            "purpose": record.get("purpose") or "unknown",
+            "model": record.get("model") or "unknown",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "estimated_cost": 0.0,
+            "complete": False,
+            "reason": "run_cancelled",
+            # Characters actually streamed before the cut. Evidence that the
+            # call was not free, not a substitute for the token count.
+            "streamed_chars": int(record.get("streamed_chars") or 0),
+        }
+        self.trace.record(
+            "usage.recorded",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data=payload,
+        )
+        await session.events.put({"type": "usage.recorded", **payload})
+
     async def cancel(self, session: AgentSession, *, resume_queued: bool = True) -> RunControl:
         task = session.agent_runner_task
         run_id = session.current_run_id
@@ -214,11 +259,15 @@ class RunCoordinator:
             return RunControl(status="idle", run_id=None, queued=session.agent_queue.qsize())
 
         session.mark_agent_progress("cancelling")
+        # Snapshot before cancelling: the runner clears this in its `finally`,
+        # which runs while we await the cancelled task below.
+        in_flight = session.end_model_call()
         task.cancel()
         with suppress(asyncio.CancelledError, Exception):
             await task
         session.agent_runner_task = None
         session.drain_steers()
+        await self._record_cancelled_model_call(session, run_id, in_flight)
 
         for approval in session.expire_pending_approvals():
             await session.events.put(

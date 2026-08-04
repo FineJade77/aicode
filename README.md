@@ -854,6 +854,14 @@ aicode runtime usage --json
 
 输出包含 token、估算成本，以及按 purpose/model/provider 的汇总。没有配置价格时，`estimated_cost` 为 `0`。
 
+**`incomplete_calls`**：provider 只在流的最后一帧报告 usage，因此 `aicode session cancel` 打断的调用，其已生成的 token 被计费却永远传不回来。这类调用会记一条 `complete: false` 的用量记录，token 与成本字段为 `0`（因为确实无从得知），另带 `streamed_chars` 作为"这次调用不是免费的"的证据。汇总里 `incomplete_calls` 非零时，上面所有总数都应读作**下界**而非测量值：
+
+```
+incomplete_calls: 2 (cut off before the provider reported usage; the totals above are a lower bound)
+```
+
+刻意不做估算。一个看起来像测量值的编造数字，比一个明说的缺口更糟——同一条纪律也适用于 `unpriced_model_calls`。
+
 ## Agent eval 与 trace
 
 评测分两条链路，回答两个不同问题。

@@ -248,7 +248,7 @@
 
 - [x] 遗留 `models.default/planner/coder` 的迁移提示。**发现它们此前根本没有生效**：解析进结构体字段后无人消费，只有 `models.main` 会注入 Runtime，用户写了旧键既不报错也不起作用。现在 `models.default` / `models.coder` 会在 `models.main` 缺席时顶上、在场时报告被忽略，`models.planner` 提示删除（没有对应路由）；每次调用在 stderr 提示做了什么，`runtime doctor` 有对应 `config` 检查项。
 - [ ] per-route health check 与 provider fallback。
-- [ ] usage 中区分重试消耗与最终输出。
+- [x] usage 中区分重试消耗与最终输出 —— **核查后改做了别的**。原命题不成立：provider 层重试只在尚未 yield 任何内容时发生，失败那次拿不到 `usage`、从不产生记录；context overflow 重试同理。`main` 里并不藏着一池"重试 token"，加字段只会得到恒为零的一列。真正的洞在隔壁且更严重——`record_usage` 只在 `CompletionResult` 构造后调用，而取消会让 `CancelledError` 从流循环穿出，**中途取消的 run 已消耗的 token 一条记录都不留**。现已改为：取消时写一条 `complete: false` 的用量记录（token/成本为 0，附 `streamed_chars`），汇总新增 `incomplete_calls` 把总数标记为下界。不做估算——编造的测量值比明说的缺口更糟。
 - [ ] 评估 Go 工具依赖 pinning（如 lint 工具的 `tools.go`）。
 
 ### 5.6 测试补齐

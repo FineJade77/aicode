@@ -692,6 +692,10 @@ provenance 持久化在消息上而非旁路表中，因此不会与它描述的
 - `session.created` / `session.forked` / `session.pruned` / `session.final` / `session.error`。
 - `context.budget` / `context.compact.requested` / `context.compaction_retry`、`usage.recorded`。
 
+`usage.recorded` 有两种形态。正常形态由 `record_usage` 在 `CompletionResult` 构造后写出，携带真实 token 与成本。另一种带 `complete: false` / `reason: "run_cancelled"` / `streamed_chars`，由 `RunCoordinator.cancel` 写出：provider 只在流末尾的 `done` 帧报告 usage，中途取消就永远收不到，而 token 已经计费。token 与成本字段置 0（那是已知的全部），`incomplete_calls` 在汇总里把总数标记为下界。
+
+写在 `cancel` 而不是 Agent Loop 里，是因为 Loop 的 task 此时已被取消——里面每个 `await` 都会立刻抛 `CancelledError`，它写不出自己的墓志铭。飞行中调用的快照必须在 `task.cancel()` **之前**取：runner 的 `finally` 会调 `finish_agent_run()` 清掉它，而那正发生在 `await task` 期间。
+
 敏感字段会脱敏（`audit/redaction.py`）：API key、token、authorization header 和常见 secret 环境变量；已知 Runtime secret 也会从 neutral fields、tool output 和 SSE 中替换。写入 patch 时审计记录 `patch_hash` 和 `diff_bytes` 而不是完整 diff；execution 记录 command hash 而不是原始命令。
 
 ### 15.1 审计不丢失、不无限增长

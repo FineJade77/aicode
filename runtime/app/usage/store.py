@@ -19,6 +19,10 @@ class UsageRecord:
     input_tokens: int
     output_tokens: int
     estimated_cost: float
+    # False when the call was cut off before the provider reported usage, so
+    # its token and cost fields are zero for lack of data rather than because
+    # nothing was spent.
+    complete: bool = True
 
 
 class JsonlUsageRuntime:
@@ -56,6 +60,11 @@ def summarize_usage(audit_path: Path, *, session_id: str | None = None, day: dat
         "total_output_tokens": summary["output_tokens"],
         "total_tokens": summary["total_tokens"],
         "estimated_cost": round(summary["estimated_cost"], 8),
+        # A non-zero count means every total above is a lower bound: these calls
+        # consumed tokens the provider never got to report. Reported rather than
+        # estimated — a made-up number that looks like a measurement is the
+        # thing this project treats as worse than a gap.
+        "incomplete_calls": summary["incomplete_calls"],
         "by_provider": normalize_groups(by_provider),
         "by_model": normalize_groups(by_model),
         "by_purpose": normalize_groups(by_purpose),
@@ -93,6 +102,7 @@ def read_usage_records(audit_path: Path):
                 session_id=str(event.get("session_id") or ""),
                 workspace=str(event.get("workspace") or ""),
                 provider=str(data.get("provider") or "unknown"),
+                complete=bool(data.get("complete", True)),
                 model=str(data.get("model") or "unknown"),
                 purpose=str(data.get("purpose") or "unknown"),
                 input_tokens=as_int(data.get("input_tokens")),
@@ -108,11 +118,14 @@ def empty_summary() -> dict[str, Any]:
         "output_tokens": 0,
         "total_tokens": 0,
         "estimated_cost": 0.0,
+        "incomplete_calls": 0,
     }
 
 
 def add_record(summary: dict[str, Any], record: UsageRecord) -> None:
     summary["record_count"] += 1
+    if not record.complete:
+        summary["incomplete_calls"] += 1
     summary["input_tokens"] += record.input_tokens
     summary["output_tokens"] += record.output_tokens
     summary["total_tokens"] += record.input_tokens + record.output_tokens
@@ -127,6 +140,7 @@ def normalize_groups(groups: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
             "output_tokens": value["output_tokens"],
             "total_tokens": value["total_tokens"],
             "estimated_cost": round(value["estimated_cost"], 8),
+            "incomplete_calls": value["incomplete_calls"],
         }
         for key, value in sorted(groups.items())
     }

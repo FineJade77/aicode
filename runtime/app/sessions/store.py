@@ -332,6 +332,15 @@ class Session:
     # Per session rather than per process: two sessions watching one command must
     # not consume each other's output.
     background_offsets: dict[str, int] = field(default_factory=dict)
+    # The model call currently streaming, or None between calls.
+    #
+    # Usage is only known once the provider sends its final `done` frame, so a
+    # call that is cancelled mid-stream reports nothing and its tokens vanish
+    # from the ledger entirely — the spend looks like spend that never happened.
+    # This record is what lets the canceller say a call was in flight and that
+    # the totals are therefore a lower bound. In-memory only: after a restart
+    # there is no stream left to account for.
+    in_flight_model_call: dict[str, Any] | None = field(default=None, repr=False)
     plan_writer: Callable[[list[PlanItem]], None] | None = field(default=None, repr=False)
     message_appender: Callable[[dict[str, Any]], int | None] | None = field(default=None, repr=False)
     compaction_appender: Callable[[CompactionEntry], CompactionEntry] | None = field(default=None, repr=False)
@@ -456,6 +465,22 @@ class Session:
         self.current_run_stage = None
         self.current_run_started_at = None
         self.current_run_last_progress_at = None
+        self.in_flight_model_call = None
+
+    def begin_model_call(self, *, purpose: str, model: str | None) -> None:
+        self.in_flight_model_call = {
+            "purpose": purpose,
+            "model": model,
+            "streamed_chars": 0,
+        }
+
+    def count_streamed_text(self, text: str) -> None:
+        if self.in_flight_model_call is not None:
+            self.in_flight_model_call["streamed_chars"] += len(text)
+
+    def end_model_call(self) -> dict[str, Any] | None:
+        record, self.in_flight_model_call = self.in_flight_model_call, None
+        return record
 
     def agent_runner_active(self) -> bool:
         return self.agent_runner_task is not None and not self.agent_runner_task.done()
