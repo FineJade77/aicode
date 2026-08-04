@@ -93,6 +93,7 @@ type ExecutionRequest struct {
 	Action         string  `json:"action"`
 	Workspace      string  `json:"workspace"`
 	TimeoutSeconds float64 `json:"timeout_seconds"`
+	Artifacts      bool    `json:"artifacts,omitempty"`
 }
 
 type ExecutionResponse struct {
@@ -106,6 +107,16 @@ type ExecutionResponse struct {
 	DurationMS  int64  `json:"duration_ms"`
 	TimedOut    bool   `json:"timed_out"`
 	Cancelled   bool   `json:"cancelled"`
+	// Metadata for files the run wrote to its artifact drop. Absent unless the
+	// caller asked for artifacts.
+	Artifacts          []ExecutionArtifact `json:"artifacts,omitempty"`
+	ArtifactsTruncated bool                `json:"artifacts_truncated,omitempty"`
+}
+
+type ExecutionArtifact struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+	SHA256    string `json:"sha256"`
 }
 
 type CancelExecutionResponse struct {

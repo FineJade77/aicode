@@ -48,6 +48,15 @@ class ExecutionRequest:
     network: str = "inherit"
     merge_stderr: bool = False
     image: str = ""
+    # Host directory exposed to the sandbox as a writable drop for build output,
+    # test reports and coverage. None keeps the container's only writable path
+    # the workspace itself (or nothing, for the read-only project commands).
+    #
+    # Separate from `writable_paths` on purpose: that field names host paths the
+    # policy layer already vetted, while this one is a directory aicode creates
+    # outside the workspace precisely so a build can write without the workspace
+    # being writable.
+    artifact_root: Path | None = None
     limits: ResourceLimits = field(default_factory=ResourceLimits)
 
     def __post_init__(self) -> None:
@@ -72,6 +81,23 @@ class ExecutionRequest:
         return (self.shell_command or "").encode()
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactInfo:
+    """One file collected from the artifact drop.
+
+    Metadata only. The contents stay on disk: an audit record that embeds build
+    output is both unbounded and a place for secrets to land in a log that
+    outlives the run.
+    """
+
+    path: str
+    size_bytes: int
+    sha256: str
+
+    def to_dict(self) -> dict:
+        return {"path": self.path, "size_bytes": self.size_bytes, "sha256": self.sha256}
+
+
 @dataclass(slots=True)
 class ExecutionResult:
     execution_id: str
@@ -83,6 +109,11 @@ class ExecutionResult:
     duration_ms: int = 0
     timed_out: bool = False
     cancelled: bool = False
+    artifacts: tuple[ArtifactInfo, ...] = ()
+    # True when collection stopped at a cap. Reported rather than silently
+    # dropped: a truncated artifact set that looks complete is how a missing
+    # test report gets read as a test that never ran.
+    artifacts_truncated: bool = False
 
     @property
     def success(self) -> bool:
@@ -107,4 +138,6 @@ class ExecutionResult:
             "duration_ms": self.duration_ms,
             "timed_out": self.timed_out,
             "cancelled": self.cancelled,
+            "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+            "artifacts_truncated": self.artifacts_truncated,
         }

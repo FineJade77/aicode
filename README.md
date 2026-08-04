@@ -814,6 +814,7 @@ Docker sandbox 通过本地 Runtime 的统一 ExecutionBackend 执行；CLI 只�
 aicode project sandbox test
 aicode project sandbox build
 aicode project sandbox lint
+aicode project sandbox build --artifacts
 ```
 
 默认行为：
@@ -826,6 +827,24 @@ aicode project sandbox lint
 - 资源限制：`--cpus 2`、`--memory 2g`、`--pids-limit 256`
 - 与 Agent bash 共用 `execution_id`、超时/取消、终态和 audit
 - 写入本地 audit JSONL，记录 backend、资源策略、退出码、耗时和 command hash
+
+### `--artifacts`：受控可写目录与导出
+
+默认容器**没有任何可写路径**——对一个产物就是退出码的命令来说这是对的。`--artifacts` 只加一个可写目录，且**在 workspace 之外**，因此 `build` 能产出报告而不必让仓库对模型选定的命令可写：
+
+- 宿主临时目录挂到容器 `/artifacts`，路径通过 `AICODE_ARTIFACTS` 环境变量告知命令，无需在每个项目配置里硬编码。
+- workspace 仍是 `readonly` 挂载。
+- 容器以宿主 uid/gid 运行——读不回来的文件不算导出。
+- 运行结束、容器销毁后才读取，此时没有东西还能往里写。
+
+导出只记**元信息**（相对路径、字节数、sha256），进 audit 也进 CLI 输出。摘要是重点：一份导出的报告只有能对回产生它的那次运行才有价值。内容不进日志——构建输出无界，且它顺手打印的任何东西都会留在比这次运行活得更久的日志里。
+
+读取这个目录是**不可信输入**问题，不是文件拷贝问题，因此两条拒绝都写死了：
+
+- **符号链接一律不跟随**，直接跳过并计入截断。容器以调用者身份运行，跟随一条链接就把"收集构建产物"变成了任意文件读取。
+- **数量与体积有上限**（64 个文件 / 单个 8 MiB / 合计 32 MiB），超出即跳过。命令写多少由它自己决定，不设上限就是一个由被隔离方驱动的磁盘放大器。
+
+跳过的条目会**明说**（`artifacts_truncated`），不是静默丢弃——一份看起来完整的截断产物集，会让缺失的测试报告读起来像测试从未运行。
 
 可覆盖：
 

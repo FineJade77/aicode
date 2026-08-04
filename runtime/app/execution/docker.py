@@ -16,6 +16,11 @@ CPU_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
 
 MISSING_IMAGE_MARKERS = ("unable to find image", "no such image", "image not known", "pull access denied")
 
+# Where the artifact drop appears inside the container. Fixed rather than
+# configurable: a command has to be able to name it without being told, and a
+# caller-chosen path would be one more thing to validate against escaping.
+ARTIFACT_MOUNT = "/artifacts"
+
 
 def docker_available() -> bool:
     """Whether the Docker CLI can be located on PATH.
@@ -96,6 +101,7 @@ def _docker_args(request: ExecutionRequest, workspace: Path, masks: list[tuple[P
         raise ValueError("Docker memory limit is invalid")
 
     writable = any(candidate.expanduser().resolve() == workspace for candidate in request.writable_paths)
+    artifact_root = request.artifact_root
 
     args = [
         "docker",
@@ -114,15 +120,22 @@ def _docker_args(request: ExecutionRequest, workspace: Path, masks: list[tuple[P
         "--pids-limit",
         str(pids),
     ]
-    if writable:
+    if writable or artifact_root is not None:
         # Without this the container writes as root and leaves root-owned files
         # in the user's workspace on Linux. Docker Desktop remaps ownership on
-        # macOS, but matching the host uid/gid is correct on both.
+        # macOS, but matching the host uid/gid is correct on both. The artifact
+        # drop needs it for the same reason: files aicode cannot read afterwards
+        # are not an export.
         args.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
-    for key, value in _sandbox_environment().items():
+    for key, value in _sandbox_environment(artifacts=artifact_root is not None).items():
         args.extend(["--env", f"{key}={value}"])
     mount = f"type=bind,src={workspace},dst=/workspace"
     args.extend(["--mount", mount if writable else f"{mount},readonly"])
+    if artifact_root is not None:
+        # The one writable path a read-only sandbox gets. Outside the workspace
+        # by construction, so `build` can produce output without the repository
+        # becoming writable to model-chosen commands.
+        args.extend(["--mount", f"type=bind,src={artifact_root},dst={ARTIFACT_MOUNT}"])
     for source, target in masks:
         args.extend(["--mount", f"type=bind,src={source},dst={target},readonly"])
     args.extend(
@@ -138,8 +151,8 @@ def _docker_args(request: ExecutionRequest, workspace: Path, masks: list[tuple[P
     return args
 
 
-def _sandbox_environment() -> dict[str, str]:
-    return {
+def _sandbox_environment(*, artifacts: bool = False) -> dict[str, str]:
+    environment = {
         "AICODE_SANDBOX": "1",
         "HOME": "/tmp/aicode-home",
         "XDG_CACHE_HOME": "/tmp/aicode-cache",
@@ -149,6 +162,11 @@ def _sandbox_environment() -> dict[str, str]:
         "YARN_CACHE_FOLDER": "/tmp/aicode-yarn-cache",
         "PIP_CACHE_DIR": "/tmp/aicode-pip-cache",
     }
+    if artifacts:
+        # Advertised so a command can write its report without the caller having
+        # to hard-code the mount path into every project's config.
+        environment["AICODE_ARTIFACTS"] = ARTIFACT_MOUNT
+    return environment
 
 
 def _env_file_masks(workspace: Path, empty_file: Path) -> list[tuple[Path, str]]:

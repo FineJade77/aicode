@@ -285,3 +285,119 @@ def test_missing_image_hint_maps_docker_error_to_action() -> None:
 
 def test_missing_image_hint_ignores_unrelated_failures() -> None:
     assert missing_image_hint("ls", "ls: cannot access 'x': No such file or directory") == ""
+
+
+# --- the sandbox artifact drop ------------------------------------------------
+#
+# The drop is a host directory that model-chosen commands write to, so reading it
+# back is an untrusted-input problem. These pin the two refusals that make it
+# safe, and the mount shape that keeps the workspace read-only while it exists.
+
+from app.execution.artifacts import (  # noqa: E402
+    MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACTS,
+    collect_artifacts,
+)
+from app.execution.docker import ARTIFACT_MOUNT, _docker_args  # noqa: E402
+
+
+def test_the_drop_is_writable_while_the_workspace_stays_read_only(tmp_path: Path) -> None:
+    """The whole point of a separate drop: output without a writable repository."""
+    drop = tmp_path / "drop"
+    drop.mkdir()
+    request = ExecutionRequest(
+        workspace=tmp_path,
+        shell_command="make build",
+        backend="docker",
+        network="none",
+        artifact_root=drop,
+    )
+
+    args = _docker_args(request, tmp_path, [])
+    rendered = " ".join(args)
+
+    assert f"type=bind,src={tmp_path},dst=/workspace,readonly" in rendered
+    assert f"type=bind,src={drop},dst={ARTIFACT_MOUNT}" in rendered
+    assert f"dst={ARTIFACT_MOUNT},readonly" not in rendered
+    # A command has to be able to find the drop without being told where it is.
+    assert f"AICODE_ARTIFACTS={ARTIFACT_MOUNT}" in rendered
+    # Files aicode cannot read afterwards are not an export.
+    assert "--user" in args
+
+
+def test_without_artifacts_nothing_is_mounted_or_advertised(tmp_path: Path) -> None:
+    request = ExecutionRequest(
+        workspace=tmp_path, shell_command="make test", backend="docker", network="none"
+    )
+
+    rendered = " ".join(_docker_args(request, tmp_path, []))
+
+    assert ARTIFACT_MOUNT not in rendered
+    assert "AICODE_ARTIFACTS" not in rendered
+
+
+def test_collecting_records_metadata_but_not_contents(tmp_path: Path) -> None:
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "junit.xml").write_text("<testsuite/>", encoding="utf-8")
+
+    artifacts, truncated = collect_artifacts(tmp_path)
+
+    assert truncated is False
+    assert [artifact.path for artifact in artifacts] == ["reports/junit.xml"]
+    assert artifacts[0].size_bytes == len("<testsuite/>")
+    assert len(artifacts[0].sha256) == 64
+    # Nothing on the record should carry the bytes themselves.
+    assert not hasattr(artifacts[0], "content")
+
+
+def test_a_symlink_in_the_drop_is_refused_not_followed(tmp_path: Path) -> None:
+    """Otherwise "collect the build output" becomes an arbitrary-file read.
+
+    The container runs as the invoking user, so a symlink planted in the drop
+    resolves against everything that user can read.
+    """
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token", encoding="utf-8")
+    drop = tmp_path / "drop"
+    drop.mkdir()
+    (drop / "innocent.log").symlink_to(secret)
+
+    artifacts, truncated = collect_artifacts(drop)
+
+    assert artifacts == ()
+    assert truncated is True
+
+
+def test_a_file_too_large_is_skipped_and_declared(tmp_path: Path) -> None:
+    (tmp_path / "huge.bin").write_bytes(b"x" * (MAX_ARTIFACT_BYTES + 1))
+    (tmp_path / "small.txt").write_text("ok", encoding="utf-8")
+
+    artifacts, truncated = collect_artifacts(tmp_path)
+
+    assert [artifact.path for artifact in artifacts] == ["small.txt"]
+    assert truncated is True
+
+
+def test_too_many_files_stop_at_the_cap(tmp_path: Path) -> None:
+    for index in range(MAX_ARTIFACTS + 5):
+        (tmp_path / f"file-{index:03d}.txt").write_text("x", encoding="utf-8")
+
+    artifacts, truncated = collect_artifacts(tmp_path)
+
+    assert len(artifacts) == MAX_ARTIFACTS
+    assert truncated is True
+
+
+def test_collection_is_ordered_so_two_runs_agree(tmp_path: Path) -> None:
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+
+    first, _ = collect_artifacts(tmp_path)
+    second, _ = collect_artifacts(tmp_path)
+
+    assert [artifact.path for artifact in first] == ["a.txt", "b.txt"]
+    assert first == second
+
+
+def test_an_absent_drop_collects_nothing(tmp_path: Path) -> None:
+    assert collect_artifacts(tmp_path / "missing") == ((), False)

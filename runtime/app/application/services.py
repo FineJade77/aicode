@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from app.application.contracts import (
 )
 from app.application.errors import Conflict, InvalidRequest, NotFound, ProviderUnavailable
 from app.execution import ExecutionRequest, ResourceLimits
+from app.execution.artifacts import collect_artifacts
 from app.security import stable_hash
 
 
@@ -518,6 +520,12 @@ class ExecutionApplicationService:
         root = Path(request.workspace).expanduser().resolve()
         if not root.is_dir():
             raise InvalidRequest("workspace does not exist or is not a directory")
+        if getattr(request, "artifacts", False):
+            with tempfile.TemporaryDirectory(prefix="aicode-artifacts-") as drop:
+                return await self._execute_in(request, root, Path(drop))
+        return await self._execute_in(request, root, None)
+
+    async def _execute_in(self, request: Any, root: Path, artifact_root: Path | None) -> dict[str, Any]:
         command = self.workspace.project_command(root, request.action)
         if not command:
             raise InvalidRequest(
@@ -533,6 +541,7 @@ class ExecutionApplicationService:
                 allowed_roots=(root,),
                 masked_paths=(".env*",),
                 network="none",
+                artifact_root=artifact_root,
                 limits=ResourceLimits(
                     timeout_seconds=request.timeout_seconds,
                     cpus=self.limits.cpus,
@@ -546,6 +555,11 @@ class ExecutionApplicationService:
             result = await self.execution.execute(execution_request)
         except ValueError as exc:
             raise Conflict(str(exc)) from exc
+        if artifact_root is not None:
+            # Collected here rather than in the backend so the drop is read once,
+            # after the container is gone and nothing can still be writing to it.
+            artifacts, truncated = collect_artifacts(artifact_root)
+            result = replace(result, artifacts=artifacts, artifacts_truncated=truncated)
         payload = result.to_dict()
         payload["action"] = request.action
         return payload

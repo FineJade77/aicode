@@ -107,6 +107,7 @@ class ExecutionService:
             "pids_limit": request.limits.pids_limit,
             "writable_path_count": len(request.writable_paths),
             "masked_path_count": len(request.masked_paths),
+            "artifacts_enabled": request.artifact_root is not None,
         }
         if result is not None:
             data.update(
@@ -118,6 +119,13 @@ class ExecutionService:
                     "cancelled": result.cancelled,
                 }
             )
+            if result.artifacts or result.artifacts_truncated:
+                # Names, sizes and digests — never contents. The digest is what
+                # makes an exported report checkable after the fact; the bytes
+                # would put build output, and anything it happened to print,
+                # into a log that outlives the run.
+                data["artifacts"] = [artifact.to_dict() for artifact in result.artifacts]
+                data["artifacts_truncated"] = result.artifacts_truncated
         self.audit.record(
             event_type,
             session_id=request.session_id or None,

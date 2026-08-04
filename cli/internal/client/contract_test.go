@@ -193,6 +193,14 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 	if execution.Status != "succeeded" || execution.ExecutionID != "exec_fixture" {
 		t.Fatalf("execution response = %#v", execution)
 	}
+	// Artifact metadata has to survive the wire, or an exported report reaches
+	// the user with no way to tie it back to the run that produced it.
+	if len(execution.Artifacts) != 1 || execution.Artifacts[0].Path != "reports/junit.xml" {
+		t.Fatalf("artifacts = %#v", execution.Artifacts)
+	}
+	if execution.Artifacts[0].SizeBytes != 128 || len(execution.Artifacts[0].SHA256) != 64 {
+		t.Fatalf("artifact = %#v", execution.Artifacts[0])
+	}
 	cancelledExecution, err := api.CancelExecution(ctx, "exec_fixture")
 	if err != nil {
 		t.Fatal(err)

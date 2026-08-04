@@ -71,7 +71,7 @@
 | Shell/secret 边界 | `[x]` | 路径风险、mandatory protected paths、symlink 防逃逸、env allowlist、secret 脱敏。 |
 | 统一执行后端 | `[x]` | Host / Docker / OS 沙箱共用 execution contract、终态、取消、资源策略和 audit。 |
 | OS 级沙箱 | `[~]` | macOS seatbelt 已完成；Linux（landlock / bubblewrap）未做。 |
-| Docker Sandbox | `[~]` | test/build/lint MVP 完成，仍缺可控写入挂载和 artifact 导出。 |
+| Docker Sandbox | `[x]` | test/build/lint 完成；`--artifacts` 提供 workspace 之外的受控可写目录与元信息导出。 |
 | 项目 hooks | `[x]` | `post_edit` / `pre_bash`，与 Agent 命令共用 policy 与审计路径；untrusted 不执行。 |
 | Session store | `[x]` | SQLite 持久化 + WAL 复用连接 + 迁移 ladder + 分页 + 保留策略（默认关闭）。 |
 | Pending approval 恢复 | `[x]` | 重启后未决 approval 标记 expired/rejected 并补事件。 |
@@ -233,8 +233,10 @@
 
 ### 5.2 Docker Sandbox 收尾
 
-- [ ] 可控写入目录：默认仍只读，显式开启后挂载临时 writable workdir，不把 secret 写入容器。
-- [ ] artifact 导出：测试报告、coverage、build output；路径必须在受控目录内，审计记录 artifact 元信息。
+- [x] 可控写入目录 + artifact 导出（两条本是同一套机制，一并交付）。`aicode project sandbox <action> --artifacts` 把一个宿主临时目录挂到容器 `/artifacts` 并经 `AICODE_ARTIFACTS` 告知命令；workspace 仍是 `readonly`，容器以宿主 uid/gid 运行。默认不开——产物就是退出码的命令不需要任何可写路径。
+- 导出只记元信息（相对路径 / 字节数 / sha256），进 audit 也进 CLI；内容不进日志（构建输出无界，且它打印的东西会留在比运行活得更久的日志里）。
+- 读取该目录按**不可信输入**处理：符号链接一律不跟随（容器以调用者身份运行，跟随即任意文件读取）、数量与体积设上限（64 / 8 MiB / 32 MiB）。跳过的条目由 `artifacts_truncated` 明说，不静默丢弃。
+- **端到端未在本机验证**：本机没有 Docker daemon，Docker 集成测试照例跳过。已覆盖的是 docker 参数构造与收集逻辑（后者是纯文件系统操作，不依赖 Docker）。
 
 ### 5.3 Linux OS 沙箱
 

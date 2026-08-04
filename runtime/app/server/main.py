@@ -133,6 +133,10 @@ class SandboxExecutionRequest(BaseModel):
     action: Literal["test", "build", "lint"]
     workspace: str
     timeout_seconds: float = Field(default=1800.0, gt=0, le=3600)
+    # Opt-in. Off keeps the container with no writable path at all, which is the
+    # right default for a command whose output is its exit code; on adds one
+    # writable directory outside the workspace for reports and build output.
+    artifacts: bool = False
 
 
 class CancelExecutionResponse(BaseModel):
