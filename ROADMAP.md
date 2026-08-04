@@ -249,7 +249,11 @@
 - [x] 遗留 `models.default/planner/coder` 的迁移提示。**发现它们此前根本没有生效**：解析进结构体字段后无人消费，只有 `models.main` 会注入 Runtime，用户写了旧键既不报错也不起作用。现在 `models.default` / `models.coder` 会在 `models.main` 缺席时顶上、在场时报告被忽略，`models.planner` 提示删除（没有对应路由）；每次调用在 stderr 提示做了什么，`runtime doctor` 有对应 `config` 检查项。
 - [ ] per-route health check 与 provider fallback。
 - [x] usage 中区分重试消耗与最终输出 —— **核查后改做了别的**。原命题不成立：provider 层重试只在尚未 yield 任何内容时发生，失败那次拿不到 `usage`、从不产生记录；context overflow 重试同理。`main` 里并不藏着一池"重试 token"，加字段只会得到恒为零的一列。真正的洞在隔壁且更严重——`record_usage` 只在 `CompletionResult` 构造后调用，而取消会让 `CancelledError` 从流循环穿出，**中途取消的 run 已消耗的 token 一条记录都不留**。现已改为：取消时写一条 `complete: false` 的用量记录（token/成本为 0，附 `streamed_chars`），汇总新增 `incomplete_calls` 把总数标记为下界。不做估算——编造的测量值比明说的缺口更糟。
-- [ ] 评估 Go 工具依赖 pinning（如 lint 工具的 `tools.go`）。
+- [x] 评估 Go 工具依赖 pinning（如 lint 工具的 `tools.go`）。**结论：不做。** `cli/go.mod` 零依赖（纯 stdlib，连 `go.sum` 都不存在），Go 侧也没有任何第三方工具——只用 toolchain 自带的 `gofmt` / `go vet` / `go test` / `go build`。`tools.go` 的作用是防止 `go mod tidy` 清掉只被工具引用的 import；没有工具也没有模块依赖时，它钉不住任何东西，只增加一处要维护的表面。**引入第三方 linter（如 golangci-lint）时再重开本条**，那时它就有意义了。
+
+  评估中挖出的真问题已修：Go 的**唯一**外部依赖其实是 toolchain 版本本身，而它声明在三处（`go.work`、`cli/go.mod`、CI）且无人保证一致；同时 `make lint` 只跑 Python，CI 的 gofmt / vet 在本地根本没有入口。已新增 `make lint-go` 并让 CI 调用同一个 target（复制步骤正是当初漂移的原因），`make test` 现在跑完整 `lint`，另加 `TestGoVersionIsDeclaredConsistently` 钉住三处版本一致。
+
+  **为什么这不是小题大做**：`go` 指令自 1.21 起只是*最低语言版本*，不是钉子。实测本机 1.25 下 `slices.Repeat`（Go 1.23 才有）在 `go 1.22` 的模块里编译通过——CI 的 1.22 会直接挂。`go vet` 的 stdversion 分析器会报这个错，但它本身自 Go 1.23 才有，且此前本地根本没有跑 vet 的入口。
 
 ### 5.6 测试补齐
 

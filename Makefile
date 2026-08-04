@@ -1,4 +1,4 @@
-.PHONY: build install test-install-e2e test-local-provider-smoke deps deps-go deps-python test test-go test-python lint lint-python eval-smoke compile-python tidy-go lock-python
+.PHONY: build install test-install-e2e test-local-provider-smoke deps deps-go deps-python test test-go test-python lint lint-python lint-go eval-smoke compile-python tidy-go lock-python
 
 GOCACHE ?= $(CURDIR)/.cache/go-build
 GOMODCACHE ?= $(CURDIR)/.cache/go-mod
@@ -47,12 +47,32 @@ lock-python:
 	cd runtime && uv pip compile pyproject.toml --universal --python-version 3.11 -o requirements.lock.txt
 	cd runtime && uv pip compile pyproject.toml --universal --python-version 3.11 --extra dev -o requirements-dev.lock.txt
 
-lint: lint-python
+lint: lint-python lint-go
 
 lint-python:
 	python3 -m ruff check .
 
-test: lint-python test-go test-python
+# The Go gate, as one target CI also calls. Previously CI ran gofmt and vet as
+# its own inline steps and `make lint` covered only Python, so the repo's own
+# lint entry point passed on code CI would reject, and the only way to reproduce
+# the Go gate locally was to remember two commands that existed nowhere in the
+# Makefile. A shared target is the anti-drift mechanism; duplicating the steps
+# in CI is what let them diverge.
+#
+# `go vet` matters more here than it looks: its stdversion analyzer is what
+# reports a standard-library symbol newer than the `go` directive allows — the
+# one class of mistake that compiles on a developer's newer toolchain and fails
+# on CI's older one.
+lint-go:
+	@fmt_out=$$(gofmt -l cli/); \
+	if [ -n "$$fmt_out" ]; then \
+		echo "The following files are not gofmt'ed:"; \
+		echo "$$fmt_out"; \
+		exit 1; \
+	fi
+	$(GOENV) go vet ./cli/...
+
+test: lint test-go test-python
 
 test-go:
 	$(GOENV) go test ./cli/...

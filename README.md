@@ -1008,7 +1008,10 @@ Go CLI：
 
 ```bash
 make test-go
+make lint-go
 ```
+
+`make lint-go` 就是 CI 跑的那条命令（gofmt + `go vet`），不是它的复刻——CI 直接调用同一个 target。`go vet` 在这里尤其重要：`go.mod` 的 `go` 指令自 Go 1.21 起只是**最低语言版本**，用了比它更新的标准库符号在新版 toolchain 上照样编译通过，而 CI 的旧版会直接挂；vet 的 stdversion 分析器就是报这个的。
 
 Python Runtime：
 
