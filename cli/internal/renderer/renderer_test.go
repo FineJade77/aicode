@@ -167,7 +167,6 @@ func TestModelRoutesTable(t *testing.T) {
 		"provider": map[string]any{
 			"primary":            "openai_compatible",
 			"primary_configured": false,
-			"fallback":           "stub",
 		},
 		"routes": map[string]any{
 			"reviewer":   "gpt-5",
@@ -549,5 +548,46 @@ func TestUsageSummaryStaysQuietWhenNothingWasCutOff(t *testing.T) {
 
 	if strings.Contains(table, "incomplete_calls") {
 		t.Fatalf("a clean ledger must not carry a caveat: %q", table)
+	}
+}
+
+func TestRouteProbeTableListsEveryRoute(t *testing.T) {
+	table := RouteProbeTable(map[string]any{
+		"status": "error",
+		"probes": float64(2),
+		"routes": map[string]any{
+			"main":     map[string]any{"model": "main-model", "tools": true, "status": "ok", "latency_ms": float64(12)},
+			"reviewer": map[string]any{"model": "main-model", "tools": true, "status": "ok", "latency_ms": float64(12)},
+			"summarizer": map[string]any{
+				"model": "summary-model", "tools": false, "status": "error", "latency_ms": float64(3),
+				"checks": []any{map[string]any{"status": "fail", "summary": "summary-model is unknown"}},
+			},
+		},
+	})
+
+	for _, want := range []string{"main", "reviewer", "summarizer", "summary-model"} {
+		if !strings.Contains(table, want) {
+			t.Fatalf("table missing %q: %q", want, table)
+		}
+	}
+	// The failing route has to say why, or the table only reports that something
+	// is wrong somewhere.
+	if !strings.Contains(table, "summary-model is unknown") {
+		t.Fatalf("table = %q", table)
+	}
+	if !strings.Contains(table, "probed once") {
+		t.Fatalf("shared-model dedupe should be stated: %q", table)
+	}
+}
+
+func TestModelRoutesTableDoesNotAdvertiseAFallback(t *testing.T) {
+	// There is no fallback provider. Printing an empty `fallback:` line read as
+	// "a fallback exists and is unset" rather than "the concept does not exist".
+	table := ModelRoutesTable(map[string]any{
+		"provider": map[string]any{"primary": "anthropic", "primary_configured": true},
+	})
+
+	if strings.Contains(table, "fallback") {
+		t.Fatalf("table = %q", table)
 	}
 }

@@ -183,7 +183,7 @@ aicode runtime stop
 aicode runtime status
 aicode runtime doctor [--json]
 aicode runtime models [--json]
-aicode runtime models probe [--no-tools] [--model <name>] [--json]
+aicode runtime models probe [--no-tools] [--model <name>] [--routes] [--json]
 aicode runtime usage [--today|--session <session_id>] [--json]
 
 aicode project trust [status|add|remove|list] [--json]
@@ -655,7 +655,9 @@ export AICODE_SESSION_CACHE_LIMIT="200"
 export AICODE_SSE_IDLE_TIMEOUT_SECONDS="15"
 ```
 
-context capability 的 key 优先使用 `<provider>:<model>`，也支持只写 `<model>`；其次使用当前 Provider Profile 的 context window 和 max output。`aicode runtime models` 会显示每条路由实际采用的 capability 及其来源，`aicode runtime models probe [--json]` 会执行 endpoint、模型发现、SSE 和原生 tools 探测。还可用 `AICODE_CONTEXT_RESERVE_TOKENS` 与 `AICODE_CONTEXT_COMPACT_THRESHOLD` 调整预算安全余量和压缩阈值。
+context capability 的 key 优先使用 `<provider>:<model>`，也支持只写 `<model>`；其次使用当前 Provider Profile 的 context window 和 max output。`aicode runtime models` 会显示每条路由实际采用的 capability 及其来源，`aicode runtime models probe [--json]` 会执行 endpoint、模型发现、SSE 和原生 tools 探测。
+
+`--routes` 改为逐条路由体检，回答的是另一个问题——不是"provider 通不通"，而是"每条配置的路由是否可用"。**summarizer 最值得测**：它在多数配置里是另一个更便宜的模型，而在 compaction 半路触发之前没有任何东西会碰它，那是发现"这个模型不存在"的最糟时机。每条路由按**自己**声明的 tool 能力探测（对 `tool_calling=false` 的 profile 强行带 tools 探测，报出来的是探测器的错而不是配置的错）；共用同一模型的路由只探一次，结果在每条路由下都会报告。总状态取最差的一条——三条里过了两条不叫健康。还可用 `AICODE_CONTEXT_RESERVE_TOKENS` 与 `AICODE_CONTEXT_COMPACT_THRESHOLD` 调整预算安全余量和压缩阈值。
 
 ### 上下文怎么管
 

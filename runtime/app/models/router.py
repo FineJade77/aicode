@@ -18,6 +18,18 @@ from app.models.provider import (
 )
 from app.usage.pricing import estimate_cost, model_prices_data, price_for
 
+# Probe results are "ok" or "error"; ordered worst-first so aggregation is a
+# min over this list rather than a chain of comparisons.
+_STATUS_ORDER = ("error", "warn", "ok")
+
+
+def _worst_status(statuses) -> str:
+    seen = {status for status in statuses}
+    for status in _STATUS_ORDER:
+        if status in seen:
+            return status
+    return "ok"
+
 
 @dataclass(slots=True)
 class ModelRouter:
@@ -189,6 +201,48 @@ class ModelRouter:
             result = await probe(selected_model, tools=tools)
         result["profile"] = self.profile_status(model=selected_model)
         return result
+
+    async def probe_routes(self) -> dict:
+        """Probe every route, not just `main`.
+
+        A single-model probe answers "is the provider reachable", which is not
+        the question a three-route setup asks. `summarizer` is routinely a
+        different, cheaper model, and it is the one most likely to be
+        misconfigured precisely because nothing exercises it until a compaction
+        fires mid-run — the worst moment to discover the model does not exist.
+
+        Each route is probed with the tool support its own capability declares.
+        Probing a summarizer with tools when its profile says `tool_calling=false`
+        would report a configuration failure that is really the probe's fault.
+
+        Routes sharing a model are probed once. The point is to find broken
+        configuration, not to pay for the same request three times; the shared
+        result is reported under every route that uses it.
+        """
+        results: dict[str, dict] = {}
+        by_model: dict[tuple[str, bool], dict] = {}
+        for purpose in ("main", "reviewer", "summarizer"):
+            model = self.model_for_purpose(purpose)
+            tools = self.capability_for_purpose(purpose).tool_calling
+            key = (model, tools)
+            if key not in by_model:
+                by_model[key] = await self.probe(model=model, tools=tools)
+            probed = by_model[key]
+            results[purpose] = {
+                "model": model,
+                "tools": tools,
+                "status": probed.get("status", "error"),
+                "latency_ms": probed.get("latency_ms", 0),
+                "checks": probed.get("checks", []),
+            }
+        return {
+            "schema_version": 1,
+            # Worst route wins: a setup where compaction cannot run is not
+            # healthy just because two routes out of three answered.
+            "status": _worst_status(result["status"] for result in results.values()),
+            "probes": len(by_model),
+            "routes": results,
+        }
 
     def profile_status(self, *, model: str | None = None) -> dict:
         selected_model = model or self.settings.models.main

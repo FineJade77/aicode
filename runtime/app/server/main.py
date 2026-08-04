@@ -412,7 +412,16 @@ async def model_routes(runtime: RuntimeDep) -> dict[str, Any]:
 
 
 @app.get("/v1/models/probe")
-async def model_probe(runtime: RuntimeDep, tools: bool = True, model: str | None = None) -> dict[str, Any]:
+async def model_probe(
+    runtime: RuntimeDep,
+    tools: bool = True,
+    model: str | None = None,
+    routes: bool = False,
+) -> dict[str, Any]:
+    if routes:
+        if model is not None:
+            raise HTTPException(status_code=400, detail="routes and model are mutually exclusive")
+        return await runtime.models.probe_routes()
     return await runtime.models.probe(model=model, tools=tools)
 
 

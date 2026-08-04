@@ -578,3 +578,6 @@ class ModelService:
 
     async def probe(self, *, model: str | None = None, tools: bool = True) -> dict[str, Any]:
         return await self.model.probe(model=model, tools=tools)
+
+    async def probe_routes(self) -> dict[str, Any]:
+        return await self.model.probe_routes()

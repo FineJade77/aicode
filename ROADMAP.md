@@ -249,7 +249,11 @@
 ### 5.5 配置与 provider 收尾
 
 - [x] 遗留 `models.default/planner/coder` 的迁移提示。**发现它们此前根本没有生效**：解析进结构体字段后无人消费，只有 `models.main` 会注入 Runtime，用户写了旧键既不报错也不起作用。现在 `models.default` / `models.coder` 会在 `models.main` 缺席时顶上、在场时报告被忽略，`models.planner` 提示删除（没有对应路由）；每次调用在 stderr 提示做了什么，`runtime doctor` 有对应 `config` 检查项。
-- [ ] per-route health check 与 provider fallback。
+- [x] per-route health check：`aicode runtime models probe --routes` 逐条探测 main / reviewer / summarizer，各按自身 tool 能力探测，共用模型只探一次，总状态取最差。summarizer 是重点——它通常是另一个模型，且在 compaction 半路触发前无人碰它。
+- [ ] provider fallback。**本轮未做，理由记在这里而不是留白**：
+  - 它不是"收尾"，是新设计。当前配置只有**一个** provider（`provider.type` 单选），fallback 需要先设计第二 provider 的配置形态、路由归属与优先级——这些都还不存在。
+  - 它有明确的"假成功"风险：静默换 provider 会同时改变**计价**（价格表按 provider:model 建键）、**能力**（tool_calling / streaming 逐 profile 声明）与**可复现性**。契约必须先定成"显式、可观测、绝不静默"，否则就是本文件第一条原则要按缺陷处理的那种降级路径。
+  - **顺带修掉一处已经存在的假承诺**：`ModelRoutesTable` 一直在打印 `provider["fallback"]`，而 Runtime 从不产出该字段，真实输出是空的 `fallback: `——读起来像"有 fallback 但没配"，而不是"没有这个概念"。renderer 测试自己喂了 `"fallback": "stub"`，于是这行死代码看起来是有覆盖的。该行已删除，并加测试钉住不得重现。
 - [x] usage 中区分重试消耗与最终输出 —— **核查后改做了别的**。原命题不成立：provider 层重试只在尚未 yield 任何内容时发生，失败那次拿不到 `usage`、从不产生记录；context overflow 重试同理。`main` 里并不藏着一池"重试 token"，加字段只会得到恒为零的一列。真正的洞在隔壁且更严重——`record_usage` 只在 `CompletionResult` 构造后调用，而取消会让 `CancelledError` 从流循环穿出，**中途取消的 run 已消耗的 token 一条记录都不留**。现已改为：取消时写一条 `complete: false` 的用量记录（token/成本为 0，附 `streamed_chars`），汇总新增 `incomplete_calls` 把总数标记为下界。不做估算——编造的测量值比明说的缺口更糟。
 - [x] 评估 Go 工具依赖 pinning（如 lint 工具的 `tools.go`）。**结论：不做。** `cli/go.mod` 零依赖（纯 stdlib，连 `go.sum` 都不存在），Go 侧也没有任何第三方工具——只用 toolchain 自带的 `gofmt` / `go vet` / `go test` / `go build`。`tools.go` 的作用是防止 `go mod tidy` 清掉只被工具引用的 import；没有工具也没有模块依赖时，它钉不住任何东西，只增加一处要维护的表面。**引入第三方 linter（如 golangci-lint）时再重开本条**，那时它就有意义了。
 

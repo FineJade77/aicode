@@ -87,7 +87,11 @@ func ModelRoutesTable(value any) string {
 	out.WriteString("Model Routes\n")
 	if provider, ok := root["provider"].(map[string]any); ok {
 		out.WriteString(fmt.Sprintf("primary: %s (configured: %v)\n", stringValue(provider["primary"]), provider["primary_configured"]))
-		out.WriteString(fmt.Sprintf("fallback: %s\n", stringValue(provider["fallback"])))
+		// No `fallback:` line. There is no fallback provider, and the Runtime
+		// never sent the field — this printed an empty value that read as "a
+		// fallback exists and is unset" rather than "the concept does not
+		// exist". The renderer test had been feeding it a stub, so the dead line
+		// looked covered.
 	}
 
 	out.WriteString("\nRoutes\n")
@@ -864,4 +868,67 @@ func stringValue(value any) string {
 		return s
 	}
 	return fmt.Sprint(value)
+}
+
+// RouteProbeTable reports one line per route.
+//
+// Separate from the single-model probe because the question is different: not
+// "is the provider reachable" but "is every configured route usable". The
+// summarizer is the one that matters most here — it is a different model in most
+// setups and nothing exercises it until a compaction fires mid-run, which is the
+// worst moment to find out it does not exist.
+func RouteProbeTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Route Probe\n")
+	out.WriteString(fmt.Sprintf("status: %s\n", stringValue(root["status"])))
+	if probes := stringValue(root["probes"]); probes != "" {
+		out.WriteString(fmt.Sprintf("requests: %s (routes sharing a model are probed once)\n", probes))
+	}
+
+	routes, ok := root["routes"].(map[string]any)
+	if !ok {
+		return out.String()
+	}
+	out.WriteString("\nROUTE       MODEL                          TOOLS  STATUS  LATENCY\n")
+	for _, purpose := range []string{"main", "reviewer", "summarizer"} {
+		route, ok := routes[purpose].(map[string]any)
+		if !ok {
+			continue
+		}
+		out.WriteString(fmt.Sprintf(
+			"%-11s %-30s %-6s %-7s %sms\n",
+			purpose,
+			stringValue(route["model"]),
+			stringValue(route["tools"]),
+			stringValue(route["status"]),
+			stringValue(route["latency_ms"]),
+		))
+	}
+	for _, purpose := range []string{"main", "reviewer", "summarizer"} {
+		route, ok := routes[purpose].(map[string]any)
+		if !ok || stringValue(route["status"]) != "error" {
+			continue
+		}
+		checks, ok := route["checks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range checks {
+			check, ok := item.(map[string]any)
+			if !ok || stringValue(check["status"]) != "fail" {
+				continue
+			}
+			out.WriteString(fmt.Sprintf("\n%s: %s\n", purpose, stringValue(check["summary"])))
+		}
+	}
+	return out.String()
+}
+
+func PrintRouteProbe(value any) {
+	fmt.Print(RouteProbeTable(value))
 }
