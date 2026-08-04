@@ -68,6 +68,8 @@ CATEGORY_TAGS = (
     # The `live_coordinated` tier: the change is only correct when it lands in
     # several files at once, each needing a different edit.
     "coordinated_change",
+    # The `live_longhorizon` tier: many sequential steps, each cheap.
+    "long_horizon",
 )
 UNCATEGORIZED = "uncategorized"
 

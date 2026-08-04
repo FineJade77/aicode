@@ -1166,3 +1166,69 @@ def test_guessing_instead_of_asking_is_its_own_attribution():
     )
 
     assert reason == FAILURE_ASSUMPTION
+
+
+# --- the long-horizon tier ----------------------------------------------------
+#
+# Collapsing the chain into fewer edits is allowed and expected: a deterministic
+# sequence is always collapsible by an agent that can read the rule and simulate
+# it, and making that impossible would take artificial opacity. What is measured
+# is completion — whether every step lands, or the run stops at nine of fourteen
+# and reports success.
+
+MINIMUM_CHAIN_STEPS = 12
+
+
+def longhorizon_tasks() -> list[EvalTask]:
+    return [load_task(path) for path in discover_tasks(suite="live_longhorizon")]
+
+
+def test_every_chain_is_actually_long():
+    """A short chain makes this the single-file tier with extra words.
+
+    The step count is counted from the fixture rather than trusted from the
+    description, because a description is not a property.
+    """
+    import subprocess
+
+    for task in longhorizon_tasks():
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+            cwd=fixture,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        )
+        assert completed.returncode != 0, f"{task.task_id} does not start red"
+        # Each unit of work is one placeholder to replace.
+        placeholders = sum(
+            path.read_text(encoding="utf-8").count("None")
+            + path.read_text(encoding="utf-8").count("VALUE = 0")
+            + path.read_text(encoding="utf-8").count('"usd"')
+            + path.read_text(encoding="utf-8").count('"NEW"')
+            + path.read_text(encoding="utf-8").count('"ada"')
+            + path.read_text(encoding="utf-8").count('"amount": "')
+            for path in sorted(fixture.glob("*.py"))
+            if not path.name.startswith(("test_", "validate", "audit", "trace"))
+        )
+        assert placeholders >= MINIMUM_CHAIN_STEPS, f"{task.task_id}: only {placeholders} steps"
+
+
+def test_the_reporting_script_is_not_editable():
+    """Otherwise the shortest path is to make the reporter stop reporting."""
+    for task in longhorizon_tasks():
+        forbidden = set(task.checks.forbidden_changed_paths)
+        assert forbidden - {"test_validate.py", "test_audit.py", "test_trace.py"}, task.task_id
+        assert not forbidden.intersection(task.checks.allowed_changed_paths), task.task_id
+
+
+def test_the_budget_leaves_room_for_the_whole_chain():
+    """A chain that runs out of budget scores as giving up.
+
+    That is a real failure mode, but a different one from the tier's question,
+    and a budget too small to finish would report it every time.
+    """
+    for task in longhorizon_tasks():
+        assert task.budgets.max_model_calls >= 8 * MINIMUM_CHAIN_STEPS, task.task_id

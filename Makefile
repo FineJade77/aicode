@@ -168,6 +168,20 @@ eval-live-ambiguous:
 		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
 		--output-root "$(EVAL_OUTPUT_ROOT)"
 
+# The long-horizon tier. Every other tier is one decision carried out; these are
+# a dozen or more of them in sequence. Collapsing the sequence into fewer edits
+# is *allowed* — a deterministic chain is always collapsible by a capable agent,
+# and engineering that away would take artificial opacity. What is measured is
+# completion: whether all the steps land, or the run declares itself done at
+# nine of fourteen.
+eval-live-longhorizon:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live_longhorizon \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 # --- OpenAI-compatible retargeting -------------------------------------------
 #
 # The tasks pin Anthropic as their reference profile. These targets retarget the
@@ -211,6 +225,9 @@ eval-live-coordinated-openai-compatible:
 
 eval-live-ambiguous-openai-compatible:
 	$(OC_ENV) $(MAKE) eval-live-ambiguous REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
+
+eval-live-longhorizon-openai-compatible:
+	$(OC_ENV) $(MAKE) eval-live-longhorizon REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
 
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals

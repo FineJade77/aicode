@@ -965,6 +965,7 @@ PYTHONPATH=runtime:. python3 -m evals.runner \
 | `live_scale_curve` | 4 | 检索成本随规模怎么长 |
 | `live_coordinated` | 4 | 一处改动必须同时落在多处、每处改法不同时还能不能做对 |
 | `live_ambiguous` | 3 | 需求有两种同样站得住的读法时，会不会先问再动手 |
+| `live_longhorizon` | 3 | 十几步顺序工作会不会漏、会不会提前收工 |
 
 ```bash
 export ANTHROPIC_API_KEY="..."
