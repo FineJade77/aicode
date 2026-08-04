@@ -82,6 +82,11 @@ class ApplicationRuntime:
 
     async def aclose(self) -> None:
         await self.execution.cancel_all()
+        # MCP servers are subprocesses the daemon owns; leaving them behind
+        # would outlive the Runtime that started them.
+        mcp = getattr(getattr(self.agent, "tools", None), "mcp", None)
+        if mcp is not None:
+            await mcp.aclose()
         await self.model.aclose()
         await self.trace.aclose()
         await self.sessions.aclose()

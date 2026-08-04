@@ -58,7 +58,7 @@
 | 三级上下文管理 | `[x]` | 写入截断 → 折叠旧工具输出 → 结构化摘要；`pending` 由代码续接。 |
 | 失效读取检测 | `[x]` | 按读取当时的 hash 比对，过期内容不以事实形态进入摘要。 |
 | Session fork | `[x]` | 从任意消息派生新 session；历史复制而非共享，compaction 边界重映射。 |
-| MCP 外部工具 | `[~]` | stdio transport 已接入并强制审批；HTTP transport 未做。 |
+| MCP 外部工具 | `[~]` | stdio transport 已接入（trust 门控、强制审批、按 workspace 缓存）；HTTP transport 未做。 |
 | 上下文索引 | `[~]` | `related_files` + `glob` 启发式已完成；符号 / import / test mapping 未做，见 §4.1。 |
 
 ### 2.3 安全与可运维
@@ -70,7 +70,7 @@
 | Project Trust | `[x]` | 默认 untrusted；仓库外 store 绑定 canonical 路径与 credential-free remote。 |
 | Shell/secret 边界 | `[x]` | 路径风险、mandatory protected paths、symlink 防逃逸、env allowlist、secret 脱敏。 |
 | 统一执行后端 | `[x]` | Host / Docker / OS 沙箱共用 execution contract、终态、取消、资源策略和 audit。 |
-| OS 级沙箱 | `[~]` | macOS seatbelt 已完成；Linux（landlock / bubblewrap）未做。 |
+| OS 级沙箱 | `[x]` | macOS seatbelt；Linux 明确不做（见 §5.3），非 macOS 选 `os` 直接失败而非假装生效。 |
 | Docker Sandbox | `[x]` | test/build/lint 完成；`--artifacts` 提供 workspace 之外的受控可写目录与元信息导出。 |
 | 项目 hooks | `[x]` | `post_edit` / `pre_bash`，与 Agent 命令共用 policy 与审计路径；untrusted 不执行。 |
 | Session store | `[x]` | SQLite 持久化 + WAL 复用连接 + 迁移 ladder + 分页 + 保留策略（默认关闭）。 |
@@ -240,11 +240,15 @@
 
 ### 5.3 Linux OS 沙箱
 
-- [ ] landlock 或 bubblewrap 后端。当前非 macOS 上选 `os` 直接失败——声称一条并未生效的边界比明说不支持更糟，因此这条不能靠"尽力而为"实现。
+- **不做**（2026-08-04，用户决定）。当前非 macOS 上选 `os` 直接失败，这个行为保留：声称一条并未生效的边界比明说不支持更糟。Linux 用户使用 `docker` 后端。若日后重开，前置仍是能在 Linux 上真实验证 landlock / bubblewrap 的环境——这条不能靠"尽力而为"实现。
 
 ### 5.4 MCP HTTP transport
 
-- [ ] 当前只有 stdio。发布一个未经充分测试的第二 transport 比不发布更糟，因此这条需要配套的协议测试而不只是客户端代码。
+**先修了一个前提（2026-08-04）：stdio transport 此前根本没有接线。** `McpManager` 在 `app/` 里没有任何消费者（只有测试引用），registry 从不注册 MCP 工具，项目配置里的 `mcp_servers` 解析完无人读取，`events.py` 里登记的 `mcp.server.started` / `failed` 从不发出——一套完整实现、有单元测试、但从未连线的子系统。文档与本文件当时都写着"已接入"。给未接线的子系统加第二种 transport 不会产生任何可观测行为，因此先接线。
+
+接线内容：`McpToolProvider` 按 workspace 惰性启动并缓存服务器，`DefaultToolRuntime.prepare` 在每个 run 开始时调用，工具进入该 run 的工具集，`ApplicationRuntime.aclose` 负责停止。**trust 门控**：只在 `trusted` workspace 启动——清单来自被检查仓库自己的 `.aicode/config.json`，与 hooks 在 untrusted 下不执行同一条规则。已用真实 `bootstrap` + 临时仓库端到端验证：untrusted 为空、trusted 出现两个工具、内置工具不受影响、审批姿态强制为 `read_only=False / approval=gate`、关停干净。
+
+- [ ] HTTP transport。发布一个未经充分测试的第二 transport 比不发布更糟，因此这条需要配套的协议测试而不只是客户端代码。
 
 ### 5.5 配置与 provider 收尾
 

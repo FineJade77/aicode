@@ -229,3 +229,121 @@ def _stub_tool(spec: ToolSpec):
             raise AssertionError("stub tool must not run")
 
     return _Stub()
+
+
+# --- wiring: from project config to a tool the model can call -----------------
+#
+# The manager and client were fully implemented and unit-tested, and connected to
+# nothing: `McpManager` had no consumer in `app/`, the registry never saw an MCP
+# tool, and the `mcp.server.*` events registered in `events.py` could not fire.
+# These pin the connection itself, and the trust gate that guards it.
+
+from app.tools.mcp.provider import McpToolProvider  # noqa: E402
+from app.tools.runtime import DefaultToolRuntime  # noqa: E402
+
+
+def provider_for(config: McpServerConfig) -> McpToolProvider:
+    return McpToolProvider(lambda workspace: [config])
+
+
+@pytest.mark.asyncio
+async def test_a_trusted_workspace_gets_the_servers_tools(tmp_path: Path) -> None:
+    runtime = DefaultToolRuntime(mcp=provider_for(server_config()))
+    try:
+        await runtime.prepare(str(tmp_path), trust_level="trusted")
+
+        names = [schema["name"] for schema in runtime.schemas_for_mode("default", workspace=str(tmp_path))]
+
+        assert any(name.startswith("mcp__fake__") for name in names), names
+    finally:
+        await runtime.mcp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_untrusted_workspace_starts_no_servers(tmp_path: Path) -> None:
+    """The server list comes from the repository's own config.
+
+    An untrusted checkout naming a process for the daemon to launch is the exact
+    power `.aicode` hooks already refuse, so MCP gives the same answer instead of
+    inventing a second one.
+    """
+    runtime = DefaultToolRuntime(mcp=provider_for(server_config()))
+    try:
+        await runtime.prepare(str(tmp_path), trust_level="untrusted")
+
+        names = [schema["name"] for schema in runtime.schemas_for_mode("default", workspace=str(tmp_path))]
+
+        assert not any(name.startswith("mcp__") for name in names), names
+        assert runtime.mcp.status() == {}
+    finally:
+        await runtime.mcp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_external_tool_runs_through_the_tool_runtime(tmp_path: Path) -> None:
+    runtime = DefaultToolRuntime(mcp=provider_for(server_config()))
+    try:
+        await runtime.prepare(str(tmp_path), trust_level="trusted")
+        name = next(
+            schema["name"]
+            for schema in runtime.schemas_for_mode("default", workspace=str(tmp_path))
+            if schema["name"].startswith("mcp__fake__")
+        )
+
+        spec = runtime.spec_for(name, workspace=str(tmp_path))
+        result = await runtime.run(name, {"value": "hi"}, ToolContext(workspace=tmp_path))
+
+        # Forced regardless of what the server claims about itself.
+        assert spec is not None and spec.read_only is False and spec.approval == "gate"
+        assert result.success is True
+    finally:
+        await runtime.mcp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_servers_start_once_and_are_reused_across_runs(tmp_path: Path) -> None:
+    """Servers are subprocesses with a handshake; per-run startup would pay it every message."""
+    starts = 0
+
+    def configs_for(workspace: Path):
+        nonlocal starts
+        starts += 1
+        return [server_config()]
+
+    runtime = DefaultToolRuntime(mcp=McpToolProvider(configs_for))
+    try:
+        await runtime.prepare(str(tmp_path), trust_level="trusted")
+        await runtime.prepare(str(tmp_path), trust_level="trusted")
+
+        assert starts == 1
+    finally:
+        await runtime.mcp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_server_is_reported_and_leaves_the_run_working(tmp_path: Path) -> None:
+    events: list[tuple[str, str, dict]] = []
+    runtime = DefaultToolRuntime(mcp=provider_for(server_config(mode="crash")))
+    try:
+        await runtime.prepare(
+            str(tmp_path),
+            trust_level="trusted",
+            on_event=lambda name, status, data: events.append((name, status, data)),
+        )
+
+        assert [status for _, status, _ in events] == ["failed"]
+        # The built-in tools must still be there: an optional integration cannot
+        # take the turn down with it.
+        names = [schema["name"] for schema in runtime.schemas_for_mode("default", workspace=str(tmp_path))]
+        assert "read_file" in names
+    finally:
+        await runtime.mcp.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_without_servers_costs_nothing(tmp_path: Path) -> None:
+    runtime = DefaultToolRuntime(mcp=McpToolProvider(lambda workspace: []))
+    await runtime.prepare(str(tmp_path), trust_level="trusted")
+
+    assert runtime.mcp.status() == {}
+    assert runtime.spec_for("read_file", workspace=str(tmp_path)) is not None

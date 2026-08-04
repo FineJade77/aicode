@@ -15,10 +15,12 @@ from app.audit.spans import SpanTraceSink
 from app.config import Settings
 from app.execution import ExecutionService
 from app.models.router import ModelRouter
+from app.project.config import load_project_config
 from app.project.trust import TrustStore
 from app.sessions.approvals import SessionApprovalBroker
 from app.sessions.store import SessionStore
 from app.system import SystemClock, UuidGenerator
+from app.tools.mcp.provider import McpToolProvider, configs_from_project
 from app.tools.runtime import DefaultToolRuntime
 from app.tools.workspace import LocalWorkspaceRuntime
 from app.usage.store import JsonlUsageRuntime
@@ -50,7 +52,9 @@ def build_application_runtime(settings: Settings) -> ApplicationRuntime:
     execution = ExecutionService(audit=trace)
     trust = TrustStore.from_env()
     workspace = LocalWorkspaceRuntime()
-    tools = DefaultToolRuntime()
+    # MCP servers are declared by the repository being worked in, so the
+    # provider gates them on trust and starts them lazily per workspace.
+    tools = DefaultToolRuntime(mcp=McpToolProvider(configs_from_project(load_project_config)))
     agent = AgentRuntime(
         model_runtime=model,
         trace=trace,

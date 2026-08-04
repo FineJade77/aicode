@@ -79,7 +79,27 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
     # prompt is rebuilt from the session by ContextManager before every model
     # call, so a second local copy could only drift out of sync.
     persist_message(session, user_message(str(request.message)))
-    tools = runtime.tools.schemas_for_mode(request.mode)
+    # External (MCP) servers are started here, once per run, before the tool
+    # list is built: a server that appears half-way through a turn would offer
+    # the model tools it could not see when it planned.
+    mcp_events: list[tuple[str, str, dict[str, Any]]] = []
+    prepare = getattr(runtime.tools, "prepare", None)
+    if callable(prepare):
+        await prepare(
+            request.workspace,
+            trust_level=str(trust_status["level"]),
+            on_event=lambda name, status, data: mcp_events.append((name, status, data)),
+        )
+    for server_name, server_status, server_data in mcp_events:
+        await session.events.put(
+            {
+                "type": f"mcp.server.{server_status}",
+                "server": server_name,
+                **server_data,
+            }
+        )
+    mcp_events.clear()
+    tools = _schemas_for(runtime, request.mode, request.workspace)
     context = runtime.tools.build_context(
         request.workspace,
         request.mode,
@@ -213,6 +233,35 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
             data={"mode": request.mode},
         )
     await session.events.put({"type": "final", "summary": summary})
+
+
+def _spec_for(runtime: AgentRuntime, name: str, workspace: Any = None) -> Any:
+    assert runtime.tools is not None
+    try:
+        return runtime.tools.spec_for(name, workspace=workspace)
+    except TypeError:
+        return runtime.tools.spec_for(name)
+
+
+def _validate_arguments(runtime: AgentRuntime, name: str, arguments: dict[str, Any], workspace: Any) -> str | None:
+    assert runtime.tools is not None
+    try:
+        return runtime.tools.validate_arguments(name, arguments, workspace=workspace)
+    except TypeError:
+        return runtime.tools.validate_arguments(name, arguments)
+
+
+def _schemas_for(runtime: AgentRuntime, mode: str, workspace: str) -> list[dict[str, Any]]:
+    """Tool schemas for this run, including any external ones this workspace started.
+
+    The workspace keyword is optional on the port so an embedder's own tool
+    runtime keeps working unchanged; callers that have a workspace pass it.
+    """
+    assert runtime.tools is not None
+    try:
+        return runtime.tools.schemas_for_mode(mode, workspace=workspace)
+    except TypeError:
+        return runtime.tools.schemas_for_mode(mode)
 
 
 def counting_text_delta(session: AgentSession, inner: Any) -> Any:
@@ -502,7 +551,7 @@ def consecutive_tool_groups(
     """
     groups: list[list[ToolCallRequest]] = []
     for call in calls:
-        spec = runtime.tools.spec_for(call.name) if runtime.tools is not None else None
+        spec = _spec_for(runtime, call.name) if runtime.tools is not None else None
         parallelizable = bool(spec is not None and spec.read_only)
         if parallelizable and groups and _group_is_parallel(groups[-1], runtime):
             groups[-1].append(call)
@@ -512,7 +561,7 @@ def consecutive_tool_groups(
 
 
 def _group_is_parallel(group: list[ToolCallRequest], runtime: AgentRuntime) -> bool:
-    spec = runtime.tools.spec_for(group[0].name) if runtime.tools is not None else None
+    spec = _spec_for(runtime, group[0].name) if runtime.tools is not None else None
     return bool(spec is not None and spec.read_only)
 
 
@@ -557,7 +606,7 @@ async def execute_gated(
 
     if runtime.tools is None:
         raise RuntimeError("AgentRuntime is missing a tool runtime adapter")
-    validation_error = runtime.tools.validate_arguments(call.name, call.arguments)
+    validation_error = _validate_arguments(runtime, call.name, call.arguments, context.workspace)
     if validation_error is not None:
         message = (
             f"Tool {call.name} arguments failed validation and were not executed. "
@@ -587,7 +636,7 @@ async def execute_gated(
         )
         return ToolCallResult(f"[tool argument validation failed] {message}", ok=False)
 
-    spec = runtime.tools.spec_for(call.name)
+    spec = _spec_for(runtime, call.name, context.workspace)
     gate = policy.gate(
         call.name,
         call.arguments,

@@ -779,12 +779,15 @@ aicode project workspace remove api
 
 在 `.aicode/config.json` 声明服务器（见上面的 `mcp.servers` 示例），它们的工具会自动进入 Agent 的工具集，暴露为 `mcp__files__<tool>`，与内置工具走**同一条** policy gate 和审批链路。
 
-四条约束：
+五条约束：
 
+- **只在 trusted workspace 启动**。服务器清单来自仓库自己的 `.aicode/config.json`，等于让被克隆的仓库指定一个要启动的进程——这正是 `.aicode` hooks 已经拒绝的权限，MCP 给同一个答案而不是另发明一个。untrusted workspace 下不启动、不报错，因为它并没有被拒绝一个它请求过的功能。
 - 外部工具**总是需要确认**，只读模式下直接拒绝。服务器声称自己只读是不可验证的主张，采信它等于对第三方代码跳过审批。
 - 名字带 `mcp__<server>__` 前缀，服务器无法接管 `bash` / `edit_file` 这类有专门规则的名字。
 - 服务器与其它子进程共用最小环境变量 allowlist；provider key 和 Runtime token 不会传入。`envAllowlist` 只能**追加**具体变量名。
 - 单个服务器起不来、协议违规或调用超时都不影响其它服务器和主流程；起不来会明确报告（`mcp.server.failed`），而不是让它的工具悄悄消失。
+
+服务器按 workspace 缓存、跨 run 复用（它们是带握手的子进程，每轮重启要为握手付费），并在 Runtime 关停时一并停止。
 
 当前只支持 stdio transport。
 
