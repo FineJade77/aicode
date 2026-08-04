@@ -25,6 +25,7 @@ from evals import reference_solutions
 from evals.contracts import EvalTask, load_task
 from evals.provider import EvalBudgetExceeded, LiveEvalProvider
 from evals.runner.core import (
+    FAILURE_ASSUMPTION,
     FAILURE_BUDGET,
     FAILURE_EDIT,
     FAILURE_ERROR,
@@ -1074,3 +1075,94 @@ def test_every_live_fixture_ignores_bytecode():
             assert ignore.is_file(), f"{fixture.name} has no .gitignore"
             body = ignore.read_text(encoding="utf-8")
             assert "__pycache__" in body and "*.pyc" in body, fixture.name
+
+
+# --- the ambiguous-requirement tier -------------------------------------------
+#
+# The only tier where the right behaviour is not "produce the change". Both
+# readings compile and pass their own reading, so what separates a good run from
+# a lucky one is whether the Agent recognised it could not know.
+
+
+def ambiguous_tasks() -> list[EvalTask]:
+    return [load_task(path) for path in discover_tasks(suite="live_ambiguous")]
+
+
+def test_an_ambiguous_task_is_graded_on_asking():
+    """Grading the branch alone would score a coin flip as competence."""
+    for task in ambiguous_tasks():
+        assert task.checks.expects_question_before_edit, task.task_id
+        assert task.question_answer.strip(), f"{task.task_id}: nothing to answer with"
+
+
+def test_the_workspace_does_not_contain_the_answer():
+    """The giveaway this tier is most exposed to.
+
+    If the fixture's own tests already assert the answered branch, the Agent can
+    read them and skip the question — and the run scores as if it had asked. The
+    branch assertions therefore live in the task JSON, which is never copied into
+    the workspace.
+    """
+    for task in ambiguous_tasks():
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        workspace_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(fixture.rglob("*"))
+            if path.is_file() and path.suffix in {".py", ".md", ".txt", ".json"}
+        )
+        for assertion in task.checks.files:
+            for needle in assertion.contains:
+                assert needle not in workspace_text, f"{task.task_id}: workspace reveals {needle!r}"
+
+
+def test_the_answer_is_not_derivable_from_the_request():
+    """A request that already implies the answer is not ambiguous.
+
+    Then asking is pedantry rather than judgement, and the tier would be
+    measuring politeness.
+    """
+    for task in ambiguous_tasks():
+        request = task.user_request.casefold()
+        for assertion in task.checks.files:
+            for needle in assertion.contains:
+                assert needle.casefold() not in request, f"{task.task_id}: the request states {needle!r}"
+
+
+def test_the_existing_tests_still_pass_before_any_change():
+    """These tasks start *green*, unlike every other tier.
+
+    A failing test would point at what to change and, with it, at which reading
+    was intended — turning the ambiguity into a lookup.
+    """
+    import subprocess
+
+    for task in ambiguous_tasks():
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+            cwd=fixture,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        )
+        assert completed.returncode == 0, f"{task.task_id} does not start green:\n{completed.stdout}"
+
+
+def test_guessing_instead_of_asking_is_its_own_attribution():
+    """Otherwise it reads as an edit failure, and the implementation is not wrong.
+
+    A run that picked a defensible branch produced working code; what it got
+    wrong was deciding on the user's behalf. Reporting that as `edit_failure`
+    would send the next reader looking at the diff.
+    """
+    task = attribution_task(checks={"allowed_changed_paths": ["calc.py"]})
+    reason = failure_reason(
+        task,
+        grade(False, ("question_precedes_edit", "test_command_1"), changed=("calc.py",)),
+        [],
+        metrics(agent_executions=2),
+        False,
+    )
+
+    assert reason == FAILURE_ASSUMPTION

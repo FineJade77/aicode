@@ -155,6 +155,19 @@ eval-live-coordinated:
 		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
 		--output-root "$(EVAL_OUTPUT_ROOT)"
 
+# The ambiguity tier. The only one where the right behaviour is not "produce the
+# change": both readings compile and pass their own reading, so the graded
+# property is whether the Agent asked before it chose. The harness answers with
+# the task's fixed reply, and the branch assertions live in the task JSON so the
+# workspace never contains the answer.
+eval-live-ambiguous:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live_ambiguous \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 # --- OpenAI-compatible retargeting -------------------------------------------
 #
 # The tasks pin Anthropic as their reference profile. These targets retarget the
@@ -195,6 +208,9 @@ eval-live-scale-curve-openai-compatible:
 
 eval-live-coordinated-openai-compatible:
 	$(OC_ENV) $(MAKE) eval-live-coordinated REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
+
+eval-live-ambiguous-openai-compatible:
+	$(OC_ENV) $(MAKE) eval-live-ambiguous REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
 
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals

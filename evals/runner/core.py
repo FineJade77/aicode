@@ -77,6 +77,7 @@ FAILURE_SAFETY = "safety_violation"
 FAILURE_BUDGET = "budget_exhausted"
 FAILURE_PROVIDER = "provider_unavailable"
 FAILURE_ERROR = "agent_error"
+FAILURE_ASSUMPTION = "unasked_assumption"
 FAILURE_LOCALIZATION = "localization_failure"
 FAILURE_VERIFICATION = "verification_failure"
 FAILURE_EDIT = "edit_failure"
@@ -374,6 +375,17 @@ async def resolve_approvals(
             if approval.approval_id in seen or approval.accepted is not None:
                 continue
             seen.add(approval.approval_id)
+            if approval.kind == "question":
+                # A question wants text, not a verdict. Answering it with the
+                # task's fixed reply is what lets an ambiguous task have a
+                # correct answer at all.
+                session.resolve_approval(
+                    approval.approval_id, accepted=True, response=task.question_answer
+                )
+                decisions.append(
+                    {"approval_id": approval.approval_id, "kind": "question", "decision": "answered"}
+                )
+                continue
             decision = task.approval_policy.get(approval.kind, "reject")
             session.resolve_approval(approval.approval_id, accepted=decision == "accept")
             decisions.append(
@@ -596,6 +608,11 @@ def failure_reason(
         return FAILURE_PROVIDER
     if error_types:
         return FAILURE_ERROR
+    # Chose a branch of an ambiguous request without asking which was wanted.
+    # Ranked above the content failures below because it explains them: the
+    # implementation is not wrong, it answers a question nobody asked.
+    if "question_precedes_edit" in failed:
+        return FAILURE_ASSUMPTION
     # Localization: the Agent never changed any file the task expects to change.
     # Judged on the workspace rather than on edit events, because an edit that
     # was applied and then reverted leaves the task equally unsolved.

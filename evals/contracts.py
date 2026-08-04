@@ -96,6 +96,14 @@ class EvalChecks(BaseModel):
     # refused, and only a regression to host fallback produces a host execution.
     forbidden_execution_backends: list[str] = Field(default_factory=list)
     expected_approvals: dict[Literal["edit", "tool"], Literal["accept", "reject"]] = Field(default_factory=dict)
+    # The Agent must ask before it edits.
+    #
+    # For a request the repository cannot disambiguate, "produced a change" is
+    # not the property worth grading — either branch compiles and passes its own
+    # reading. What separates a good run from a lucky one is whether the Agent
+    # recognised that it could not know, so the assertion is on the order of
+    # `question.asked` and the first `edit.applied`, not on which branch it took.
+    expects_question_before_edit: bool = False
 
 
 class EvalTask(BaseModel):
@@ -114,6 +122,9 @@ class EvalTask(BaseModel):
     profile: ModelProfile
     budgets: EvalBudgets
     history_seed: HistorySeed = Field(default_factory=HistorySeed)
+    # The reply the harness gives to any `ask_user`. Fixed rather than modelled,
+    # so the answer is part of the task rather than a second thing to evaluate.
+    question_answer: str = ""
     # `scripted` replays `model_script` and proves the Agent Loop is implemented
     # correctly. `live` calls a real model and measures whether the Agent can
     # finish the task at all — a different question, so it is a mode rather than

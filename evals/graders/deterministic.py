@@ -88,6 +88,23 @@ async def grade_task(task: EvalTask, context: GradeContext) -> dict[str, Any]:
     )
 
     event_types = [str(event.get("type") or "") for event in context.events]
+    if task.checks.expects_question_before_edit:
+        asked = event_types.index("question.asked") if "question.asked" in event_types else None
+        edited = event_types.index("edit.applied") if "edit.applied" in event_types else None
+        # Asking *after* editing is guessing followed by a courtesy: the branch
+        # was already chosen, so the question could not have informed it.
+        satisfied = asked is not None and (edited is None or asked < edited)
+        checks.append(
+            check(
+                "question_precedes_edit",
+                "trace",
+                satisfied,
+                "asked before editing"
+                if satisfied
+                else ("edited without asking" if asked is None else "asked only after editing"),
+                {"question_index": asked, "first_edit_index": edited},
+            )
+        )
     for event_type in task.checks.required_events:
         checks.append(
             check(
