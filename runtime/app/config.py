@@ -40,6 +40,17 @@ class OpenAICompatibleSettings(BaseModel):
 
 class ProviderSettings(BaseModel):
     type: str = "openai_compatible"  # openai_compatible | anthropic
+    # The provider to try when the primary is unreachable. Empty disables it.
+    #
+    # Off by default and never inferred. Answering from a different provider
+    # changes the price, the declared capabilities and the reproducibility of a
+    # run, so it has to be something the user asked for rather than something
+    # aicode decided on their behalf when a request failed.
+    fallback: str = ""
+    # The model the fallback answers with, for every route. One name rather than
+    # a second routing table: a fallback exists to keep a run alive, and a
+    # partially-configured second table would fail at the moment it is needed.
+    fallback_model: str = ""
 
 
 class AnthropicSettings(BaseModel):
@@ -149,7 +160,11 @@ class Settings(BaseModel):
                 tokenizer=os.getenv("AICODE_OPENAI_TOKENIZER", "chars").strip().casefold(),  # type: ignore[arg-type]
                 chars_per_token=float(os.getenv("AICODE_OPENAI_CHARS_PER_TOKEN", "3.5")),
             ),
-            provider=ProviderSettings(type=os.getenv("AICODE_PROVIDER_TYPE", "openai_compatible")),
+            provider=ProviderSettings(
+                type=os.getenv("AICODE_PROVIDER_TYPE", "openai_compatible"),
+                fallback=os.getenv("AICODE_PROVIDER_FALLBACK", "").strip(),
+                fallback_model=os.getenv("AICODE_PROVIDER_FALLBACK_MODEL", "").strip(),
+            ),
             anthropic=AnthropicSettings(
                 base_url=os.getenv("AICODE_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
                 api_key_env=os.getenv("AICODE_ANTHROPIC_API_KEY_ENV", "ANTHROPIC_API_KEY"),

@@ -24,6 +24,7 @@
         "verify.attempt",
         "plan.updated",
         "mcp.server.failed",
+        "provider.fallback",
         "mcp.server.started",
         "assistant.delta",
         "tool.started",

@@ -304,6 +304,11 @@ async def complete_with_compaction(
     # never reaches its `done` frame leaves a record behind saying so.
     session.begin_model_call(purpose=purpose, model=model)
     on_text_delta = counting_text_delta(session, on_text_delta)
+    # A provider switch is announced on the event stream, never inferred: it
+    # changes the price, the declared capabilities and what a rerun produces.
+    router = runtime.model_runtime
+    if hasattr(router, "on_fallback"):
+        router.on_fallback = session.events.put
     try:
         assert runtime.model_runtime is not None
         completion_args = {

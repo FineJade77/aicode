@@ -623,6 +623,25 @@ Warning: models.default is deprecated: ignored because models.main is set; delet
 
 `models.default` / `models.coder` 在 `models.main` 未配置时顶上，已配置则忽略；`models.planner` 没有对应路由，只提示删除。`aicode runtime doctor` 里有同样信息的 `config` 检查项，方便把 stderr 重定向掉的场景。提示只走 stderr，`--json` 输出不受影响。
 
+### Provider fallback
+
+默认关闭。同时配置这两项才生效——只配一半会在最需要它的时刻失败：
+
+```bash
+export AICODE_PROVIDER_FALLBACK=openai_compatible
+export AICODE_PROVIDER_FALLBACK_MODEL=gpt-5
+```
+
+回退**只在主 provider 够不着时发生**（`ProviderError`、未配置）。能力错误与上下文溢出**不回退**：前者说明请求本身不适合这个 provider，换一个能力声明不同的去回答等于悄悄改变模型能做什么；后者有自己的恢复路径。
+
+切换会明确告知，不需要事后从账单里推断：
+
+```
+Primary provider 'anthropic' was unavailable; answered with 'openai_compatible' (gpt-5).
+```
+
+`aicode runtime models` 会显示已配置的 fallback 及其模型；用量记录里的 provider/model 是**实际回答者**，因此计价不会记到主 provider 头上。
+
 常用环境变量：
 
 ```bash

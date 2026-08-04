@@ -21,6 +21,7 @@ EVENT_TYPES = frozenset(
         "plan.updated",
         "mcp.server.started",
         "mcp.server.failed",
+        "provider.fallback",
         "assistant.delta",
         "tool.started",
         "tool.output",

@@ -2,6 +2,13 @@ import pytest
 
 from app.config import Settings
 from app.models.openai_compatible import chat_completions_url
+from app.models.provider import (
+    ContextOverflowError,
+    ProviderCapabilityError,
+    ProviderError,
+    StreamEvent,
+    Usage,
+)
 from app.models.router import ModelRouter
 
 
@@ -102,3 +109,142 @@ async def test_each_route_is_probed_with_its_own_tool_capability() -> None:
     await router.probe_routes()
 
     assert {tools for _, tools in provider.calls} == {False}
+
+
+# --- provider fallback --------------------------------------------------------
+#
+# Answering from a different provider changes the price, the declared
+# capabilities and what a rerun produces. It is therefore off unless configured,
+# limited to the one failure it can honestly repair, and never silent.
+
+
+class FailingProvider:
+    provider_name = "anthropic"
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls = 0
+
+    def is_configured(self) -> bool:
+        return True
+
+    async def stream_complete(self, request):
+        self.calls += 1
+        raise self.error
+        yield  # pragma: no cover - makes this an async generator
+
+
+class AnsweringProvider:
+    provider_name = "openai_compatible"
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def is_configured(self) -> bool:
+        return True
+
+    async def stream_complete(self, request):
+        self.requests.append(request)
+        yield StreamEvent(type="text_delta", text="from fallback")
+        yield StreamEvent(type="done", usage=Usage(input_tokens=5, output_tokens=2), model=request.model)
+
+
+def fallback_settings(**overrides) -> Settings:
+    settings = Settings()
+    settings.provider.type = "anthropic"
+    settings.provider.fallback = overrides.get("fallback", "openai_compatible")
+    settings.provider.fallback_model = overrides.get("fallback_model", "backup-model")
+    return settings
+
+
+def fallback_router(error: Exception, **overrides):
+    primary = FailingProvider(error)
+    secondary = AnsweringProvider()
+    router = ModelRouter(primary=primary, settings=fallback_settings(**overrides), fallback=secondary)
+    return router, primary, secondary
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_primary_is_answered_by_the_fallback() -> None:
+    events: list[dict] = []
+    router, _, secondary = fallback_router(ProviderError("anthropic HTTP 503: overloaded"))
+    router.on_fallback = lambda event: events.append(event) or _noop()
+
+    result = await router.stream_complete(purpose="main", system="s", messages=[])
+
+    assert result.text == "from fallback"
+    assert result.provider == "openai_compatible"
+    # The fallback answers with its own model: the primary's name means nothing
+    # to a different provider.
+    assert secondary.requests[0].model == "backup-model"
+    assert result.model == "backup-model"
+
+
+async def _noop() -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_the_switch_is_announced_not_inferred() -> None:
+    events: list[dict] = []
+
+    async def record(event):
+        events.append(event)
+
+    router, _, _ = fallback_router(ProviderError("anthropic HTTP 503: overloaded"))
+    router.on_fallback = record
+
+    await router.stream_complete(purpose="main", system="s", messages=[])
+
+    assert [event["type"] for event in events] == ["provider.fallback"]
+    assert events[0]["primary"] == "anthropic"
+    assert events[0]["fallback"] == "openai_compatible"
+    assert "503" in events[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_capability_error_never_falls_back() -> None:
+    """The request is wrong for this provider; a second one with different
+    declared capabilities would answer it by silently changing what the model
+    can do."""
+    router, _, secondary = fallback_router(ProviderCapabilityError("no tools"))
+
+    with pytest.raises(ProviderCapabilityError):
+        await router.stream_complete(purpose="main", system="s", messages=[])
+    assert secondary.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_context_overflow_never_falls_back() -> None:
+    """Overflow has its own recovery; handing it to another provider would skip it."""
+    router, _, secondary = fallback_router(ContextOverflowError("too long"))
+
+    with pytest.raises(ContextOverflowError):
+        await router.stream_complete(purpose="main", system="s", messages=[])
+    assert secondary.requests == []
+
+
+@pytest.mark.asyncio
+async def test_without_a_fallback_the_failure_reaches_the_caller() -> None:
+    router = ModelRouter(primary=FailingProvider(ProviderError("down")), settings=Settings())
+
+    with pytest.raises(ProviderError):
+        await router.stream_complete(purpose="main", system="s", messages=[])
+
+
+def test_a_fallback_is_off_unless_both_provider_and_model_are_named() -> None:
+    for overrides in ({"fallback": ""}, {"fallback_model": ""}, {"fallback": "anthropic"}):
+        settings = fallback_settings(**overrides)
+        assert ModelRouter.from_settings(settings).fallback is None, overrides
+
+
+def test_route_status_reports_the_configured_fallback() -> None:
+    router = ModelRouter(
+        primary=AnsweringProvider(), settings=fallback_settings(), fallback=AnsweringProvider()
+    )
+
+    provider = router.route_status()["provider"]
+
+    assert provider["fallback"] == "openai_compatible"
+    assert provider["fallback_model"] == "backup-model"
+    assert ModelRouter(primary=AnsweringProvider(), settings=Settings()).route_status()["provider"]["fallback"] == ""

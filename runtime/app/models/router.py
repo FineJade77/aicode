@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.config import Settings
 from app.models.anthropic import AnthropicProvider
@@ -9,8 +9,10 @@ from app.models.openai_compatible import OpenAICompatibleProvider
 from app.models.provider import (
     CompletionRequest,
     CompletionResult,
+    ContextOverflowError,
     ModelCapability,
     ProviderCapabilityError,
+    ProviderError,
     ProviderNotConfigured,
     StreamingModelProvider,
     ToolCallRequest,
@@ -35,14 +37,22 @@ def _worst_status(statuses) -> str:
 class ModelRouter:
     primary: StreamingModelProvider
     settings: Settings
+    fallback: StreamingModelProvider | None = None
+    # Called with the fallback event payload when a request switches providers.
+    # Injected rather than emitted here so the router keeps no session state.
+    on_fallback: Callable[[dict], Awaitable[None]] | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> ModelRouter:
-        if settings.provider.type == "anthropic":
-            primary: StreamingModelProvider = AnthropicProvider(settings.anthropic)
-        else:
-            primary = OpenAICompatibleProvider(settings.openai_compatible)
-        return cls(primary=primary, settings=settings)
+        primary = _provider_for(settings.provider.type, settings)
+        fallback = None
+        name = settings.provider.fallback.strip()
+        # Off unless asked for, and never the same provider as the primary: a
+        # "fallback" that retries the same endpoint is a retry, and the provider
+        # layer already does those.
+        if name and name != settings.provider.type and settings.provider.fallback_model.strip():
+            fallback = _provider_for(name, settings)
+        return cls(primary=primary, settings=settings, fallback=fallback)
 
     def model_for_purpose(self, purpose: str) -> str:
         if purpose == "reviewer":
@@ -102,9 +112,9 @@ class ModelRouter:
         temperature: float = 0.2,
         max_tokens: int = 8192,
     ) -> CompletionResult:
-        is_configured = getattr(self.primary, "is_configured", None)
-        if callable(is_configured) and not is_configured():
-            raise ProviderNotConfigured("The model provider is not configured. Set an API key and retry.")
+        # The configured check lives in `_complete_with`, per provider, so an
+        # unconfigured primary can hand over to a configured fallback instead of
+        # failing the run before either is tried.
         selected_model = model or self.model_for_purpose(purpose)
         capability = self.capability_for_model(selected_model)
         if not capability.streaming:
@@ -125,11 +135,65 @@ class ModelRouter:
             temperature=temperature,
             max_tokens=min(max_tokens, capability.max_output_tokens),
         )
+        provider = self.primary
+        try:
+            return await self._complete_with(provider, request, on_text_delta)
+        except (ProviderError, ProviderNotConfigured) as exc:
+            fallback = self._usable_fallback(exc)
+            if fallback is None:
+                raise
+            # Bound here: Python unbinds the exception name at the end of the
+            # handler, so reading it below would be an undefined name.
+            failure = str(exc)
+        # Retried on the fallback with its own model: the primary's model name
+        # means nothing to a different provider, and sending it would fail in a
+        # way that looks like the fallback is broken.
+        fallback_request = replace(request, model=self.settings.provider.fallback_model)
+        if self.on_fallback is not None:
+            fallback_name = getattr(fallback, "provider_name", fallback.__class__.__name__)
+            primary_name = getattr(self.primary, "provider_name", self.primary.__class__.__name__)
+            await self.on_fallback(
+                {
+                    "type": "provider.fallback",
+                    "purpose": purpose,
+                    "primary": primary_name,
+                    "fallback": fallback_name,
+                    "model": fallback_request.model,
+                    "error": failure,
+                    "message": (
+                        f"Primary provider {primary_name!r} was unavailable; answered with "
+                        f"{fallback_name!r} ({fallback_request.model})."
+                    ),
+                }
+            )
+        return await self._complete_with(fallback, fallback_request, on_text_delta)
+
+    def _usable_fallback(self, exc: Exception) -> StreamingModelProvider | None:
+        """Only an unreachable provider justifies answering from another one.
+
+        A capability error means the *request* is wrong for this provider, and a
+        second provider with different declared capabilities would answer it by
+        silently changing what the model can do. Context overflow has its own
+        recovery. Both must reach the caller unchanged.
+        """
+        if self.fallback is None or isinstance(exc, ProviderCapabilityError | ContextOverflowError):
+            return None
+        return self.fallback
+
+    async def _complete_with(
+        self,
+        provider: StreamingModelProvider,
+        request: CompletionRequest,
+        on_text_delta: Callable[[str], Awaitable[None]] | None,
+    ) -> CompletionResult:
+        is_configured = getattr(provider, "is_configured", None)
+        if callable(is_configured) and not is_configured():
+            raise ProviderNotConfigured("The model provider is not configured. Set an API key and retry.")
         text_parts: list[str] = []
         tool_calls: list[ToolCallRequest] = []
         usage = Usage()
         model_name = request.model
-        async for event in self.primary.stream_complete(request):
+        async for event in provider.stream_complete(request):
             if event.type == "text_delta":
                 text_parts.append(event.text)
                 if on_text_delta is not None:
@@ -139,7 +203,7 @@ class ModelRouter:
             elif event.type == "done":
                 usage = event.usage or usage
                 model_name = event.model or model_name
-        provider_name = getattr(self.primary, "provider_name", self.primary.__class__.__name__)
+        provider_name = getattr(provider, "provider_name", provider.__class__.__name__)
         return CompletionResult(
             text="".join(text_parts),
             tool_calls=tool_calls,
@@ -289,6 +353,14 @@ class ModelRouter:
                 "primary": primary_name,
                 "primary_configured": primary_configured,
                 "type": self.settings.provider.type,
+                # Reported as the empty string when off, so the CLI can tell
+                # "no fallback configured" from "configured but unnamed".
+                "fallback": (
+                    getattr(self.fallback, "provider_name", self.fallback.__class__.__name__)
+                    if self.fallback is not None
+                    else ""
+                ),
+                "fallback_model": self.settings.provider.fallback_model if self.fallback is not None else "",
             },
             "routes": {
                 "main": self.settings.models.main,
@@ -327,3 +399,9 @@ class ModelRouter:
                 "models": model_prices_data(self.settings.pricing.model_prices),
             },
         }
+
+
+def _provider_for(name: str, settings: Settings) -> StreamingModelProvider:
+    if name == "anthropic":
+        return AnthropicProvider(settings.anthropic)
+    return OpenAICompatibleProvider(settings.openai_compatible)

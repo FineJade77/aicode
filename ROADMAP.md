@@ -47,7 +47,7 @@
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | Agent Loop | `[x]` | 原生 function calling，模型自主调用工具；单一历史来源，无内存 transcript 副本。 |
-| 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic，含 jitter 退避与 `Retry-After`。 |
+| 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic，含 jitter 退避与 `Retry-After`；可选 fallback（默认关闭，切换必然可见）。 |
 | 工具系统 | `[x]` | 12 个内置工具；`ToolSpec` 单一声明，policy 与 loop 不再各持名单。 |
 | 只读工具并发 | `[x]` | 连续只读调用成组并发（上限 8），结果按调用顺序写回。 |
 | 计划状态 | `[x]` | `update_plan` + `plan.updated`，跨 daemon 重启可见，随 fork 带走。 |
@@ -254,7 +254,13 @@
 
 - [x] 遗留 `models.default/planner/coder` 的迁移提示。**发现它们此前根本没有生效**：解析进结构体字段后无人消费，只有 `models.main` 会注入 Runtime，用户写了旧键既不报错也不起作用。现在 `models.default` / `models.coder` 会在 `models.main` 缺席时顶上、在场时报告被忽略，`models.planner` 提示删除（没有对应路由）；每次调用在 stderr 提示做了什么，`runtime doctor` 有对应 `config` 检查项。
 - [x] per-route health check：`aicode runtime models probe --routes` 逐条探测 main / reviewer / summarizer，各按自身 tool 能力探测，共用模型只探一次，总状态取最差。summarizer 是重点——它通常是另一个模型，且在 compaction 半路触发前无人碰它。
-- [ ] provider fallback。**本轮未做，理由记在这里而不是留白**：
+- [x] provider fallback（2026-08-04）。**默认关闭，必须同时配 `provider.fallback` 与 `provider.fallback_model` 才生效**——两者缺一即视为未配置，因为一个配了一半的 fallback 会恰好在最需要它的时刻失败。回退用它自己的模型：主 provider 的模型名对另一个 provider 毫无意义，直接沿用会失败成"fallback 坏了"的样子。
+
+  **只在"够不着"时回退**：`ProviderError` 与 `ProviderNotConfigured` 会回退；`ProviderCapabilityError` 与 `ContextOverflowError` **不会**——前者说明请求本身不适合这个 provider，换一个能力声明不同的去回答等于悄悄改变模型能做什么；后者有自己的恢复路径，交给别人等于跳过它。
+
+  **绝不静默**：新增 `provider.fallback` SSE 事件（按仓库规则四处同步登记：`events.py`、schema enum、fixture、Go renderer），CLI 直接打印切换；`route_status()` 报告已配置的 fallback，`aicode runtime models` 的 `fallback:` 行因此重新变成真的——它此前打印的是 Runtime 从不发送的字段。用量记录里 provider/model 本就是回答者的名字，所以计价不会张冠李戴。
+
+  以下是决定做它之前记的顾虑，保留作为设计依据：
   - 它不是"收尾"，是新设计。当前配置只有**一个** provider（`provider.type` 单选），fallback 需要先设计第二 provider 的配置形态、路由归属与优先级——这些都还不存在。
   - 它有明确的"假成功"风险：静默换 provider 会同时改变**计价**（价格表按 provider:model 建键）、**能力**（tool_calling / streaming 逐 profile 声明）与**可复现性**。契约必须先定成"显式、可观测、绝不静默"，否则就是本文件第一条原则要按缺陷处理的那种降级路径。
   - **顺带修掉一处已经存在的假承诺**：`ModelRoutesTable` 一直在打印 `provider["fallback"]`，而 Runtime 从不产出该字段，真实输出是空的 `fallback: `——读起来像"有 fallback 但没配"，而不是"没有这个概念"。renderer 测试自己喂了 `"fallback": "stub"`，于是这行死代码看起来是有覆盖的。该行已删除，并加测试钉住不得重现。

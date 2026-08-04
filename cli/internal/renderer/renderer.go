@@ -87,11 +87,12 @@ func ModelRoutesTable(value any) string {
 	out.WriteString("Model Routes\n")
 	if provider, ok := root["provider"].(map[string]any); ok {
 		out.WriteString(fmt.Sprintf("primary: %s (configured: %v)\n", stringValue(provider["primary"]), provider["primary_configured"]))
-		// No `fallback:` line. There is no fallback provider, and the Runtime
-		// never sent the field — this printed an empty value that read as "a
-		// fallback exists and is unset" rather than "the concept does not
-		// exist". The renderer test had been feeding it a stub, so the dead line
-		// looked covered.
+		// Printed only when one is configured. It used to print unconditionally
+		// from a field the Runtime never sent, so an empty value read as "a
+		// fallback exists and is unset" rather than "none is configured".
+		if fallback := stringValue(provider["fallback"]); fallback != "" {
+			out.WriteString(fmt.Sprintf("fallback: %s (%s)\n", fallback, stringValue(provider["fallback_model"])))
+		}
 	}
 
 	out.WriteString("\nRoutes\n")
@@ -498,6 +499,11 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		// Reported rather than swallowed: the user configured this server and
 		// would otherwise just find its tools quietly missing.
 		fmt.Fprintf(out, "MCP server %q failed to start: %s\n", stringValue(event["server"]), stringValue(event["error"]))
+	case "provider.fallback":
+		// Never silent. Answering from another provider changes the price, the
+		// declared capabilities and what a rerun would produce, so the switch is
+		// stated rather than left to be inferred from a usage table later.
+		fmt.Fprintf(out, "\n%s\n", stringValue(event["message"]))
 	case "tool.denied":
 		fmt.Fprintf(out, "Tool denied by policy: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":

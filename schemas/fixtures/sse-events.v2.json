@@ -290,6 +290,16 @@
     },
     {
       "event_id": 31,
+      "type": "provider.fallback",
+      "purpose": "main",
+      "primary": "anthropic",
+      "fallback": "openai_compatible",
+      "model": "gpt-5",
+      "error": "anthropic HTTP 503: overloaded",
+      "message": "Primary provider 'anthropic' was unavailable; answered with 'openai_compatible' (gpt-5)."
+    },
+    {
+      "event_id": 32,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",
