@@ -58,7 +58,7 @@
 | 三级上下文管理 | `[x]` | 写入截断 → 折叠旧工具输出 → 结构化摘要；`pending` 由代码续接。 |
 | 失效读取检测 | `[x]` | 按读取当时的 hash 比对，过期内容不以事实形态进入摘要。 |
 | Session fork | `[x]` | 从任意消息派生新 session；历史复制而非共享，compaction 边界重映射。 |
-| MCP 外部工具 | `[~]` | stdio transport 已接入（trust 门控、强制审批、按 workspace 缓存）；HTTP transport 未做。 |
+| MCP 外部工具 | `[x]` | stdio 与 Streamable HTTP 两种 transport；trust 门控、强制审批、按 workspace 缓存。 |
 | 上下文索引 | `[~]` | `related_files` + `glob` 启发式已完成；符号 / import / test mapping 未做，见 §4.1。 |
 
 ### 2.3 安全与可运维
@@ -248,7 +248,7 @@
 
 接线内容：`McpToolProvider` 按 workspace 惰性启动并缓存服务器，`DefaultToolRuntime.prepare` 在每个 run 开始时调用，工具进入该 run 的工具集，`ApplicationRuntime.aclose` 负责停止。**trust 门控**：只在 `trusted` workspace 启动——清单来自被检查仓库自己的 `.aicode/config.json`，与 hooks 在 untrusted 下不执行同一条规则。已用真实 `bootstrap` + 临时仓库端到端验证：untrusted 为空、trusted 出现两个工具、内置工具不受影响、审批姿态强制为 `read_only=False / approval=gate`、关停干净。
 
-- [ ] HTTP transport。发布一个未经充分测试的第二 transport 比不发布更糟，因此这条需要配套的协议测试而不只是客户端代码。
+- [x] HTTP transport（Streamable HTTP）。`command` 与 `url` 二选一，管理器之上的一切与 transport 无关。安全侧：不跟随重定向（否则 `Authorization` 会被重发到对端指定的主机）、凭据只写环境变量名、响应 8 MiB 上限且限定 content type。**按本条要求配了协议测试而不只是客户端代码**：JSON 与 SSE 两种应答形状、session id 回传、交错帧中按请求 id 取结果、流未作答、重定向、超大响应、错误状态码、错误 content type、JSON-RPC error、超时、非 http scheme、双 transport 声明——共 15 项；另用真实本地 HTTP 服务做过一次真实 socket 端到端验证。
 
 ### 5.5 配置与 provider 收尾
 

@@ -31,7 +31,9 @@ class McpServerRef:
     """
 
     name: str
-    command: list[str]
+    command: list[str] = field(default_factory=list)
+    url: str = ""
+    auth_token_env: str = ""
     env_allowlist: tuple[str, ...] = ()
     startup_timeout: float = 20.0
     call_timeout: float = 60.0
@@ -215,12 +217,12 @@ def parse_mcp_servers(raw: Any) -> list[McpServerRef]:
             continue
         name = str(item.get("name") or "").strip()
         command = item.get("command")
-        # A server without a usable name or command is skipped rather than
-        # guessed at: launching the wrong process is worse than launching none.
-        if not name or name in seen or not isinstance(command, list) or not command:
-            continue
-        argv = [str(part) for part in command if str(part)]
-        if not argv:
+        url = str(item.get("url") or "").strip()
+        # A server without a usable name, or without exactly one transport, is
+        # skipped rather than guessed at: launching the wrong process — or
+        # posting a tool call to the wrong host — is worse than doing neither.
+        argv = [str(part) for part in command if str(part)] if isinstance(command, list) else []
+        if not name or name in seen or bool(argv) == bool(url):
             continue
         seen.add(name)
         env_allowlist = item.get("envAllowlist")
@@ -228,6 +230,8 @@ def parse_mcp_servers(raw: Any) -> list[McpServerRef]:
             McpServerRef(
                 name=name,
                 command=argv,
+                url=url,
+                auth_token_env=str(item.get("authTokenEnv") or "").strip(),
                 env_allowlist=tuple(str(key) for key in env_allowlist) if isinstance(env_allowlist, list) else (),
                 startup_timeout=bounded_float(item.get("startupTimeoutSeconds"), default=20.0, minimum=1.0, maximum=300.0),
                 call_timeout=bounded_float(item.get("callTimeoutSeconds"), default=60.0, minimum=1.0, maximum=600.0),

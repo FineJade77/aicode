@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -347,3 +348,303 @@ async def test_a_workspace_without_servers_costs_nothing(tmp_path: Path) -> None
 
     assert runtime.mcp.status() == {}
     assert runtime.spec_for("read_file", workspace=str(tmp_path)) is not None
+
+
+# --- HTTP transport -----------------------------------------------------------
+#
+# The protocol, not just the client: a server may answer a request with a plain
+# JSON body or with an SSE stream, may assign a session that has to be echoed
+# back, and is otherwise attacker-controlled bytes arriving over the network.
+
+import httpx  # noqa: E402
+
+from app.tools.mcp.http import MAX_RESPONSE_BYTES, HttpMcpServer  # noqa: E402
+from app.tools.mcp.protocol import McpProtocolError  # noqa: E402
+
+TOOL_DESCRIPTOR = {"name": "echo", "description": "echo", "inputSchema": {"type": "object"}}
+
+
+def json_rpc_result(request_body: bytes, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": json.loads(request_body)["id"], "result": result}
+
+
+def scripted_transport(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+
+def default_handler(request: httpx.Request) -> httpx.Response:
+    body = json.loads(request.content)
+    method = body.get("method")
+    if "id" not in body:
+        return httpx.Response(202)
+    if method == "initialize":
+        return httpx.Response(
+            200,
+            json=json_rpc_result(request.content, {"protocolVersion": "2025-06-18"}),
+            headers={"content-type": "application/json", "mcp-session-id": "sess-123"},
+        )
+    if method == "tools/list":
+        return httpx.Response(
+            200,
+            json=json_rpc_result(request.content, {"tools": [TOOL_DESCRIPTOR]}),
+            headers={"content-type": "application/json"},
+        )
+    return httpx.Response(
+        200,
+        json=json_rpc_result(request.content, {"content": [{"type": "text", "text": "pong"}]}),
+        headers={"content-type": "application/json"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_http_handshake_lists_and_calls_tools() -> None:
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(default_handler))
+
+    descriptors = await server.start()
+    result = await server.call_tool("echo", {"value": "hi"})
+
+    assert [descriptor["name"] for descriptor in descriptors] == ["echo"]
+    assert result["content"][0]["text"] == "pong"
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_session_id_is_echoed_on_later_requests() -> None:
+    """The server assigns it on initialize; dropping it restarts the conversation."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("mcp-session-id", ""))
+        return default_handler(request)
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+    await server.start()
+    await server.stop()
+
+    assert seen[0] == ""
+    assert all(value == "sess-123" for value in seen[1:]), seen
+
+
+@pytest.mark.asyncio
+async def test_a_response_may_arrive_as_an_sse_stream() -> None:
+    """The other legal shape. A client that only handles JSON silently fails here."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "id" not in body:
+            return httpx.Response(202)
+        payload = json.dumps(json_rpc_result(request.content, {"tools": [TOOL_DESCRIPTOR]}))
+        if body["method"] == "initialize":
+            return httpx.Response(200, json=json_rpc_result(request.content, {}), headers={"content-type": "application/json"})
+        return httpx.Response(
+            200,
+            text=f"event: message\ndata: {payload}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    descriptors = await server.start()
+
+    assert [descriptor["name"] for descriptor in descriptors] == ["echo"]
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_interleaved_stream_frames_are_skipped_until_the_answer() -> None:
+    """Servers may push notifications before the response; the id is what ends the read."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "id" not in body:
+            return httpx.Response(202)
+        if body["method"] == "initialize":
+            return httpx.Response(200, json=json_rpc_result(request.content, {}), headers={"content-type": "application/json"})
+        noise = json.dumps({"jsonrpc": "2.0", "method": "notifications/progress"})
+        answer = json.dumps(json_rpc_result(request.content, {"tools": [TOOL_DESCRIPTOR]}))
+        return httpx.Response(
+            200,
+            text=f"data: {noise}\n\ndata: not-json\n\ndata: {answer}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    assert [descriptor["name"] for descriptor in await server.start()] == ["echo"]
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_never_answers_is_an_error_not_a_hang() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="data: {}\n\n", headers={"content-type": "text/event-stream"})
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    with pytest.raises(McpProtocolError, match="without answering"):
+        await server.start()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_is_refused_rather_than_followed() -> None:
+    """Following one would re-send the Authorization header to another host."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(307, headers={"location": "https://elsewhere.example/rpc"})
+
+    server = HttpMcpServer(
+        "remote", "https://mcp.example/rpc", auth_token_env="MCP_TOKEN", client=scripted_transport(handler)
+    )
+
+    with pytest.raises(McpProtocolError, match="redirect"):
+        await server.start()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_bearer_token_comes_from_the_environment_not_the_config(monkeypatch) -> None:
+    """A secret in `.aicode/config.json` is a secret whoever declared it commits."""
+    monkeypatch.setenv("MCP_TOKEN", "s3cret")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization", ""))
+        return default_handler(request)
+
+    server = HttpMcpServer(
+        "remote", "https://mcp.example/rpc", auth_token_env="MCP_TOKEN", client=scripted_transport(handler)
+    )
+    await server.start()
+    await server.stop()
+
+    assert seen and all(value == "Bearer s3cret" for value in seen)
+
+
+@pytest.mark.asyncio
+async def test_no_authorization_header_without_a_configured_env_var() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization", ""))
+        return default_handler(request)
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+    await server.start()
+    await server.stop()
+
+    assert seen and all(value == "" for value in seen)
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_body_is_refused() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"x" * (MAX_RESPONSE_BYTES + 1),
+            headers={"content-type": "application/json"},
+        )
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    with pytest.raises(McpProtocolError, match="more than"):
+        await server.start()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_an_http_error_status_is_reported() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="busy")
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    with pytest.raises(McpProtocolError, match="HTTP 503"):
+        await server.start()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_content_type_is_refused() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html/>", headers={"content-type": "text/html"})
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    with pytest.raises(McpProtocolError, match="content type"):
+        await server.start()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_json_rpc_error_becomes_a_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32000, "message": "nope"}},
+            headers={"content-type": "application/json"},
+        )
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    with pytest.raises(McpProtocolError, match="nope"):
+        await server.start()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_is_reported_as_a_timeout() -> None:
+    """The tool layer maps TimeoutError to a distinct message; a generic error would lose that."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    server = HttpMcpServer("remote", "https://mcp.example/rpc", client=scripted_transport(handler))
+
+    with pytest.raises(TimeoutError):
+        await server.start()
+    await server.stop()
+
+
+def test_a_non_http_url_is_refused_at_construction() -> None:
+    for url in ("file:///etc/passwd", "ftp://example/rpc", "/local/path"):
+        with pytest.raises(McpProtocolError, match="http or https"):
+            HttpMcpServer("remote", url)
+
+
+@pytest.mark.asyncio
+async def test_declaring_both_transports_fails_that_server_only(tmp_path: Path) -> None:
+    """Guessing which one was meant would start something nobody asked for."""
+    instance = McpManager(workspace=tmp_path)
+    ambiguous = McpServerConfig(name="both", command=["true"], url="https://mcp.example/rpc")
+    events: list[tuple[str, str, dict]] = []
+
+    tools = await instance.start(
+        [ambiguous, server_config(name="fine")],
+        on_event=lambda name, status, data: events.append((name, status, data)),
+    )
+    await instance.stop()
+
+    assert "both" in instance.failures
+    assert any(tool.spec.name.startswith("mcp__fine__") for tool in tools)
+
+
+def test_project_config_accepts_either_transport_but_not_both() -> None:
+    config = parse_project_config(
+        {
+            "mcp": {
+                "servers": [
+                    {"name": "local", "command": ["run-me"]},
+                    {"name": "remote", "url": "https://mcp.example/rpc", "authTokenEnv": "MCP_TOKEN"},
+                    {"name": "both", "command": ["run-me"], "url": "https://mcp.example/rpc"},
+                    {"name": "neither"},
+                ]
+            }
+        }
+    )
+
+    names = [ref.name for ref in config.mcp_servers]
+    assert names == ["local", "remote"]
+    assert config.mcp_servers[1].url == "https://mcp.example/rpc"
+    assert config.mcp_servers[1].auth_token_env == "MCP_TOKEN"

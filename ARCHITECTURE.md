@@ -401,7 +401,9 @@ Runtime 当前注册 12 个内置工具：
 
 未注册的工具名仍是硬拒绝（`unknown tool`）：Runtime 无法描述的东西不能运行。
 
-**当前只实现 stdio transport。** HTTP transport 尚未提供——发布一个未经充分测试的第二 transport 比不发布更糟。
+**两种 transport**：`command` 起 stdio 子进程，`url` 走 Streamable HTTP（`HttpMcpServer`）。`McpManager._build` 按配置二选一，两者同时出现或都缺失时该服务器启动失败并报告——猜测本意会启动一个没人要求的东西。管理器之上的一切（命名空间、强制审批、故障隔离、trust 门控）与 transport 无关。
+
+HTTP 侧多出三条约束，都源于"它比子进程更远"：**不跟随重定向**（跟随会把 `Authorization` 重发给对端指定的另一台主机）、**凭据只写环境变量名**（值不进仓库文件）、**响应有 8 MiB 上限且限定 content type**（一次响应是工具结果不是下载，字节由对端决定）。SSE 应答按匹配的请求 id 结束读取，因为服务器可以在结果之前推送 notification。
 
 ## 8. Policy And Approval
 
@@ -540,7 +542,7 @@ Runtime prompt 由几层组成：
 | `review.disabledRules[]` / `.largeDiffThreshold` / `.maxFindings` | 审查规则配置。 |
 | `workspaces[]` | 额外 workspace root（`name` / `path` / `mode`）。 |
 | `execution.agentBashBackend` | `auto` \| `host` \| `docker` \| `os`；空串表示继承 Runtime。 |
-| `mcp.servers[]` | MCP 服务器（`name` / `command` / `envAllowlist` / `startupTimeoutSeconds` / `callTimeoutSeconds`）。 |
+| `mcp.servers[]` | MCP 服务器（`name`、`command` 或 `url` 二选一、`authTokenEnv`、`envAllowlist`、`startupTimeoutSeconds`、`callTimeoutSeconds`）。 |
 | `hooks[]` | 工具事件钩子（`event` / `command` / `match` / `timeout` / `blocking`）。 |
 
 `.aicode/rules.md` 用于项目规范，`.aicode/memory.md` 用于长期项目记忆。**三者都只是上下文，不能提升权限**：trust、预算上限和 mandatory protected paths 都不接受项目级覆盖。
@@ -983,7 +985,6 @@ mutation 写在 task JSON 而不是 fixture 里：fixture 会被整个复制进 
 - 为 Docker Sandbox 增加可控写入目录和 artifact 导出。
 - 增强多 provider fallback 和 per-route 健康检查。
 - 补充更细的恢复语义，例如跨进程 approval continuation。
-- MCP 的 HTTP transport。
 - 让 `/v1/meta/contract` 的 transport 描述符如实反映已发布的 stdio JSONL RPC，而不是继续标 `planned`。
 - 扩展真实模型评测集与定时 baseline；当前四档 live suite 的功能性通过率均为满分，缺的是有区分度的难度。
 

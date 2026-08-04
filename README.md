@@ -787,9 +787,30 @@ aicode project workspace remove api
 - 服务器与其它子进程共用最小环境变量 allowlist；provider key 和 Runtime token 不会传入。`envAllowlist` 只能**追加**具体变量名。
 - 单个服务器起不来、协议违规或调用超时都不影响其它服务器和主流程；起不来会明确报告（`mcp.server.failed`），而不是让它的工具悄悄消失。
 
-服务器按 workspace 缓存、跨 run 复用（它们是带握手的子进程，每轮重启要为握手付费），并在 Runtime 关停时一并停止。
+服务器按 workspace 缓存、跨 run 复用（stdio 服务器是带握手的子进程，每轮重启要为握手付费），并在 Runtime 关停时一并停止。
 
-当前只支持 stdio transport。
+### 两种 transport
+
+每个服务器声明 `command`（stdio 子进程）**或** `url`（Streamable HTTP），二选一——两个都写或都不写会被跳过并报告，猜哪个才是本意等于启动一个没人要求的东西。
+
+```json
+{
+  "mcp": {
+    "servers": [
+      { "name": "files", "command": ["mcp-server-files", "--root", "."] },
+      { "name": "remote", "url": "https://mcp.example.com/rpc", "authTokenEnv": "MCP_TOKEN" }
+    ]
+  }
+}
+```
+
+HTTP transport 额外的三条约束，都来自"它比子进程更远"：
+
+- **不跟随重定向**。跟随一次就会把 `Authorization` 头重发给服务器指定的另一台主机——这是 bearer token 唯一绝不能做的事。收到重定向直接报错。
+- **凭据只写名字**。`authTokenEnv` 命名一个环境变量，值从不出现在仓库文件里；没配就不发 `Authorization` 头。
+- **响应有上限**（8 MiB）且只接受 `application/json` 与 `text/event-stream`。一次 MCP 响应是工具结果不是下载，而这些字节完全由对端决定。
+
+SSE 应答里服务器可以先推 notification 再给结果，因此读取以**匹配的请求 id** 为终点，而不是第一个 data 帧。
 
 ## Review
 
@@ -1073,5 +1094,4 @@ GOCACHE=.cache/go-build GOMODCACHE=.cache/go-mod go test ./cli/...
 - 不做无监督自动上线。
 - Docker sandbox 目前不支持可选写入挂载和 artifact 导出。
 - OS 级沙箱只支持 macOS。
-- MCP 只支持 stdio transport。
 - tree-sitter 索引、持久化 symbol/import/test mapping 已按 `live_scale_curve` 的结果降级：增长指数次线性（0.35）且在 100 模块处走平，模块数量这根轴上索引收益有限。仓库整体超出上下文窗口的情形尚未测过。

@@ -8,6 +8,7 @@ from typing import Any
 from app.agent.ports import ToolSpec
 from app.tools.base import ToolContext, ToolResult
 from app.tools.mcp.client import StdioMcpServer
+from app.tools.mcp.http import HttpMcpServer
 from app.tools.mcp.protocol import McpProtocolError, tool_result_text
 
 TOOL_NAME_PREFIX = "mcp"
@@ -45,7 +46,7 @@ class McpTool:
     """A tool backed by an external MCP server."""
 
     spec: ToolSpec
-    server: StdioMcpServer
+    server: Any
     remote_name: str
 
     async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -79,8 +80,15 @@ class McpTool:
 
 @dataclass(slots=True)
 class McpServerConfig:
+    """One declared server. Exactly one of `command` or `url` selects the transport."""
+
     name: str
-    command: list[str]
+    command: list[str] = field(default_factory=list)
+    url: str = ""
+    # Names an environment variable holding a bearer token for an HTTP server.
+    # The name, never the value: a secret written into the repository's own
+    # config would be committed by whoever declared the server.
+    auth_token_env: str = ""
     env_allowlist: tuple[str, ...] | None = None
     startup_timeout: float = 20.0
     call_timeout: float = 60.0
@@ -107,14 +115,13 @@ class McpManager:
     ) -> list[McpTool]:
         tools: list[McpTool] = []
         for config in configs:
-            server = StdioMcpServer(
-                config.name,
-                config.command,
-                cwd=self.workspace,
-                env_allowlist=config.env_allowlist,
-                startup_timeout=config.startup_timeout,
-                call_timeout=config.call_timeout,
-            )
+            try:
+                server = self._build(config)
+            except Exception as exc:  # noqa: BLE001 - a bad URL is one server's problem
+                self.failures[config.name] = f"{exc.__class__.__name__}: {exc}"
+                if on_event is not None:
+                    on_event(config.name, "failed", {"error": self.failures[config.name]})
+                continue
             try:
                 descriptors = await server.start()
             except Exception as exc:  # noqa: BLE001 - one bad server must not stop the rest
@@ -132,6 +139,31 @@ class McpManager:
             if on_event is not None:
                 on_event(config.name, "started", {"tools": [tool.spec.name for tool in server_tools]})
         return tools
+
+    def _build(self, config: McpServerConfig) -> Any:
+        """Pick the transport from the config, refusing an ambiguous declaration.
+
+        Guessing which one was meant would start something the author did not
+        ask for; both or neither is an authoring mistake worth naming.
+        """
+        if bool(config.command) == bool(config.url):
+            raise ValueError("declare exactly one of command (stdio) or url (http)")
+        if config.url:
+            return HttpMcpServer(
+                config.name,
+                config.url,
+                auth_token_env=config.auth_token_env,
+                startup_timeout=config.startup_timeout,
+                call_timeout=config.call_timeout,
+            )
+        return StdioMcpServer(
+            config.name,
+            config.command,
+            cwd=self.workspace,
+            env_allowlist=config.env_allowlist,
+            startup_timeout=config.startup_timeout,
+            call_timeout=config.call_timeout,
+        )
 
     async def stop(self) -> None:
         await asyncio.gather(*(server.stop() for server in self.servers), return_exceptions=True)

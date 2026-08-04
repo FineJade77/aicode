@@ -82,6 +82,8 @@ def configs_from_project(load_config: Any) -> Any:
             McpServerConfig(
                 name=ref.name,
                 command=list(ref.command),
+                url=getattr(ref, "url", ""),
+                auth_token_env=getattr(ref, "auth_token_env", ""),
                 env_allowlist=tuple(ref.env_allowlist) or None,
                 startup_timeout=ref.startup_timeout,
                 call_timeout=ref.call_timeout,

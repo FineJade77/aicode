@@ -1,3 +1,4 @@
+from app.tools.mcp.http import HttpMcpServer
 from app.tools.mcp.manager import (
     McpManager,
     McpServerConfig,
@@ -8,6 +9,7 @@ from app.tools.mcp.manager import (
 from app.tools.mcp.protocol import McpProtocolError
 
 __all__ = [
+    "HttpMcpServer",
     "McpManager",
     "McpProtocolError",
     "McpServerConfig",
