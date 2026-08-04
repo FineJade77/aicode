@@ -978,3 +978,99 @@ def test_the_defect_sits_away_from_both_ends():
 )
 def test_every_curve_task_is_solvable(task: EvalTask):
     assert reference_solutions.verify(task) == []
+
+
+# --- the coordinated-change tier ----------------------------------------------
+
+
+def coordinated_tasks() -> list[EvalTask]:
+    return [load_task(path) for path in discover_tasks(suite="live_coordinated")]
+
+
+@pytest.mark.parametrize(
+    "task", [pytest.param(task, id=task.task_id) for task in coordinated_tasks()]
+)
+def test_every_coordinated_task_is_solvable(task: EvalTask) -> None:
+    """Stronger here than elsewhere: the *whole* change has to be expressible.
+
+    A tier whose point is "several files at once" proves nothing if only the
+    first file of the change can be written.
+    """
+    assert reference_solutions.verify(task) == []
+
+
+def test_a_coordinated_task_touches_several_files():
+    """Two files would make this the cross-file tier again."""
+    for task in coordinated_tasks():
+        solution = reference_solutions.SOLUTIONS[task.fixture]
+        assert len(solution) >= 3, task.task_id
+
+
+def test_no_two_sites_take_the_same_edit():
+    """Otherwise the tier measures find-and-replace, not coordination.
+
+    Identical replacements across sites would be one edit typed several times,
+    which a model does trivially and which says nothing about whether it can
+    keep several *different* changes consistent.
+    """
+    for task in coordinated_tasks():
+        solution = reference_solutions.SOLUTIONS[task.fixture]
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        diffs = set()
+        for name, fixed in solution.items():
+            before = (fixture / name).read_text(encoding="utf-8")
+            # The changed lines, as a set: two files edited the same way produce
+            # the same set.
+            changed = frozenset(set(fixed.splitlines()) - set(before.splitlines()))
+            assert changed, f"{task.task_id}: {name} is unchanged by its own solution"
+            assert changed not in diffs, f"{task.task_id}: {name} repeats another site's edit"
+            diffs.add(changed)
+
+
+def test_a_partial_change_still_fails():
+    """The property the tier exists to measure.
+
+    If applying all but one site passes, the task did not need coordination and
+    a model that stopped early would be scored as correct.
+    """
+    for task in coordinated_tasks():
+        solution = reference_solutions.SOLUTIONS[task.fixture]
+        for omitted in solution:
+            partial = {name: body for name, body in solution.items() if name != omitted}
+            failures = reference_solutions.verify_partial(task, partial)
+            assert failures, f"{task.task_id}: passes without editing {omitted}"
+
+
+def test_the_failing_tests_name_no_file_to_edit():
+    """Naming them turns the task into a checklist.
+
+    The scale tier had to remove this giveaway twice; it is cheaper to refuse it
+    at authoring time than to discover a flat result was measuring it.
+    """
+    for task in coordinated_tasks():
+        fixture = EVAL_ROOT / "fixtures" / task.fixture
+        forbidden = task.checks.forbidden_changed_paths
+        assert forbidden, task.task_id
+        test_source = (fixture / forbidden[0]).read_text(encoding="utf-8")
+        for site in task.checks.allowed_changed_paths:
+            assert site not in test_source, f"{task.task_id}: its tests name {site}"
+
+
+def test_every_live_fixture_ignores_bytecode():
+    """A fixture without a `.gitignore` reports the interpreter as the Agent.
+
+    The tasks ask the model to run the tests, and running them writes bytecode.
+    Untracked `.pyc` files then land in `changed_paths`, fail
+    `changed_paths_allowed`, and are attributed as `safety_violation` — the
+    heaviest verdict the harness has, reported for a run that did exactly what
+    it was told. Found the hard way: the coordinated tier's first live run
+    scored 0/4 on safety with a functional pass rate of 1.000.
+    """
+    suites = ("live", "live_hard", "live_scale", "live_scale_curve", "live_coordinated")
+    for suite in suites:
+        for path in discover_tasks(suite=suite):
+            fixture = EVAL_ROOT / "fixtures" / load_task(path).fixture
+            ignore = fixture / ".gitignore"
+            assert ignore.is_file(), f"{fixture.name} has no .gitignore"
+            body = ignore.read_text(encoding="utf-8")
+            assert "__pycache__" in body and "*.pyc" in body, fixture.name

@@ -963,6 +963,7 @@ PYTHONPATH=runtime:. python3 -m evals.runner \
 | `live_hard` | 8 | 因与果分离时还能不能定位 |
 | `live_scale` | 2 | 仓库规模本身构成难度吗 |
 | `live_scale_curve` | 4 | 检索成本随规模怎么长 |
+| `live_coordinated` | 4 | 一处改动必须同时落在多处、每处改法不同时还能不能做对 |
 
 ```bash
 export ANTHROPIC_API_KEY="..."

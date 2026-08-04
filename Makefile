@@ -141,6 +141,20 @@ eval-live-scale-curve:
 		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
 		--output-root "$(EVAL_OUTPUT_ROOT)"
 
+# The coordinated tier. `live_hard` showed that distance between cause and effect
+# is free for a model that reads the whole repo quickly, and `live_scale_curve`
+# showed the same for repository size. This changes what is being asked instead
+# of how far away it is: a correct answer has to land in several files at once,
+# and each of them needs a *different* edit. Guards pin that a partial change
+# still fails and that find-and-replace is insufficient.
+eval-live-coordinated:
+	PYTHONPATH="$(CURDIR)/runtime:$(CURDIR)" python3 -m evals.runner \
+		--suite live_coordinated \
+		--repetitions $(REPETITIONS) \
+		$(if $(LIVE_MODEL),--live-model "$(LIVE_MODEL)",) \
+		$(if $(LIVE_PROFILE),--live-profile '$(LIVE_PROFILE)',) \
+		--output-root "$(EVAL_OUTPUT_ROOT)"
+
 # --- OpenAI-compatible retargeting -------------------------------------------
 #
 # The tasks pin Anthropic as their reference profile. These targets retarget the
@@ -178,6 +192,9 @@ eval-live-scale-openai-compatible:
 
 eval-live-scale-curve-openai-compatible:
 	$(OC_ENV) $(MAKE) eval-live-scale-curve REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
+
+eval-live-coordinated-openai-compatible:
+	$(OC_ENV) $(MAKE) eval-live-coordinated REPETITIONS=$(REPETITIONS) LIVE_PROFILE='$(OC_LIVE_PROFILE)'
 
 compile-python:
 	python3 -m compileall -x 'evals/fixtures' runtime/app evals

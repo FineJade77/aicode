@@ -65,6 +65,9 @@ CATEGORY_TAGS = (
     "algorithmic",
     "reproduce_first",
     "underspecified",
+    # The `live_coordinated` tier: the change is only correct when it lands in
+    # several files at once, each needing a different edit.
+    "coordinated_change",
 )
 UNCATEGORIZED = "uncategorized"
 

@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 
 from evals.contracts import EvalTask
+from evals.reference_solutions_coordinated import COORDINATED_SOLUTIONS
 from evals.reference_solutions_hard import HARD_SOLUTIONS
 
 EVAL_ROOT = pathlib.Path(__file__).resolve().parent
@@ -509,6 +510,7 @@ def test_a_row_ending_in_a_separator_has_a_final_empty_field():
 # The harder tier lives in its own module so the two sets stay separately
 # readable; `verify` sees one table.
 SOLUTIONS.update(HARD_SOLUTIONS)
+SOLUTIONS.update(COORDINATED_SOLUTIONS)
 
 def verify(task: EvalTask) -> list[str]:
     """Apply the reference solutions and report what is still wrong.
@@ -527,6 +529,17 @@ def verify(task: EvalTask) -> list[str]:
     if alternate is not None:
         problems.extend(_verify_solution(task, alternate, "alternate"))
     return problems
+
+
+def verify_partial(task: EvalTask, solution: dict[str, str]) -> list[str]:
+    """Apply an incomplete solution and report what still fails.
+
+    Used to prove a coordinated task really is coordinated: if every site but
+    one can be edited and the suite still passes, the task did not need the
+    coordination it claims to test, and a model that stopped early would be
+    scored as correct.
+    """
+    return _verify_solution(task, solution, "partial")
 
 
 def _verify_solution(task: EvalTask, solution: dict[str, str], label: str) -> list[str]:
