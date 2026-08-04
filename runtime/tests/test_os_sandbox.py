@@ -79,10 +79,17 @@ def test_resolve_bash_backend_honours_an_explicit_os_choice():
     assert resolve_bash_backend("os", "untrusted") == "os"
 
 
-def test_auto_is_unchanged_by_adding_the_backend():
-    """Flipping defaults is a separate decision with real compatibility cost."""
+def test_adding_the_os_backend_did_not_change_what_auto_means():
+    """Adding a backend must not move the default; that is a separate decision.
+
+    It has since been made deliberately — `auto` is the host everywhere — but
+    this test exists to catch a default that moves as a side effect of adding
+    an option, which is how a boundary disappears without anyone deciding to
+    remove it.
+    """
     assert resolve_bash_backend("auto", "trusted") == "host"
-    assert resolve_bash_backend("auto", "untrusted") == "docker"
+    assert resolve_bash_backend("auto", "untrusted") == "host"
+    assert resolve_bash_backend("os", "trusted") == "os"
 
 
 def make_request(tmp_path, command, **kwargs):

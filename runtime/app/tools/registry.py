@@ -514,6 +514,7 @@ def build_tool_context(
     trust_level: str = "trusted",
     session: Any = None,
     approvals: Any = None,
+    bash_backend: str | None = None,
 ) -> ToolContext:
     project_config = load_project_config(Path(workspace))
     return ToolContext(
@@ -530,7 +531,14 @@ def build_tool_context(
         trust_level=trust_level,
         session=session,
         approvals=approvals,
-        bash_backend=project_config.execution.agent_bash_backend or settings.execution.agent_bash_backend,
+        # Precedence: this turn's choice, then the project's, then the daemon's.
+        # The turn wins because it is the most specific and the most recent
+        # thing the user said.
+        bash_backend=(
+            bash_backend
+            or project_config.execution.agent_bash_backend
+            or settings.execution.agent_bash_backend
+        ),
         hooks=project_config.hooks,
     )
 
@@ -538,13 +546,27 @@ def build_tool_context(
 def resolve_bash_backend(configured: str, trust_level: str) -> str:
     """Map the configured policy plus workspace trust onto a concrete backend.
 
-    `auto` is the default: a workspace the user explicitly trusted runs on the
-    host with the full local toolchain, while anything else is pushed into the
-    Docker sandbox. `host` and `docker` are escape hatches that ignore trust.
+    `auto` resolves to the host, for trusted and untrusted workspaces alike.
+
+    It used to push an untrusted workspace into Docker. That made the sandbox
+    the default boundary, and on a machine without a Docker daemon it made
+    untrusted workspaces unusable rather than merely unsandboxed — aicode
+    refuses to fall back to the host, by design, so the commands simply failed.
+    Defaulting to the host trades that boundary for a working tool.
+
+    **What the change does not weaken.** Trust still gates behaviour everywhere
+    else it did: the policy engine keeps denying dangerous executables,
+    protected paths, workspace escapes and secret literals, and an untrusted
+    workspace's project commands still require approval rather than running
+    automatically. What is gone by default is process isolation, not the rules.
+
+    `docker` and `os` remain one word away — per session via `/sandbox`, per
+    project via `.aicode/config.json`, or daemon-wide via
+    `AICODE_AGENT_BASH_BACKEND`.
     """
     if configured in {"host", "docker", "os"}:
         return configured
-    return "host" if trust_level == "trusted" else "docker"
+    return "host"
 
 
 def sandbox_resource_limits(timeout: float) -> ResourceLimits:

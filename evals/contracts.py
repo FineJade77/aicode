@@ -125,6 +125,11 @@ class EvalTask(BaseModel):
     # The reply the harness gives to any `ask_user`. Fixed rather than modelled,
     # so the answer is part of the task rather than a second thing to evaluate.
     question_answer: str = ""
+    # Shell backend for the task's Agent commands. None leaves it to the
+    # resolved default, which is what most tasks want; a task that is *about*
+    # the sandbox names it, so the assertion does not silently become vacuous
+    # when the default moves.
+    bash_backend: Literal["auto", "host", "docker", "os"] | None = None
     # `scripted` replays `model_script` and proves the Agent Loop is implemented
     # correctly. `live` calls a real model and measures whether the Agent can
     # finish the task at all — a different question, so it is a mode rather than

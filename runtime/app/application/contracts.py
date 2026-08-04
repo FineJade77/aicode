@@ -52,6 +52,10 @@ class TurnRequest:
     mode: str
     workspace: str
     model: str | None = None
+    # Per-turn shell backend. None keeps whatever the project and settings
+    # resolve to; a value overrides it for this turn only, so a session can move
+    # one command into the sandbox without reconfiguring the daemon.
+    bash_backend: str | None = None
 
     def bind(self, *, workspace: str) -> TurnRequest:
         return replace(self, workspace=workspace)
@@ -64,6 +68,8 @@ class TurnRequest:
         }
         if self.model is not None:
             payload["model"] = self.model
+        if self.bash_backend is not None:
+            payload["bash_backend"] = self.bash_backend
         return payload
 
 

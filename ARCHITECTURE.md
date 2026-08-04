@@ -811,11 +811,16 @@ Agent `bash` 的落点由 `execution.agent_bash_backend` 与 workspace trust lev
 
 | 配置 | trusted workspace | 其它（untrusted / unspecified） |
 | --- | --- | --- |
-| `auto`（默认） | host | docker |
+| `auto`（默认） | host | **host** |
 | `host` | host | host |
 | `docker` | docker | docker |
 | `os` | OS 沙箱 | OS 沙箱 |
 
+**`auto` 曾把 untrusted workspace 推进 Docker，2026-08-04 改为一律 host。** 理由是"沙箱不可用时明确失败、绝不回退宿主机"这条设计与"默认进沙箱"叠加后，在没有 Docker daemon 的机器上让 untrusted workspace **不是少了隔离，而是完全不能用**——命令直接失败。默认改为 host 是拿这条边界换一个能用的工具。
+
+**这次改动没有削弱的东西**（由 `test_registry_bash.py` 的断言钉住）：policy 仍然拒绝危险可执行文件、protected path、workspace 逃逸与 secret 字面值；untrusted workspace 的项目命令仍然逐次审批而不是自动执行；子进程环境变量 allowlist 不变；hooks 在 untrusted 下仍然完全不执行。**默认消失的是进程隔离，不是规则。**
+
+- 会话级：`aicode chat` 里 `/sandbox <auto|host|docker|os>`，随消息下发（`bash_backend`），只对本会话后续消息生效。刻意不存进 session：为某一条危险命令选的后端，不该在十轮之后还悄悄生效。
 - Runtime 级：环境变量 `AICODE_AGENT_BASH_BACKEND`。
 - 项目级：`.aicode/config.json` 的 `execution.agentBashBackend`；取值非法时回落到"继承 Runtime 设置"，而不是回落到宽松默认——配置里的拼写错误绝不能悄悄削弱沙箱。
 - system prompt 会声明当前的执行环境（是否禁网），使模型不会围绕它并不具备的能力做计划。

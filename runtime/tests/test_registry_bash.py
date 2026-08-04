@@ -2,6 +2,7 @@ import shlex
 
 import pytest
 
+from app.agent.policy import PolicyEngine
 from app.tools import registry
 from app.tools.base import ToolContext
 from app.tools.command import CommandResult
@@ -73,10 +74,13 @@ async def test_bash_does_not_inherit_provider_secrets(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("configured", "trust_level", "expected"),
     [
-        # auto: trust decides. This is the default posture.
+        # auto: the host, whatever the trust level. It used to send untrusted
+        # workspaces to Docker; on a machine without a Docker daemon that made
+        # them unusable rather than merely unsandboxed, because aicode refuses
+        # to fall back to the host by design.
         ("auto", "trusted", "host"),
-        ("auto", "untrusted", "docker"),
-        ("auto", "unspecified", "docker"),
+        ("auto", "untrusted", "host"),
+        ("auto", "unspecified", "host"),
         # Explicit settings ignore trust in both directions.
         ("host", "untrusted", "host"),
         ("docker", "trusted", "docker"),
@@ -87,8 +91,13 @@ def test_resolve_bash_backend(configured, trust_level, expected):
 
 
 @pytest.mark.asyncio
-async def test_untrusted_workspace_bash_is_routed_to_docker(tmp_path, monkeypatch):
-    """An untrusted workspace must not execute Agent commands on the host."""
+async def test_an_untrusted_workspace_reaches_docker_when_asked(tmp_path, monkeypatch):
+    """Sandboxing an untrusted workspace is now a choice, not the default.
+
+    `auto` resolves to the host everywhere; naming `docker` is what puts a
+    workspace in the sandbox. This pins that the route still exists and still
+    carries its resource caps — the default moved, the mechanism did not.
+    """
     captured = {}
 
     async def fake_run_shell_command(command, **kwargs):
@@ -102,7 +111,7 @@ async def test_untrusted_workspace_bash_is_routed_to_docker(tmp_path, monkeypatc
     result = await run_tool(
         "bash",
         {"command": "ls"},
-        ToolContext(workspace=tmp_path, trust_level="untrusted", bash_backend="auto"),
+        ToolContext(workspace=tmp_path, trust_level="untrusted", bash_backend="docker"),
     )
 
     assert result.success
@@ -153,7 +162,7 @@ async def test_bash_fails_loudly_when_sandbox_is_unavailable(tmp_path, monkeypat
     result = await run_tool(
         "bash",
         {"command": "ls"},
-        ToolContext(workspace=tmp_path, trust_level="untrusted", bash_backend="auto"),
+        ToolContext(workspace=tmp_path, trust_level="untrusted", bash_backend="docker"),
     )
 
     assert not result.success
@@ -161,3 +170,48 @@ async def test_bash_fails_loudly_when_sandbox_is_unavailable(tmp_path, monkeypat
     assert result.data["backend"] == "docker"
     assert result.data["status"] == "unavailable"
     assert "aicode project trust add" in result.error
+
+
+# --- what defaulting to the host does not weaken -------------------------------
+#
+# `auto` now resolves to the host for untrusted workspaces too. That removes
+# process isolation by default; it must not remove anything else, so the rules
+# that never depended on the backend are pinned here.
+
+
+def test_trust_still_gates_commands_when_everything_runs_on_the_host():
+    """The policy verdict is keyed on trust, not on where the command lands."""
+    engine = PolicyEngine()
+
+    trusted = engine.gate_bash("python3 -m pytest", workspace=None, protected_paths=[], trust_level="trusted")
+    untrusted = engine.gate_bash("python3 -m pytest", workspace=None, protected_paths=[], trust_level="untrusted")
+
+    assert trusted.verdict == "allow"
+    assert untrusted.verdict == "ask"
+
+
+def test_dangerous_commands_are_still_denied_on_the_host():
+    engine = PolicyEngine()
+
+    for command in ("rm -rf /", "sudo reboot"):
+        decision = engine.gate_bash(command, workspace=None, protected_paths=[], trust_level="trusted")
+        assert decision.verdict == "deny", command
+
+
+@pytest.mark.asyncio
+async def test_a_session_override_beats_the_project_and_daemon_setting(tmp_path, monkeypatch):
+    """`/sandbox docker` has to reach the backend, or the command is decoration."""
+    captured = {}
+
+    async def fake_run_shell_command(command, **kwargs):
+        captured.update(kwargs)
+        return CommandResult(command=[command], returncode=0, backend=kwargs["backend"], status="succeeded")
+
+    monkeypatch.setattr(registry, "run_shell_command", fake_run_shell_command)
+    monkeypatch.setattr(registry, "docker_available", lambda: True)
+
+    context = registry.build_tool_context(str(tmp_path), "default", bash_backend="docker")
+    result = await run_tool("bash", {"command": "ls"}, context)
+
+    assert result.success
+    assert captured["backend"] == "docker"

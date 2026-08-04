@@ -51,6 +51,9 @@ type Runner struct {
 	Interactive bool
 	Signals     <-chan os.Signal
 
+	// Session-scoped shell backend override, set by /sandbox. Empty leaves the
+	// choice to the project and daemon configuration.
+	sandbox         string
 	outputMu        sync.Mutex
 	previousSession *client.SessionResponse
 	firstError      error
@@ -366,6 +369,24 @@ func (runner *Runner) handleCommand(
 			runner.printf("Current message model override: %s\n\n", model)
 		}
 		runner.printf("%s", renderer.ModelRoutesTable(value))
+	case "/sandbox":
+		// Session-scoped so one risky command can be sandboxed without
+		// reconfiguring the daemon, and without the choice outliving the
+		// session that made it.
+		switch argument {
+		case "":
+			current := runner.sandbox
+			if current == "" {
+				current = "(project/daemon default)"
+			}
+			runner.printf("Shell backend for this session: %s\n", current)
+			runner.printf("Usage: /sandbox <auto|host|docker|os>\n")
+		case "auto", "host", "docker", "os":
+			runner.sandbox = argument
+			runner.printf("Shell backend for this session: %s\n", argument)
+		default:
+			runner.printError(fmt.Errorf("unknown sandbox backend %q; use auto, host, docker or os", argument))
+		}
 	case "/compact":
 		if len(active) > 0 {
 			runner.printError(errors.New("/compact can run only after the current run finishes"))
@@ -456,10 +477,11 @@ func (runner *Runner) submit(
 ) error {
 	requestCtx, cancel := withTimeout(ctx)
 	run, err := runner.API.SendMessage(requestCtx, session.SessionID, client.SendMessageRequest{
-		Message:   message,
-		Mode:      "chat",
-		Workspace: session.Workspace,
-		Model:     model,
+		Message:     message,
+		Mode:        "chat",
+		Workspace:   session.Workspace,
+		Model:       model,
+		BashBackend: runner.sandbox,
 	})
 	cancel()
 	if err != nil {
@@ -565,11 +587,18 @@ func (runner *Runner) printStatus(session client.SessionResponse, model string) 
 	if modelLabel == "" {
 		modelLabel = "route:main"
 	}
+	// Shown because it decides where commands run, which is the sort of thing a
+	// user should never have to remember they changed.
+	sandboxLabel := runner.sandbox
+	if sandboxLabel == "" {
+		sandboxLabel = "project/daemon default"
+	}
 	runner.printf(
-		"Session Status\nsession: %s\nworkspace: %s\nmodel: %s\nrunning: %t\nqueued: %d\npending_steers: %d\nrun: %s\nstage: %s\n",
+		"Session Status\nsession: %s\nworkspace: %s\nmodel: %s\nsandbox: %s\nrunning: %t\nqueued: %d\npending_steers: %d\nrun: %s\nstage: %s\n",
 		session.SessionID,
 		session.Workspace,
 		modelLabel,
+		sandboxLabel,
 		session.Agent.Running,
 		session.Agent.Queued,
 		session.Agent.PendingSteers,
@@ -699,6 +728,7 @@ func isTerminal(file *os.File) bool {
 const helpText = `REPL commands:
   /status                 Show the current session, run, queue, and model override
   /model [name]           Show model routes or set the model for later messages
+  /sandbox [backend]      Show or set the shell backend for later messages (auto|host|docker|os)
   /compact                Persistently compact the current session context while idle
   /steer <guidance>       Adjust the active run at its next safe boundary
   /follow-up <message>    Queue another run in the current session

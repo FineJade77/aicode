@@ -107,6 +107,7 @@ class MessageRequest(BaseModel):
     mode: str = "default"
     workspace: str
     model: str | None = None
+    bash_backend: Literal["auto", "host", "docker", "os"] | None = None
 
     def to_contract(self) -> TurnRequest:
         return TurnRequest(
@@ -114,6 +115,7 @@ class MessageRequest(BaseModel):
             mode=self.mode,
             workspace=self.workspace,
             model=self.model,
+            bash_backend=self.bash_backend,
         )
 
 

@@ -70,7 +70,7 @@ scripts/    安装器、clean-home E2E、评测曲线分析
 - Git
 - ripgrep (`rg`)，用于快速搜索
 - Make，用于构建、安装和测试快捷命令
-- Docker，可选，仅 `--sandbox docker` 和 untrusted workspace 需要
+- Docker，可选，仅 `--sandbox docker` 与显式选择 docker 后端时需要
 
 源码开发或直接运行 `./bin/aicode` 时，先安装 Runtime Python 依赖；推荐使用锁定版本以保证可复现：
 
@@ -402,7 +402,11 @@ Langfuse 等接受 OTLP/HTTP 的后端把 `AICODE_OTEL_ENDPOINT` 指向其 trace
 
 ## Project Trust 与本地执行安全
 
-workspace 默认是 `untrusted`。untrusted workspace 里 Agent 的 **每一条 `bash` 命令都会被路由进 Docker 沙箱**（禁网、workspace 可写挂载、`.env*` 遮蔽、资源受限），而不是在宿主机执行；`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令还需要逐次批准。untrusted workspace 也**完全不执行项目 hooks**。确认仓库可信后可执行：
+workspace 默认是 `untrusted`。untrusted workspace 里，`pytest`、`go test`、`npm test` 等会运行仓库代码的项目命令需要**逐次批准**，policy 仍然拒绝危险命令、protected path 与 workspace 逃逸，且**完全不执行项目 hooks**。
+
+**Agent 的 `bash` 默认在宿主机执行，untrusted workspace 也一样。** 需要进程隔离时显式选择：会话内 `/sandbox docker`、项目级 `.aicode/config.json` 的 `execution.agentBashBackend`、或 Runtime 级 `AICODE_AGENT_BASH_BACKEND`。此前默认把 untrusted 推进 Docker，但沙箱不可用时 aicode 按设计明确失败、绝不回退宿主机——在没有 Docker daemon 的机器上，那意味着 untrusted workspace 完全不能用，而不只是少了隔离。
+
+确认仓库可信后可执行：
 
 ```bash
 aicode project trust status

@@ -83,6 +83,7 @@ class DefaultToolRuntime:
         trust_level: str = "trusted",
         session: Any = None,
         approvals: Any = None,
+        bash_backend: str | None = None,
     ) -> ToolContext:
         return build_tool_context(
             workspace,
@@ -93,6 +94,7 @@ class DefaultToolRuntime:
             trust_level=trust_level,
             session=session,
             approvals=approvals,
+            bash_backend=bash_backend,
         )
 
     def validate_arguments(

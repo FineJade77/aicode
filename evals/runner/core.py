@@ -91,6 +91,7 @@ class EvalRequest:
     workspace: str
     message: str
     mode: str
+    bash_backend: str | None = None
 
 
 async def run_suite(
@@ -212,6 +213,7 @@ async def run_task(
         workspace=str(workspace),
         message=task.user_request,
         mode=task.mode,
+        bash_backend=task.bash_backend,
     )
     approval_decisions: list[dict[str, Any]] = []
     approver = asyncio.create_task(resolve_approvals(session, task, approval_decisions))

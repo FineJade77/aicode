@@ -35,6 +35,8 @@ type SendMessageRequest struct {
 	Mode      string `json:"mode"`
 	Workspace string `json:"workspace"`
 	Model     string `json:"model,omitempty"`
+	// Per-message shell backend: "auto" | "host" | "docker" | "os".
+	BashBackend string `json:"bash_backend,omitempty"`
 }
 
 type SendMessageResponse struct {

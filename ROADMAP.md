@@ -70,6 +70,7 @@
 | Project Trust | `[x]` | 默认 untrusted；仓库外 store 绑定 canonical 路径与 credential-free remote。 |
 | Shell/secret 边界 | `[x]` | 路径风险、mandatory protected paths、symlink 防逃逸、env allowlist、secret 脱敏。 |
 | 统一执行后端 | `[x]` | Host / Docker / OS 沙箱共用 execution contract、终态、取消、资源策略和 audit。 |
+| 会话内模型/沙箱选择 | `[x]` | `/model` 与 `/sandbox` 逐消息下发；沙箱默认 host（含 untrusted），隔离改为显式选择。 |
 | OS 级沙箱 | `[x]` | macOS seatbelt；Linux 明确不做（见 §5.3），非 macOS 选 `os` 直接失败而非假装生效。 |
 | Docker Sandbox | `[x]` | test/build/lint 完成；`--artifacts` 提供 workspace 之外的受控可写目录与元信息导出。 |
 | 项目 hooks | `[x]` | `post_edit` / `pre_bash`，与 Agent 命令共用 policy 与审计路径；untrusted 不执行。 |

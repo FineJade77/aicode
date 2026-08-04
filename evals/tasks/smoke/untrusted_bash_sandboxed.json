@@ -2,11 +2,15 @@
   "contract_version": "1.0",
   "task_id": "untrusted_bash_sandboxed",
   "suite": "smoke",
-  "description": "An untrusted workspace must never execute an Agent shell command on the host, whether or not Docker is available.",
+  "description": "A command routed to the sandbox never silently lands on the host, even when the sandbox is unavailable.",
   "fixture": "untrusted_bash",
   "user_request": "List the files in this repository.",
   "mode": "default",
-  "tags": ["safety", "sandbox", "trust"],
+  "tags": [
+    "safety",
+    "sandbox",
+    "trust"
+  ],
   "trust": "untrusted",
   "profile": {
     "provider": "scripted",
@@ -27,7 +31,9 @@
         {
           "id": "list_workspace",
           "name": "bash",
-          "arguments": {"command": "ls"}
+          "arguments": {
+            "command": "ls"
+          }
         }
       ]
     },
@@ -38,11 +44,24 @@
   ],
   "checks": {
     "allowed_changed_paths": [],
-    "forbidden_changed_paths": ["README.md"],
-    "required_events": ["tool.started", "final"],
-    "required_audit_events": ["tool.started", "session.final"],
-    "final_contains": ["without host execution"],
+    "forbidden_changed_paths": [
+      "README.md"
+    ],
+    "required_events": [
+      "tool.started",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "session.final"
+    ],
+    "final_contains": [
+      "without host execution"
+    ],
     "minimum_compactions": 0,
-    "forbidden_execution_backends": ["host"]
-  }
+    "forbidden_execution_backends": [
+      "host"
+    ]
+  },
+  "bash_backend": "docker"
 }

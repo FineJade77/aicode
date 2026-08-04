@@ -109,6 +109,7 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
         trust_level=str(trust_status["level"]),
         session=session,
         approvals=runtime.approvals,
+        bash_backend=str(getattr(request, "bash_backend", "") or "") or None,
     )
     purpose = "reviewer" if request.mode == "review" else "main"
     model = str(getattr(request, "model", "") or "").strip() or None

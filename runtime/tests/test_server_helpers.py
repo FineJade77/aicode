@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.agent.policy import PolicyEngine
 from app.agent.types import AgentRuntime
@@ -432,3 +433,40 @@ class FakeExecutionService:
 
     def status(self):
         return {"active": 0}
+
+
+# --- per-turn shell backend ---------------------------------------------------
+
+
+def test_a_message_can_choose_its_shell_backend() -> None:
+    """`/sandbox` is per session, so the choice travels with each message.
+
+    Storing it on the session instead would outlive the intent: a backend picked
+    for one risky command would silently still be in force ten turns later.
+    """
+    request = MessageRequest(
+        message="go", mode="chat", workspace="/repo", bash_backend="docker"
+    )
+
+    contract = request.to_contract()
+
+    assert contract.bash_backend == "docker"
+    assert contract.to_dict()["bash_backend"] == "docker"
+
+
+def test_a_message_without_a_backend_leaves_the_choice_alone() -> None:
+    contract = MessageRequest(message="go", mode="chat", workspace="/repo").to_contract()
+
+    assert contract.bash_backend is None
+    assert "bash_backend" not in contract.to_dict()
+
+
+def test_an_unknown_backend_is_refused_at_the_edge() -> None:
+    """A typo must not silently fall through to the default.
+
+    Accepting `dcoker` and running on the host is the failure this validation
+    exists to prevent: the user asked for isolation and would not be told they
+    did not get it.
+    """
+    with pytest.raises(ValidationError):
+        MessageRequest(message="go", mode="chat", workspace="/repo", bash_backend="dcoker")
