@@ -253,8 +253,8 @@
 
 ### 5.6 测试补齐
 
-- [ ] pending approval 恢复的端到端测试：daemon restart、session store reload、SSE 中 `approval.expired` + `tool.rejected` / `edit.rejected`、重复恢复不重复补事件。
-- [ ] prompt 安全层级回归测试：`.aicode/rules.md` 不能覆盖系统安全策略，三种只读 mode 的 prompt 约束保持一致。
+- [x] pending approval 恢复的端到端测试（`runtime/tests/test_approval_recovery_sse.py`）：重启后重建 `ApplicationRuntime`、SSE 端点上读到 `approval.expired` + `tool.rejected` / `edit.rejected`、两次重启不重复补发、已解决的 approval 不被补发。**边界**：流是直接驱动端点的 body iterator 读的，不走 socket——恢复后的 session 没有 `final`、流不会结束，而 httpx 的 ASGI transport 会缓冲整个响应体，走 HTTP 只能死锁。因此传输层本身仍未覆盖，覆盖到的是 cursor、事件顺序与 SSE 帧格式。
+- [x] prompt 安全层级回归测试（`runtime/tests/test_turn_prompts.py`）：敌意 `.aicode/rules.md` / `memory.md` 无法卸掉免责声明、无法撤销 approval 规则；项目文本必须排在约束它的系统段之后；`READ_ONLY_MODES` 里每个 mode 都必须在 prompt 里明说不得改文件（新增只读 mode 却漏配 prompt 会直接报错）。
 
 ### 5.7 CLI 体验
 
