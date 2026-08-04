@@ -1068,3 +1068,91 @@ def test_fork_carries_the_plan_but_not_the_read_record(tmp_path: Path) -> None:
 
     assert [item.text for item in forked.plan] == ["ship it"]
     assert forked.read_hash("a.py") is None
+
+
+# --- context budget on the session snapshot -----------------------------------
+#
+# For a TUI or web UI: the model in use and how much of the window the next turn
+# would consume, readable from the session rather than reconstructed by replaying
+# `context.budget` events.
+
+from app.agent.history import context_status  # noqa: E402
+from app.agent.types import AgentRuntime  # noqa: E402
+from app.application.contracts import SessionSnapshot  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.models.router import ModelRouter  # noqa: E402
+
+
+class _Provider:
+    provider_name = "openai_compatible"
+
+    def is_configured(self) -> bool:
+        return True
+
+
+def _runtime(*, window: int | None = None, **context_overrides) -> AgentRuntime:
+    settings = Settings()
+    for key, value in context_overrides.items():
+        setattr(settings.context, key, value)
+    if window is not None:
+        # For an openai-compatible provider the profile's window wins over
+        # `context.default_context_window`, so overriding the latter alone would
+        # leave the test asserting against the 32k default.
+        settings.openai_compatible.context_window = window
+    return AgentRuntime(
+        model_runtime=ModelRouter(primary=_Provider(), settings=settings),
+        trace=None,
+    )
+
+
+def test_context_status_reports_the_model_and_the_budget(tmp_path: Path) -> None:
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace="/repo")
+
+    status = context_status(_runtime(), session)
+
+    assert status["model"]
+    assert status["context_window"] > 0
+    # The usable figure, not the raw window: the reserve is held back for the
+    # reply, so reporting the window would advertise headroom that is not there.
+    assert status["usable_tokens"] == status["context_window"] - status["reserve_tokens"]
+    assert 0.0 <= status["used_ratio"] <= 1.0
+
+
+def test_used_tokens_grow_with_history(tmp_path: Path) -> None:
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace="/repo")
+    before = context_status(_runtime(), session)["used_tokens"]
+
+    for _ in range(20):
+        session.append_message({"role": "user", "content": "x" * 500})
+
+    assert context_status(_runtime(), session)["used_tokens"] > before
+
+
+def test_compaction_due_flips_at_the_same_threshold_the_loop_uses(tmp_path: Path) -> None:
+    """The number a UI shows and the number that triggers compaction are one number.
+
+    Computing the display figure separately is how a status bar ends up saying
+    40% while the next turn compacts.
+    """
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace="/repo")
+    runtime = _runtime(window=4_000, reserve_tokens=1_000, compact_threshold=0.5)
+
+    assert context_status(runtime, session)["compaction_due"] is False
+    for _ in range(10):
+        session.append_message({"role": "user", "content": "y" * 700})
+    status = context_status(runtime, session)
+
+    assert status["compaction_due"] is True
+    assert status["used_tokens"] >= status["usable_tokens"] * status["compact_threshold"]
+
+
+def test_a_listing_reports_no_context_rather_than_zero() -> None:
+    """A listing does not hydrate history, so it cannot measure it.
+
+    Reporting zero there would read as "this session is empty", which is a
+    different claim from "not measured".
+    """
+    snapshot = SessionSnapshot.from_mapping({"session_id": "s1", "workspace": "/repo", "message_count": 12})
+
+    assert snapshot.context is None
+    assert "context" not in snapshot.to_dict()

@@ -55,7 +55,7 @@ class ApplicationRuntime:
 
     def __post_init__(self) -> None:
         loop = AgentLoop(self.agent)
-        self.session_service = SessionService(self.sessions, self.trace, self.workspace)
+        self.session_service = SessionService(self.sessions, self.trace, self.workspace, self.agent)
         self.runs = RunCoordinator(self.model, self.trace, loop)
         self.approvals = ApprovalService(self.trace)
         self.contexts = ContextService(self.agent, self.trace)

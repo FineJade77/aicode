@@ -60,6 +60,19 @@
         "elapsed_seconds": 2,
         "stalled_seconds": 1
       },
+      "context": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "context_window": 200000,
+        "reserve_tokens": 1024,
+        "usable_tokens": 198976,
+        "used_tokens": 12480,
+        "used_ratio": 0.0627,
+        "compact_threshold": 0.8,
+        "compaction_due": false,
+        "estimator": "chars",
+        "chars_per_token": 3.5
+      },
       "future_field": true
     },
     "steer_session": {

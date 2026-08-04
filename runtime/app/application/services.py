@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from app.agent.history import ContextManager, latest_valid_compaction
+from app.agent.history import ContextManager, context_status, latest_valid_compaction
 from app.agent.loop import AgentLoop
 from app.agent.ports import (
     Clock,
@@ -41,10 +41,15 @@ class SessionService:
         sessions: SessionRepository,
         trace: TraceSink,
         workspace: WorkspaceRuntime,
+        agent: AgentRuntime | None = None,
     ) -> None:
         self.sessions = sessions
         self.trace = trace
         self.workspace = workspace
+        # Optional so an embedder can build a session service without a model
+        # runtime; the snapshot then omits the context block rather than
+        # reporting zeros, which would read as "empty history".
+        self.agent = agent
 
     async def create(self, workspace: str) -> SessionSnapshot:
         session = self.sessions.create(workspace=workspace)
@@ -91,7 +96,11 @@ class SessionService:
         return session
 
     def get(self, session_id: str) -> SessionSnapshot:
-        return SessionSnapshot.from_session(self.require(session_id))
+        session = self.require(session_id)
+        snapshot = SessionSnapshot.from_session(session)
+        if self.agent is None or self.agent.model_runtime is None:
+            return snapshot
+        return replace(snapshot, context=context_status(self.agent, session))
 
     def list(
         self,

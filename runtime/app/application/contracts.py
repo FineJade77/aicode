@@ -166,6 +166,10 @@ class SessionSnapshot:
     approvals: tuple[dict[str, Any], ...]
     agent: AgentRunState
     plan: tuple[dict[str, Any], ...] = ()
+    # Model and context budget for the *next* turn. Present on a full snapshot,
+    # absent from listings, which do not hydrate history and so cannot measure
+    # it — reporting a zero there would read as "empty" rather than "unknown".
+    context: dict[str, Any] | None = None
     # Populated by listings, which report history size without hydrating it.
     # Full snapshots leave it None; use len(messages) there.
     message_count: int | None = None
@@ -188,6 +192,7 @@ class SessionSnapshot:
             approvals=tuple(dict(item) for item in approvals or () if isinstance(item, Mapping)),
             agent=AgentRunState.from_mapping(agent if isinstance(agent, Mapping) else {}),
             plan=tuple(dict(item) for item in (value.get("plan") or ()) if isinstance(item, Mapping)),
+            context=dict(value["context"]) if isinstance(value.get("context"), Mapping) else None,
             message_count=_optional_int(value.get("message_count")),
         )
 
@@ -201,6 +206,7 @@ class SessionSnapshot:
             "approvals": [dict(item) for item in self.approvals],
             "agent": self.agent.to_dict(),
             "plan": [dict(item) for item in self.plan],
+            **({"context": dict(self.context)} if self.context is not None else {}),
         }
         if self.message_count is not None:
             payload["message_count"] = self.message_count

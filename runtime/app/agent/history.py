@@ -156,6 +156,45 @@ def estimate_prompt_tokens(
     return estimate_tokens({"system": system, "messages": messages, "tools": list(tools)}, chars_per_token)
 
 
+def context_status(runtime: Any, session: AgentSession, *, purpose: str = "main") -> dict[str, Any]:
+    """What the next turn's prompt would cost, and how much room it has.
+
+    Computed on read rather than cached from the last turn: a stale number in a
+    status bar is worse than a slightly expensive one, because it keeps showing
+    the old figure after a compaction and invites the reader to conclude the
+    compaction did nothing.
+
+    Uses the same estimator, capability and threshold as the real preflight, so
+    the figure a UI shows and the figure that triggers compaction cannot drift
+    apart.
+    """
+    capability = _capability(runtime, purpose, 1, model=None)
+    context_settings = getattr(getattr(runtime.model_runtime, "settings", None), "context", None)
+    chars_per_token = float(getattr(capability, "chars_per_token", getattr(context_settings, "chars_per_token", 3.5)))
+    threshold = float(getattr(context_settings, "compact_threshold", 0.8))
+    reserve_tokens = int(getattr(context_settings, "reserve_tokens", 1_024))
+    used = estimate_tokens(strip_message_meta(_history_with_meta(session)), chars_per_token)
+    window = int(capability.context_window)
+    # The budget the preflight actually compares against: the window minus what
+    # is held back for the reply. Reporting the raw window would show headroom
+    # that does not exist.
+    usable = max(1, window - reserve_tokens)
+    return {
+        "provider": capability.provider,
+        "model": capability.model,
+        "context_window": window,
+        "reserve_tokens": reserve_tokens,
+        "usable_tokens": usable,
+        "used_tokens": used,
+        "used_ratio": round(min(1.0, used / usable), 4),
+        "compact_threshold": threshold,
+        # True when the next turn would compact before calling the model.
+        "compaction_due": used >= usable * threshold,
+        "estimator": "chars",
+        "chars_per_token": chars_per_token,
+    }
+
+
 async def prepare_history_for_model(
     *,
     runtime: Any,

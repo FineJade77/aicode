@@ -582,6 +582,32 @@ func (runner *Runner) cancelFromSignal(ctx context.Context, sessionID string) {
 	runner.printf("Cancellation status: %s (queued %d)\n", result.Status, result.Queued)
 }
 
+// printContextUsage reports how much of the window the next turn would use.
+//
+// The usable figure, not the raw window: the reserve is held back for the reply,
+// so showing the window would advertise headroom that does not exist. Printed
+// after the status block so the numbers a TUI would put in a bar are visible in
+// the REPL too.
+func (runner *Runner) printContextUsage(session client.SessionResponse) {
+	usage := session.Context
+	if usage == nil {
+		return
+	}
+	due := ""
+	if usage.CompactionDue {
+		due = "  (compaction due before the next call)"
+	}
+	runner.printf(
+		"context: %s/%s -- %d/%d tokens (%.0f%%)%s\n",
+		usage.Provider,
+		usage.Model,
+		usage.UsedTokens,
+		usage.UsableTokens,
+		usage.UsedRatio*100,
+		due,
+	)
+}
+
 func (runner *Runner) printStatus(session client.SessionResponse, model string) {
 	modelLabel := model
 	if modelLabel == "" {
@@ -605,6 +631,7 @@ func (runner *Runner) printStatus(session client.SessionResponse, model string) 
 		session.Agent.CurrentRunID,
 		session.Agent.Stage,
 	)
+	runner.printContextUsage(session)
 }
 
 func (runner *Runner) prompt(sessionID string) {
@@ -726,7 +753,7 @@ func isTerminal(file *os.File) bool {
 }
 
 const helpText = `REPL commands:
-  /status                 Show the current session, run, queue, and model override
+  /status                 Show the session, run, queue, model, sandbox, and context usage
   /model [name]           Show model routes or set the model for later messages
   /sandbox [backend]      Show or set the shell backend for later messages (auto|host|docker|os)
   /compact                Persistently compact the current session context while idle

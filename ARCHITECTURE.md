@@ -436,6 +436,28 @@ Policy 层（`agent/policy.py`）对每个工具调用做本地判定：
 
 同时解析路径参数与 glob：命中 mandatory/project protected path、用户 home、workspace 外绝对路径、`../` 或 symlink 逃逸时直接 deny。命令中出现已知 Runtime secret 的字面值同样 deny。
 
+### 7.3 会话上下文预算
+
+`GET /v1/sessions/{id}` 的快照带一个 `context` 块，供 TUI / Web UI 直接渲染，无需重放 `context.budget` 事件重建：
+
+```json
+{
+  "provider": "anthropic", "model": "claude-sonnet-5",
+  "context_window": 200000, "reserve_tokens": 1024, "usable_tokens": 198976,
+  "used_tokens": 12480, "used_ratio": 0.0627,
+  "compact_threshold": 0.8, "compaction_due": false,
+  "estimator": "chars", "chars_per_token": 3.5
+}
+```
+
+三条设计约束：
+
+- **读时计算，不缓存上一轮的值。** 状态栏里一个陈旧的数字比一个稍贵的计算更糟：compaction 之后它会继续显示旧值，读者会据此断定压缩没生效。
+- **与真实 preflight 用同一个估算器、同一个 capability、同一个阈值**（`context_status` 与 `prepare_history_for_model` 共用）。分开算就是状态栏显示 40% 而下一轮已经在压缩。
+- **报 `usable_tokens` 而不是 `context_window`。** reserve 是留给回复的，按窗口画进度条等于宣称一段并不存在的余量。
+
+列表接口（`GET /v1/sessions`）**不带这个块**——它不加载历史，因而无法测量。那里报 0 会被读成"这个会话是空的"，与"未测量"是两回事。
+
 ### 8.2 审批结果的六种形态
 
 `ApprovalDecision` 刻意不是布尔：每一对都因为混淆过而付出过代价。

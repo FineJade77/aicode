@@ -184,6 +184,18 @@ func TestHTTPResponseFixtureMatchesClientTypes(t *testing.T) {
 		t.Fatalf("idle response = %#v", idle)
 	}
 
+	if status.Context == nil {
+		t.Fatal("session status must carry the context budget a UI renders")
+	}
+	// The usable figure, not the raw window: a bar drawn against the window
+	// would show headroom the reserve has already taken.
+	if status.Context.UsableTokens >= status.Context.ContextWindow {
+		t.Fatalf("context = %#v", status.Context)
+	}
+	if status.Context.Model == "" || status.Context.UsedTokens <= 0 {
+		t.Fatalf("context = %#v", status.Context)
+	}
+
 	execution, err := api.Execute(ctx, ExecutionRequest{
 		ExecutionID: "exec_fixture", Backend: "docker", Action: "test", Workspace: "/workspace", TimeoutSeconds: 60,
 	})

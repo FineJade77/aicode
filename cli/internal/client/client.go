@@ -76,6 +76,19 @@ type SessionResponse struct {
 	Messages  []map[string]any   `json:"messages"`
 	Approvals []map[string]any   `json:"approvals"`
 	Agent     SessionAgentStatus `json:"agent"`
+	// Model and context budget for the next turn. Absent from listings, which do
+	// not hydrate history and therefore cannot measure it.
+	Context *SessionContext `json:"context,omitempty"`
+}
+
+type SessionContext struct {
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	ContextWindow int     `json:"context_window"`
+	UsableTokens  int     `json:"usable_tokens"`
+	UsedTokens    int     `json:"used_tokens"`
+	UsedRatio     float64 `json:"used_ratio"`
+	CompactionDue bool    `json:"compaction_due"`
 }
 
 type SteerResponse struct {
