@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/FineJade77/aicode/cli/internal/config"
 )
 
 func TestParseGlobalArgsSupportsSandbox(t *testing.T) {
@@ -88,5 +91,33 @@ func TestCategoryHelpRequest(t *testing.T) {
 		if category != test.category || ok != test.ok {
 			t.Fatalf("categoryHelpRequest(%#v) = (%q, %t), want (%q, %t)", test.args, category, ok, test.category, test.ok)
 		}
+	}
+}
+
+func TestDeprecationWarningsGoToStderrNotStdout(t *testing.T) {
+	// stdout carries `--json` payloads. A migration notice printed there would
+	// make the fix for one problem the cause of another.
+	cfg := config.Config{Deprecations: []config.Deprecation{
+		{Key: "models.default", Replacement: "models.main", Effect: `applied as models.main = "legacy"; rename it`},
+	}}
+
+	var buffer bytes.Buffer
+	warnAboutDeprecatedConfig(&buffer, cfg)
+
+	output := buffer.String()
+	if !strings.Contains(output, "models.default") || !strings.Contains(output, "models.main") {
+		t.Fatalf("warning = %q", output)
+	}
+	if !strings.HasPrefix(output, "Warning: ") {
+		t.Fatalf("warning = %q", output)
+	}
+}
+
+func TestNoWarningForACurrentConfig(t *testing.T) {
+	var buffer bytes.Buffer
+	warnAboutDeprecatedConfig(&buffer, config.Default())
+
+	if buffer.Len() != 0 {
+		t.Fatalf("unexpected output: %q", buffer.String())
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -37,6 +38,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	warnAboutDeprecatedConfig(os.Stderr, cfg)
 
 	options, commandArgs, err := parseGlobalArgs(args)
 	if err != nil {
@@ -216,4 +218,17 @@ func parseGlobalArgs(args []string) (globalOptions, []string, error) {
 		}
 	}
 	return options, args, nil
+}
+
+// warnAboutDeprecatedConfig tells the user once per invocation that a legacy
+// setting was read, and what it did.
+//
+// On stderr so that `--json` output stays machine-parseable on stdout: a
+// migration notice must not be the reason a script breaks. `aicode runtime
+// doctor` carries the same information as a structured check, for anyone who
+// pipes stderr away.
+func warnAboutDeprecatedConfig(writer io.Writer, cfg config.Config) {
+	for _, deprecation := range cfg.Deprecations {
+		fmt.Fprintf(writer, "Warning: %s\n", deprecation)
+	}
 }

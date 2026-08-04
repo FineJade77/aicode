@@ -246,7 +246,7 @@
 
 ### 5.5 配置与 provider 收尾
 
-- [ ] 遗留 `models.default/planner/coder` 的迁移提示（检测到旧键时提示迁移，保持短期兼容）。
+- [x] 遗留 `models.default/planner/coder` 的迁移提示。**发现它们此前根本没有生效**：解析进结构体字段后无人消费，只有 `models.main` 会注入 Runtime，用户写了旧键既不报错也不起作用。现在 `models.default` / `models.coder` 会在 `models.main` 缺席时顶上、在场时报告被忽略，`models.planner` 提示删除（没有对应路由）；每次调用在 stderr 提示做了什么，`runtime doctor` 有对应 `config` 检查项。
 - [ ] per-route health check 与 provider fallback。
 - [ ] usage 中区分重试消耗与最终输出。
 - [ ] 评估 Go 工具依赖 pinning（如 lint 工具的 `tools.go`）。

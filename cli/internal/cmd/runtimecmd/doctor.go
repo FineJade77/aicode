@@ -128,6 +128,7 @@ func buildReport(cfg config.Config, deps dependencies) Report {
 		checkPort(cfg, state, deps),
 		checkProvider(cfg, deps),
 		checkDocker(deps),
+		checkConfigDeprecations(cfg),
 	}
 	return Report{
 		Status:     aggregateStatus(checks),
@@ -711,4 +712,35 @@ func renderHuman(writer io.Writer, report Report) error {
 		}
 	}
 	return nil
+}
+
+// checkConfigDeprecations reports legacy configuration keys and what became of
+// them.
+//
+// A warning rather than an error: the settings still take effect, so the
+// installation works. What it prevents is the quieter failure — a legacy key
+// that lost to its replacement looks exactly like one that applied, and a user
+// deleting it cannot tell whether the model they are running is about to
+// change.
+func checkConfigDeprecations(cfg config.Config) Check {
+	if len(cfg.Deprecations) == 0 {
+		return Check{
+			Name:    "config",
+			Status:  StatusOK,
+			Summary: "configuration uses current setting names",
+		}
+	}
+	details := map[string]any{}
+	keys := make([]string, 0, len(cfg.Deprecations))
+	for _, deprecation := range cfg.Deprecations {
+		details[deprecation.Key] = deprecation.Effect
+		keys = append(keys, deprecation.Key)
+	}
+	return Check{
+		Name:        "config",
+		Status:      StatusWarn,
+		Summary:     fmt.Sprintf("%d deprecated setting(s): %s", len(keys), strings.Join(keys, ", ")),
+		Details:     details,
+		Remediation: "Rename these to models.main (or delete them) in `aicode config path`; a future release stops reading them.",
+	}
 }

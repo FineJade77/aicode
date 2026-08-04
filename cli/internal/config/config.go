@@ -19,6 +19,10 @@ type Config struct {
 	Anthropic        AnthropicConfig
 	OpenAICompatible OpenAICompatibleConfig
 	Pricing          map[string]ModelPriceConfig
+
+	// Legacy settings found while loading, in the order they were resolved.
+	// Empty for a configuration that uses only current names.
+	Deprecations []Deprecation
 }
 
 type UIConfig struct {
@@ -28,6 +32,24 @@ type UIConfig struct {
 type RuntimeConfig struct {
 	URL  string
 	Port int
+}
+
+// Deprecation is one legacy setting found in the user's configuration, and what
+// was actually done about it.
+//
+// Reported rather than silently applied because the two possible outcomes look
+// identical from the outside: a legacy key that filled in for a missing one
+// changed the model that runs, and a legacy key that lost to an explicit one
+// changed nothing. A user who does not know which happened cannot tell whether
+// deleting the key is safe.
+type Deprecation struct {
+	Key         string `json:"key"`
+	Replacement string `json:"replacement,omitempty"`
+	Effect      string `json:"effect"`
+}
+
+func (d Deprecation) String() string {
+	return fmt.Sprintf("%s is deprecated: %s", d.Key, d.Effect)
 }
 
 type ModelsConfig struct {
@@ -126,6 +148,11 @@ func Default() Config {
 
 func Load() (Config, error) {
 	cfg := Default()
+	// Which names the user actually wrote. `Default()` fills every field, so an
+	// empty value cannot distinguish "not configured" from "configured empty",
+	// and precedence between a legacy name and its replacement turns on exactly
+	// that distinction.
+	seen := map[string]bool{}
 	path, err := Path()
 	if err != nil {
 		return cfg, err
@@ -133,6 +160,8 @@ func Load() (Config, error) {
 
 	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		applyEnvOverrides(&cfg, seen)
+		resolveDeprecations(&cfg, seen)
 		return cfg, nil
 	}
 	if err != nil {
@@ -156,6 +185,7 @@ func Load() (Config, error) {
 		key = strings.TrimSpace(key)
 		value = strings.Trim(strings.TrimSpace(value), `"`)
 
+		seen[section+"."+key] = true
 		switch section + "." + key {
 		case "ui.style":
 			cfg.UI.Style = value
@@ -252,25 +282,30 @@ func Load() (Config, error) {
 		}
 	}
 
-	applyEnvOverrides(&cfg)
+	applyEnvOverrides(&cfg, seen)
+	resolveDeprecations(&cfg, seen)
 	return cfg, nil
 }
 
-func applyEnvOverrides(cfg *Config) {
+func applyEnvOverrides(cfg *Config, seen map[string]bool) {
 	if envURL := os.Getenv("AICODE_RUNTIME_URL"); envURL != "" {
 		cfg.Runtime.URL = envURL
 	}
 	if model := os.Getenv("AICODE_MODEL_DEFAULT"); model != "" {
 		cfg.Models.Default = model
+		seen["models.default"] = true
 	}
 	if model := os.Getenv("AICODE_MODEL_MAIN"); model != "" {
 		cfg.Models.Main = model
+		seen["models.main"] = true
 	}
 	if model := os.Getenv("AICODE_MODEL_PLANNER"); model != "" {
 		cfg.Models.Planner = model
+		seen["models.planner"] = true
 	}
 	if model := os.Getenv("AICODE_MODEL_CODER"); model != "" {
 		cfg.Models.Coder = model
+		seen["models.coder"] = true
 	}
 	if model := os.Getenv("AICODE_MODEL_REVIEWER"); model != "" {
 		cfg.Models.Reviewer = model
@@ -346,6 +381,45 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if rawPrices := os.Getenv("AICODE_MODEL_PRICES_JSON"); rawPrices != "" {
 		cfg.Pricing = parsePricingJSON(rawPrices)
+	}
+}
+
+// resolveDeprecations honours the legacy model names and records what it did.
+//
+// Before this, `models.default` / `models.planner` / `models.coder` were parsed,
+// stored and then read by nothing: the value never reached the Runtime, and the
+// user got no error either. Configuring a model that silently does not apply is
+// the failure mode this project treats as a defect, so a legacy name now either
+// takes effect or says why it did not.
+//
+// `models.coder` is tried before `models.default` because the Runtime already
+// treats `AICODE_MODEL_CODER` as the fallback for `AICODE_MODEL_MAIN`; the two
+// layers agreeing matters more than which one reads better.
+func resolveDeprecations(cfg *Config, seen map[string]bool) {
+	for _, legacy := range []struct{ key, value string }{
+		{"models.coder", cfg.Models.Coder},
+		{"models.default", cfg.Models.Default},
+	} {
+		if !seen[legacy.key] {
+			continue
+		}
+		deprecation := Deprecation{Key: legacy.key, Replacement: "models.main"}
+		if seen["models.main"] {
+			deprecation.Effect = "ignored because models.main is set; delete it"
+		} else {
+			cfg.Models.Main = legacy.value
+			// Later legacy names must not overwrite the one that just won, and
+			// must report themselves as ignored rather than as applied.
+			seen["models.main"] = true
+			deprecation.Effect = fmt.Sprintf("applied as models.main = %q; rename it", legacy.value)
+		}
+		cfg.Deprecations = append(cfg.Deprecations, deprecation)
+	}
+	if seen["models.planner"] {
+		cfg.Deprecations = append(cfg.Deprecations, Deprecation{
+			Key:    "models.planner",
+			Effect: "no longer used; aicode routes are main, reviewer and summarizer; delete it",
+		})
 	}
 }
 

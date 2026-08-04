@@ -533,3 +533,169 @@ func containsEnvKey(env []string, target string) bool {
 	}
 	return false
 }
+
+// --- legacy model settings ---------------------------------------------------
+//
+// `models.default` / `models.planner` / `models.coder` used to be parsed into
+// fields that nothing read: the value never reached the Runtime and the user was
+// never told. These pin that a legacy name now either takes effect or explains
+// why it did not.
+
+func writeConfig(t *testing.T, body string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("AICODE_HOME", home)
+	clearConfigEnv(t)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func findDeprecation(cfg Config, key string) (Deprecation, bool) {
+	for _, deprecation := range cfg.Deprecations {
+		if deprecation.Key == key {
+			return deprecation, true
+		}
+	}
+	return Deprecation{}, false
+}
+
+func TestLegacyModelsDefaultFillsInForModelsMain(t *testing.T) {
+	writeConfig(t, "[models]\ndefault = \"legacy-model\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Models.Main != "legacy-model" {
+		t.Fatalf("models.main = %q, want the legacy value to take effect", cfg.Models.Main)
+	}
+	deprecation, ok := findDeprecation(cfg, "models.default")
+	if !ok {
+		t.Fatalf("no deprecation reported: %#v", cfg.Deprecations)
+	}
+	if deprecation.Replacement != "models.main" || !strings.Contains(deprecation.Effect, "applied") {
+		t.Fatalf("deprecation = %#v", deprecation)
+	}
+}
+
+func TestLegacyModelsCoderFillsInForModelsMain(t *testing.T) {
+	writeConfig(t, "[models]\ncoder = \"legacy-coder\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Models.Main != "legacy-coder" {
+		t.Fatalf("models.main = %q", cfg.Models.Main)
+	}
+}
+
+func TestAnExplicitModelsMainBeatsALegacyName(t *testing.T) {
+	writeConfig(t, "[models]\nmain = \"current-model\"\ndefault = \"legacy-model\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Models.Main != "current-model" {
+		t.Fatalf("models.main = %q, want the current name to win", cfg.Models.Main)
+	}
+	deprecation, ok := findDeprecation(cfg, "models.default")
+	if !ok {
+		t.Fatalf("a legacy key that changed nothing must still be reported: %#v", cfg.Deprecations)
+	}
+	if !strings.Contains(deprecation.Effect, "ignored") {
+		t.Fatalf("deprecation = %#v", deprecation)
+	}
+}
+
+func TestOnlyOneLegacyNameCanWin(t *testing.T) {
+	// Both present and no `models.main`: `coder` matches the Runtime's own
+	// fallback order, so it wins and `default` reports itself as ignored.
+	writeConfig(t, "[models]\ndefault = \"legacy-default\"\ncoder = \"legacy-coder\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Models.Main != "legacy-coder" {
+		t.Fatalf("models.main = %q", cfg.Models.Main)
+	}
+	losing, ok := findDeprecation(cfg, "models.default")
+	if !ok || !strings.Contains(losing.Effect, "ignored") {
+		t.Fatalf("models.default = %#v (all: %#v)", losing, cfg.Deprecations)
+	}
+}
+
+func TestLegacyModelsPlannerHasNoReplacement(t *testing.T) {
+	writeConfig(t, "[models]\nplanner = \"plan-model\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deprecation, ok := findDeprecation(cfg, "models.planner")
+	if !ok {
+		t.Fatalf("no deprecation reported: %#v", cfg.Deprecations)
+	}
+	if deprecation.Replacement != "" {
+		t.Fatalf("planner has no current equivalent, so nothing may be suggested: %#v", deprecation)
+	}
+	// It must not quietly become the main model: there is no planner route.
+	if cfg.Models.Main == "plan-model" {
+		t.Fatal("models.planner must not be adopted as models.main")
+	}
+}
+
+func TestALegacyEnvVariableIsReportedToo(t *testing.T) {
+	// The env path is the one a user is least likely to remember setting.
+	writeConfig(t, "[models]\n")
+	t.Setenv("AICODE_MODEL_DEFAULT", "env-legacy-model")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Models.Main != "env-legacy-model" {
+		t.Fatalf("models.main = %q", cfg.Models.Main)
+	}
+	if _, ok := findDeprecation(cfg, "models.default"); !ok {
+		t.Fatalf("no deprecation reported: %#v", cfg.Deprecations)
+	}
+}
+
+func TestACurrentConfigurationReportsNothing(t *testing.T) {
+	writeConfig(t, "[models]\nmain = \"current-model\"\nreviewer = \"review-model\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cfg.Deprecations) != 0 {
+		t.Fatalf("deprecations = %#v, want none", cfg.Deprecations)
+	}
+}
+
+func TestAdoptedLegacyValueReachesTheRuntime(t *testing.T) {
+	// The whole point: the Runtime only ever reads AICODE_MODEL_MAIN, so a
+	// legacy name that stops short of it has changed nothing.
+	writeConfig(t, "[models]\ndefault = \"legacy-model\"\n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := envMap(cfg.RuntimeEnv())
+
+	if env["AICODE_MODEL_MAIN"] != "legacy-model" {
+		t.Fatalf("AICODE_MODEL_MAIN = %q", env["AICODE_MODEL_MAIN"])
+	}
+}

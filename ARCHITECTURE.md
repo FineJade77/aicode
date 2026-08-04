@@ -516,7 +516,14 @@ Runtime prompt 由几层组成：
 | `provider.anthropic.*` | `base_url`、`api_key_env`、`timeout_seconds`。 |
 | `pricing.<provider>.<model>.input_per_1m` / `.output_per_1m` | 本地成本估算单价，USD / 1M tokens。 |
 
-遗留的 `models.default`、`models.planner`、`models.coder` 仍可被读取用于迁移，但不出现在 `config list`、`config docs` 和 Runtime 环境注入中。
+遗留键 `models.default`、`models.coder`、`models.planner` 在加载时解析并**结算**，结果记在 `Config.Deprecations` 上：
+
+- `models.default` / `models.coder`：`models.main` 未显式配置时顶上，已配置则忽略。两者同时存在且没有 `models.main` 时 `models.coder` 胜出——Runtime 的 `Settings.from_env` 本来就把 `AICODE_MODEL_CODER` 当作 `AICODE_MODEL_MAIN` 的回退，两层的顺序必须一致。
+- `models.planner`：没有对应路由（路由只有 main / reviewer / summarizer），仅提示删除，不会被当成任何模型使用。
+
+对应的 `AICODE_MODEL_DEFAULT` / `_CODER` / `_PLANNER` 环境变量走同一条结算路径。每次调用在 stderr 打印一行提示，`aicode runtime doctor` 另有 `config` 检查项（warn，不升级为 error）。这些键仍不出现在 `config list`、`config docs` 和 Runtime 环境注入中。
+
+**此前它们是被解析后丢弃的**：值写进结构体字段，而只有 `models.main` 会注入 Runtime，用户既得不到报错也得不到效果——正是"看起来在工作但实际没有"的那类缺陷。
 
 ### 11.2 Project Config
 

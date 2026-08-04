@@ -613,7 +613,14 @@ aicode config set pricing.openai_compatible.gpt-5.output_per_1m 10
 aicode config unset pricing.openai_compatible.gpt-5.input_per_1m
 ```
 
-`models.default`、`models.planner`、`models.coder` 已废弃。旧配置仍可被读取用于迁移，但 CLI 文档、配置列表和 Runtime 环境注入不再暴露这些键；请使用 `models.main`、`models.reviewer`、`models.summarizer`。
+`models.default`、`models.coder`、`models.planner` 已废弃，请改用 `models.main`、`models.reviewer`、`models.summarizer`。旧键仍会生效，且每次调用都会在 stderr 说明它做了什么：
+
+```
+Warning: models.default is deprecated: applied as models.main = "gpt-5"; rename it
+Warning: models.default is deprecated: ignored because models.main is set; delete it
+```
+
+`models.default` / `models.coder` 在 `models.main` 未配置时顶上，已配置则忽略；`models.planner` 没有对应路由，只提示删除。`aicode runtime doctor` 里有同样信息的 `config` 检查项，方便把 stderr 重定向掉的场景。提示只走 stderr，`--json` 输出不受影响。
 
 常用环境变量：
 

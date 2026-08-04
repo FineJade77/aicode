@@ -25,8 +25,8 @@ func TestBuildReportHealthy(t *testing.T) {
 	if report.CLIVersion != "0.1.0" {
 		t.Fatalf("cli_version = %q", report.CLIVersion)
 	}
-	if len(report.Checks) != 6 {
-		t.Fatalf("checks = %d, want 6", len(report.Checks))
+	if len(report.Checks) != 7 {
+		t.Fatalf("checks = %d, want 7", len(report.Checks))
 	}
 	for _, check := range report.Checks {
 		if check.Status != StatusOK {
@@ -170,7 +170,7 @@ func TestRenderersProduceMachineAndHumanReadableOutput(t *testing.T) {
 	if strings.Contains(jsonOutput.String(), "secret-not-rendered") {
 		t.Fatal("doctor JSON must not expose provider API keys")
 	}
-	if decoded.Status != StatusOK || len(decoded.Checks) != 6 {
+	if decoded.Status != StatusOK || len(decoded.Checks) != 7 {
 		t.Fatalf("decoded = %#v", decoded)
 	}
 
@@ -273,5 +273,43 @@ func TestDoctorReportsOKWhenSandboxImageIsPresent(t *testing.T) {
 
 	if check.Status != StatusOK {
 		t.Fatalf("expected ok when daemon and image are available, got %q", check.Status)
+	}
+}
+
+func TestDoctorReportsDeprecatedConfigAsAWarning(t *testing.T) {
+	cfg := config.Default()
+	cfg.Deprecations = []config.Deprecation{
+		{Key: "models.default", Replacement: "models.main", Effect: `applied as models.main = "legacy"; rename it`},
+		{Key: "models.planner", Effect: "no longer used; delete it"},
+	}
+
+	check := checkConfigDeprecations(cfg)
+
+	if check.Status != StatusWarn {
+		t.Fatalf("status = %q, want warn", check.Status)
+	}
+	// A legacy key still works, so it must not fail the whole report — an
+	// installation that runs is not broken.
+	if aggregateStatus([]Check{{Status: StatusOK}, check}) == StatusError {
+		t.Fatal("a deprecation must not escalate the report to error")
+	}
+	if !strings.Contains(check.Summary, "models.default") || !strings.Contains(check.Summary, "models.planner") {
+		t.Fatalf("summary = %q", check.Summary)
+	}
+	// The effect, not just the name: which of the two things happened is the
+	// part a user cannot work out for themselves.
+	if effect, _ := check.Details["models.default"].(string); !strings.Contains(effect, "applied") {
+		t.Fatalf("details = %#v", check.Details)
+	}
+	if check.Remediation == "" {
+		t.Fatal("a warning without a fix leaves the user nowhere to go")
+	}
+}
+
+func TestDoctorStaysQuietForACurrentConfig(t *testing.T) {
+	check := checkConfigDeprecations(config.Default())
+
+	if check.Status != StatusOK || check.Details != nil {
+		t.Fatalf("check = %#v", check)
 	}
 }
