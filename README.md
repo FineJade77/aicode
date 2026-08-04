@@ -912,6 +912,20 @@ export AICODE_SANDBOX_PIDS_LIMIT="128"
 
 Runtime API 只接受 `test/build/lint` 三种 sandbox action，不开放任意远程 shell endpoint。执行中按 `Ctrl-C` 时，CLI 会调用 execution cancel；正常 `aicode runtime stop` 也会先清理活跃进程组。
 
+## 全屏 TUI
+
+```bash
+aicode tui
+```
+
+一屏包含：会话/模型/沙箱头部、上下文预算条、可滚动的对话、计划面板、输入行与状态行。审批和提问会接管输入行，`y` / `a` / `n` / `1,3`（多文件时选子集）直接作答；问题则直接打字，`/skip` 让 agent 自行决定。
+
+`^C` 有运行中的 run 时取消它、空闲时退出；`^D` 退出；`PgUp`/`PgDn` 滚动，`End` 回到跟随。
+
+**实现约束值得说明**：TUI 只用标准库，没有引入任何第三方框架——这个 CLI 的零依赖是有意维持的性质（`cli/go.mod` 至今没有 `require` 块，也没有 `go.sum`）。代价是 raw mode 按平台自己实现，**仅支持 macOS 与 Linux**；其它平台上 `aicode tui` 会明确报错而不是产出一个会弄坏终端的二进制。stdin 不是 TTY 时同样直接失败——全屏视图被重定向进文件不是"缩小版"，是乱码。请在那种场景用 `aicode chat`。
+
+上下文预算条画的是 **usable** 而不是 window：reserve 是留给回复的，按窗口画等于宣称一段并不存在的余量。
+
 ## 用量统计
 
 ```bash

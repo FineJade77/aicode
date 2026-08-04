@@ -12,6 +12,7 @@ import (
 	"github.com/FineJade77/aicode/cli/internal/cmd/runtimecmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/sessioncmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/taskcmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/tuicmd"
 	"github.com/FineJade77/aicode/cli/internal/config"
 )
 
@@ -55,6 +56,8 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "tui":
+		return tuicmd.Run(cfg, args[1:])
 	case "chat":
 		if len(args) == 1 {
 			return chatcmd.Run(cfg)
@@ -129,6 +132,7 @@ const rootHelpText = `aicode - Local-first CLI coding agent
 Usage:
   aicode "<task>"
   aicode chat [message]
+  aicode tui
   aicode <category> <command>
 
 Categories:

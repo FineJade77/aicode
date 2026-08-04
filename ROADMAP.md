@@ -33,6 +33,7 @@
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
+| 全屏 TUI | `[x]` | `aicode tui`，纯标准库（零依赖不变），仅 macOS/Linux；状态与渲染是纯函数，逐字符可测。 |
 | CLI + daemon | `[x]` | Go CLI 自动启动/停止/查询 Python Runtime，命令按五分类组织。 |
 | HTTP + SSE | `[x]` | 本机 API、SSE event stream、daemon token 鉴权（fail-closed）。 |
 | 可嵌入 Runtime 分层 | `[x]` | Application contract v2、Agent Core ports、adapters composition root；两条架构守卫锁定 import 无副作用与同进程多 Runtime。 |
@@ -294,7 +295,8 @@
 有价值，但不应挤占当前本地 Agent 核心闭环：
 
 - [ ] IDE 插件（必须复用 Application contract v2，不得复制 Agent 逻辑）。
-- [ ] Web UI / 全屏 TUI。
+- [x] 全屏 TUI（`aicode tui`，纯标准库，macOS/Linux）。
+- [ ] Web UI。
 - [ ] 远端企业审计控制台、SSO / workspace policy 管理。
 - [ ] 云端隔离执行环境。
 - [ ] embedding 检索。
