@@ -10,7 +10,9 @@ import pytest
 
 from app.agent.history import (
     FOLD_KEEP_RECENT_GROUPS,
+    _fold_to_fit,
     estimate_prompt_tokens,
+    estimate_tokens,
     fold_old_tool_output,
     latest_valid_compaction,
     prepare_history_for_model,
@@ -188,3 +190,83 @@ async def test_a_history_under_the_limit_is_not_folded(tmp_path):
 
     assert all("folded to save context" not in str(m.get("content") or "") for m in projected)
     assert not [e for e in sess.events.events_after(0) if e.get("reason") == "folded"]
+
+
+# --- folding as a reference, not just a trim ----------------------------------
+#
+# A placeholder that says only "earlier read_file output" tells the model
+# something is missing without telling it what to ask for again. The arguments
+# are already in history, so naming the call costs nothing and is what makes
+# folding the newest group safe.
+
+
+def tool_group(call_id: str, name: str, arguments: dict, content: str) -> list[dict]:
+    return [
+        {"role": "assistant", "tool_calls": [{"id": call_id, "name": name, "arguments": arguments}]},
+        {"role": "tool", "tool_call_id": call_id, "content": content},
+    ]
+
+
+def tool_contents(messages: list[dict]) -> list[str]:
+    return [message["content"] for message in messages if message.get("role") == "tool"]
+
+
+def test_a_folded_read_names_the_file_and_range():
+    history = [{"role": "user", "content": "go"}]
+    history += tool_group("c1", "read_file", {"path": "app/loop.py", "offset": 40, "limit": 200}, "x" * 9_000)
+    history += tool_group("c2", "bash", {"command": "ls"}, "y")
+
+    folded, count = fold_old_tool_output(history, keep_recent_groups=1)
+
+    assert count == 1
+    assert "read_file app/loop.py:40-239" in tool_contents(folded)[0]
+    assert "Re-read that range" in tool_contents(folded)[0]
+
+
+def test_a_folded_command_names_the_command():
+    history = [{"role": "user", "content": "go"}]
+    history += tool_group("c1", "bash", {"command": "python3 -m pytest -q"}, "x" * 9_000)
+    history += tool_group("c2", "bash", {"command": "ls"}, "y")
+
+    folded, _ = fold_old_tool_output(history, keep_recent_groups=1)
+
+    assert "bash python3 -m pytest -q" in tool_contents(folded)[0]
+
+
+def test_a_call_without_usable_arguments_still_folds():
+    """Degrading to the tool name is fine; failing to fold is not."""
+    history = [{"role": "user", "content": "go"}]
+    history += tool_group("c1", "mystery", {}, "x" * 9_000)
+    history += tool_group("c2", "bash", {"command": "ls"}, "y")
+
+    folded, count = fold_old_tool_output(history, keep_recent_groups=1)
+
+    assert count == 1
+    assert "mystery" in tool_contents(folded)[0]
+
+
+def test_the_newest_group_is_foldable_only_under_force():
+    """The failure this exists to remove.
+
+    A single oversized tool result cannot be folded by any rule that always
+    keeps the most recent group, and compaction keeps it too — so the prompt
+    overflows, the one retry re-sends the same bytes, and the run dies. Under
+    force the newest group becomes foldable, which is safe because the
+    placeholder names the call it replaced.
+    """
+    history = [{"role": "user", "content": "go"}]
+    history += tool_group("c1", "bash", {"command": "ls"}, "small")
+    history += tool_group("big", "read_file", {"path": "bundle.min.js", "offset": 1, "limit": 500}, "x" * 400_000)
+
+    unforced, unforced_count = _fold_to_fit(
+        history, system="s", tools=[], chars_per_token=3.5, input_limit=5_000, stop_when_fits=True
+    )
+    forced, forced_count = _fold_to_fit(
+        history, system="s", tools=[], chars_per_token=3.5, input_limit=5_000, stop_when_fits=False
+    )
+
+    assert unforced_count == 0
+    assert estimate_tokens(unforced) > 100_000
+    assert forced_count == 1
+    assert estimate_tokens(forced) < 1_000
+    assert "read_file bundle.min.js:1-500" in tool_contents(forced)[-1]

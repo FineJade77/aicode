@@ -53,6 +53,11 @@ from app.tools.related import RelatedFilesTool
 from app.tools.review import ReviewDiffTool
 
 MAX_READ_LINES = 500
+# A line limit alone bounds nothing: "line" is not a unit of size. A minified
+# bundle, a single-line JSON document or a base64 blob is a handful of lines and
+# megabytes of context. These bound the other two axes.
+MAX_READ_LINE_CHARS = 2_000
+MAX_READ_TOTAL_CHARS = 64_000
 DEFAULT_READ_LINES = 200
 MAX_SEARCH_RESULTS = 40
 DEFAULT_SEARCH_TIMEOUT = 30
@@ -712,13 +717,28 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
     if lines and offset > len(lines):
         raise ToolError(f"offset {offset} exceeds the file's {len(lines)} lines")
     chunk = lines[offset - 1 : offset - 1 + limit]
+    chunk, clipped_lines, stopped_early = _bound_read_chunk(chunk)
     shown = "\n".join(f"{offset + index}\t{line}" for index, line in enumerate(chunk))
     label = scoped_display_path(workspace_name, root, target)
     end = offset + len(chunk) - 1
     header = f"{label} has {len(lines)} lines; showing {offset}-{end}"
     if end < len(lines):
         header += f" (more available; continue with offset={end + 1})"
-    data: dict[str, Any] = {"path": label, "total_lines": len(lines), "offset": offset, "shown": len(chunk)}
+    if clipped_lines:
+        # Said out loud, per line: a silently shortened line reads as the whole
+        # line, and a model editing against it would build `old_text` from
+        # content that does not exist in the file.
+        header += f"; {clipped_lines} long line(s) were clipped to {MAX_READ_LINE_CHARS} characters"
+    if stopped_early:
+        header += f"; stopped at {MAX_READ_TOTAL_CHARS} characters"
+    data: dict[str, Any] = {
+        "path": label,
+        "total_lines": len(lines),
+        "offset": offset,
+        "shown": len(chunk),
+        "clipped_lines": clipped_lines,
+        "size_capped": stopped_early,
+    }
     if not workspace_name:
         # Only the primary workspace is editable, so only its reads unlock edits
         # — and only its paths are resolvable against the session workspace, which
@@ -730,6 +750,28 @@ def read_file_lines(context: ToolContext, arguments: dict[str, Any]) -> ToolResu
         if context.session is not None:
             context.session.record_read(rel, content_hash)
     return ToolResult(success=True, text=f"{header}\n{shown}", data=data)
+
+
+def _bound_read_chunk(chunk: list[str]) -> tuple[list[str], int, bool]:
+    """Apply the width and total-size caps to a slice of lines.
+
+    Returns the bounded lines, how many were clipped, and whether the read
+    stopped short of the requested range. Both facts are reported to the model
+    rather than absorbed: the recovery is `offset`, which it already knows how
+    to use, but only if it is told there is something left.
+    """
+    bounded: list[str] = []
+    clipped = 0
+    total = 0
+    for line in chunk:
+        if len(line) > MAX_READ_LINE_CHARS:
+            line = line[:MAX_READ_LINE_CHARS] + f"… [line clipped: {len(line) - MAX_READ_LINE_CHARS} more characters]"
+            clipped += 1
+        if total + len(line) > MAX_READ_TOTAL_CHARS and bounded:
+            return bounded, clipped, True
+        bounded.append(line)
+        total += len(line)
+    return bounded, clipped, False
 
 
 async def start_background_command(context: ToolContext, command: str, backend: str) -> ToolResult:

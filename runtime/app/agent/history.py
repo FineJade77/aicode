@@ -266,7 +266,7 @@ async def prepare_history_for_model(
 
 
 
-FOLDED_TOOL_OUTPUT = "[earlier {tool} output folded to save context ({chars} characters); re-run it if the detail matters]"
+FOLDED_TOOL_OUTPUT = "[folded to save context: {descriptor} ({chars} characters). {recovery}]"
 
 
 def _fold_to_fit(
@@ -286,7 +286,14 @@ def _fold_to_fit(
     """
     best: list[dict[str, Any]] = messages
     best_count = 0
-    for keep in range(FOLD_KEEP_RECENT_GROUPS, 0, -1):
+    # Under force, 0 is reachable: the newest group may itself be what does not
+    # fit — a single oversized tool result cannot be folded by any rule that
+    # always keeps the most recent group, and compaction keeps it too, so the
+    # prompt would overflow, retry unchanged, and fail. Folding it is safe
+    # precisely because the placeholder now names the call: the model is left
+    # with an instruction to repeat, not a hole.
+    floor = 0 if not stop_when_fits else 1
+    for keep in range(FOLD_KEEP_RECENT_GROUPS, floor - 1, -1):
         candidate, count = fold_old_tool_output(messages, keep_recent_groups=keep)
         if not count:
             continue
@@ -320,14 +327,18 @@ def fold_old_tool_output(
     for group in foldable:
         if not group.complete:
             continue
-        names = _tool_call_names(messages[group.start])
+        calls = _tool_calls_by_id(messages[group.start])
         for index in range(group.start, group.end + 1):
             message = messages[index]
             if message.get("role") != "tool":
                 continue
             content = str(message.get("content") or "")
-            tool = names.get(str(message.get("tool_call_id") or "")) or "tool"
-            replacement = FOLDED_TOOL_OUTPUT.format(tool=tool, chars=len(content))
+            call = calls.get(str(message.get("tool_call_id") or ""))
+            replacement = FOLDED_TOOL_OUTPUT.format(
+                descriptor=_call_descriptor(call),
+                chars=len(content),
+                recovery=_call_recovery(call),
+            )
             if len(replacement) >= len(content):
                 # Folding a short result would cost more than it saves.
                 continue
@@ -346,12 +357,56 @@ def fold_old_tool_output(
     return updated, len(folded)
 
 
-def _tool_call_names(message: dict[str, Any]) -> dict[str, str]:
-    names: dict[str, str] = {}
+def _tool_calls_by_id(message: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    calls: dict[str, dict[str, Any]] = {}
     for call in message.get("tool_calls") or []:
         if isinstance(call, dict) and call.get("id"):
-            names[str(call["id"])] = str(call.get("name") or "tool")
-    return names
+            calls[str(call["id"])] = call
+    return calls
+
+
+def _call_descriptor(call: dict[str, Any] | None) -> str:
+    """Name the call precisely enough that it can be repeated.
+
+    A placeholder that says only "earlier read_file output" tells the model
+    something is missing without telling it what to ask for again. The arguments
+    are already in history — the assistant message that made the call carries
+    them — so identifying the call costs nothing and turns the fold tier from a
+    lossy trim into a reference the model can follow.
+    """
+    if not call:
+        return "earlier tool output"
+    name = str(call.get("name") or "tool")
+    arguments = call.get("arguments")
+    if not isinstance(arguments, dict):
+        return name
+    if name == "read_file":
+        path = str(arguments.get("path") or "")
+        if not path:
+            return name
+        offset = _as_int(arguments.get("offset"), 1)
+        limit = _as_int(arguments.get("limit"), 0)
+        span = f":{offset}-{offset + limit - 1}" if limit > 0 else f" from line {offset}"
+        return f"{name} {path}{span}"
+    for field in ("command", "pattern", "path", "query"):
+        value = str(arguments.get(field) or "").strip()
+        if value:
+            return f"{name} {value[:120]}"
+    return name
+
+
+def _call_recovery(call: dict[str, Any] | None) -> str:
+    name = str((call or {}).get("name") or "")
+    if name == "read_file":
+        return "Re-read that range if it still matters"
+    return "Re-run it if the detail still matters"
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 async def _persist_compaction(

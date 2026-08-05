@@ -47,7 +47,7 @@ scripts/    安装器、clean-home E2E、评测曲线分析
 - 中途提问：`ask_user` 在需求真正模糊时阻塞一轮问用户，超时与拒绝明确区分。
 - 计划状态：`update_plan` 登记多步计划，随 SSE 暴露进度。
 - 四类硬闸门：单轮预算、步数、无进展检测、编辑后验证；全部走同一条收尾路径，产出总结而不是截断对话。
-- 三级上下文管理：写入截断 → 折叠旧工具输出 → 结构化摘要；失效读取不进入摘要。
+- 三级上下文管理：写入截断 → 折叠旧工具输出 → 结构化摘要；失效读取不进入摘要。读取在行数、单行宽度、总字节三个轴上都有界，折叠后的占位符点名被替换的调用，因此可被跟随重读。
 - 仓库外 Project Trust、shell 语句级风险分析、mandatory protected paths、read-before-write 与 stale 检测。
 - Policy Engine 三态闸门：`allow` / `ask` / `deny`；deny 不可由 approval 覆盖。
 - 三种执行后端：宿主机、Docker 沙箱、OS 级沙箱（macOS seatbelt）。

@@ -480,3 +480,49 @@ def test_edit_file_declares_diff_approval():
     assert spec is not None
     assert spec.approval == "diff"
     assert [s.name for s in DEFAULT_REGISTRY.specs() if s.approval == "diff"] == ["edit_file"]
+
+
+# --- reads are bounded on every axis ------------------------------------------
+#
+# A line limit alone bounds nothing, because "line" is not a unit of size. A
+# minified bundle is three lines and a megabyte; before these caps `read_file`
+# returned all of it, and `read_file` is exempt from the write-time truncation
+# that would have caught it via any other tool.
+
+
+@pytest.mark.asyncio
+async def test_a_minified_file_is_bounded_not_returned_whole(tmp_path):
+    (tmp_path / "bundle.min.js").write_text("\n".join("x" * 400_000 for _ in range(3)), encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "bundle.min.js"}, make_context(tmp_path))
+
+    assert result.success
+    assert len(result.text) < 20_000, len(result.text)
+    # Reported, not absorbed: a silently shortened line reads as the whole line,
+    # and an edit built against it would use `old_text` that is not in the file.
+    assert "long line(s) were clipped" in result.text
+    assert result.data["clipped_lines"] == 3
+
+
+@pytest.mark.asyncio
+async def test_many_ordinary_lines_stop_at_the_size_cap(tmp_path):
+    (tmp_path / "wide.txt").write_text("\n".join("y" * 1_500 for _ in range(200)), encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "wide.txt", "limit": 200}, make_context(tmp_path))
+
+    assert result.data["size_capped"] is True
+    assert result.data["shown"] < 200
+    # The recovery is `offset`, which the model already knows how to use — but
+    # only if it is told there is more.
+    assert "continue with offset=" in result.text
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_file_is_untouched(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {index}" for index in range(50)), encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "a.py"}, make_context(tmp_path))
+
+    assert result.data["clipped_lines"] == 0
+    assert result.data["size_capped"] is False
+    assert "line 49" in result.text
