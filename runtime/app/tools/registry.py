@@ -603,6 +603,31 @@ def load_skill_text(context: Any, arguments: dict[str, Any]) -> ToolResult:
     )
 
 
+class SubagentTool:
+    """Registry entry for a tool the Agent Loop executes itself.
+
+    `explore` and `delegate` need a spec in the registry — that is what puts
+    them in `schemas_for_mode`, and what stops the policy engine seeing an
+    unknown tool and denying the call — but their execution belongs to the loop,
+    which owns the turn budget and the ledger the child spends against.
+
+    Reaching `run` therefore means something dispatched around the loop. It
+    fails loudly rather than returning a plausible-looking nothing, which is how
+    a subagent that never actually ran would otherwise look.
+    """
+
+    def __init__(self, spec: ToolSpec) -> None:
+        self.spec = spec
+
+    async def run(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        del args, context
+        return ToolResult(
+            success=False,
+            error=f"{self.spec.name} must be dispatched by the Agent Loop, which owns the turn budget",
+            risk_level="low",
+        )
+
+
 def build_default_registry() -> ToolRegistry:
     return ToolRegistry(
         [
@@ -617,6 +642,8 @@ def build_default_registry() -> ToolRegistry:
             FunctionTool(TOOL_SPECS_BY_NAME["bash"], context_first(run_bash)),
             EditFileTool(TOOL_SPECS_BY_NAME["edit_file"]),
             FunctionTool(TOOL_SPECS_BY_NAME["skill"], context_first(load_skill_text)),
+            SubagentTool(TOOL_SPECS_BY_NAME["explore"]),
+            SubagentTool(TOOL_SPECS_BY_NAME["delegate"]),
             UpdatePlanTool(TOOL_SPECS_BY_NAME["update_plan"]),
             FunctionTool(TOOL_SPECS_BY_NAME["review_diff"], ReviewDiffTool().run),
         ]

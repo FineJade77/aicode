@@ -526,3 +526,34 @@ async def test_an_ordinary_file_is_untouched(tmp_path):
     assert result.data["clipped_lines"] == 0
     assert result.data["size_capped"] is False
     assert "line 49" in result.text
+
+
+def test_every_declared_tool_is_reachable_by_the_model():
+    """A ToolSpec that is not in the registry is a tool nobody can call.
+
+    `explore` and `delegate` shipped in exactly that state: declared, handled by
+    the loop, and absent from `schemas_for_mode`, so the model was never offered
+    them — and `spec_for` returning None made the policy engine deny the call as
+    an unknown tool. Their unit tests passed throughout, because they drove the
+    subagent functions directly rather than the path a model takes.
+    """
+    from app.tools.registry import TOOL_SPECS
+
+    declared = {spec.name for spec in TOOL_SPECS}
+    registered = {spec.name for spec in DEFAULT_REGISTRY.specs()}
+
+    assert declared == registered, declared.symmetric_difference(registered)
+
+
+def test_the_subagent_tools_are_offered_and_permitted():
+    """The two halves that were both missing: visible, and not denied."""
+    from app.agent.policy import PolicyEngine
+
+    names = {schema["name"] for schema in tool_schemas_for_mode("default")}
+    engine = PolicyEngine()
+
+    for name in ("explore", "delegate"):
+        assert name in names, name
+        spec = DEFAULT_REGISTRY.spec_for(name)
+        assert spec is not None
+        assert engine.gate(name, {}, mode="default", spec=spec).verdict != "deny"
