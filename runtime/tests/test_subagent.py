@@ -9,11 +9,13 @@ regardless of whether it proves valuable.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 
 from app.agent.subagent import (
+    DELEGATE_TOOLS,
     MAX_REPORT_CHARS,
     SUBAGENT_TOOLS,
     run_subagent,
@@ -315,3 +317,154 @@ def test_the_prompt_asks_for_a_review_only_when_it_is_worth_it(tmp_path: Path) -
 
     assert "review my changes" in prompt
     assert "One-file fixes do not need it" in prompt
+
+
+# --- delegated work -----------------------------------------------------------
+#
+# The read-only variant answers questions; this one does the job. What makes
+# that safe is not a wider allowlist but a shared gate: every call a worker makes
+# goes through the same `execute_gated` the parent uses, so the policy verdict,
+# the approval prompt, the events and the audit record are identical.
+
+
+def working_runtime(router: ScriptedRouter, session, approvals):
+    from app.agent.policy import PolicyEngine
+    from app.system import SystemClock
+
+    return AgentRuntime(
+        model_runtime=router, trace=None, tools=DefaultToolRuntime(),
+        clock=SystemClock(), approvals=approvals, policy=PolicyEngine(),
+    )
+
+
+class Request:
+    def __init__(self, workspace: Path) -> None:
+        self.workspace = str(workspace)
+        self.mode = "default"
+        self.message = "go"
+
+
+async def approve_everything(session) -> None:
+    while True:
+        await asyncio.sleep(0.005)
+        for approval in list(session.approvals.values()):
+            if approval.accepted is None:
+                session.resolve_approval(approval.approval_id, accepted=True)
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_edit_raises_the_users_approval(tmp_path: Path) -> None:
+    """The reason a worker may write at all.
+
+    An edit made inside a child that never reaches the approval broker would be
+    a write the user never agreed to, made by a run they cannot see.
+    """
+    from app.agent.loop import execute_subagent
+    from app.sessions.approvals import SessionApprovalBroker
+    from app.sessions.store import SessionStore
+    from app.tools.edit import file_hash
+
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace=str(tmp_path))
+    session.record_read("calc.py", file_hash(tmp_path / "calc.py"))
+    router = ScriptedRouter(
+        call_result("edit_file", {"path": "calc.py", "old_text": "return a - b", "new_text": "return a + b"}),
+        text_result("Fixed calc.py"),
+    )
+    approvals = SessionApprovalBroker(timeout_seconds=5)
+    runtime = working_runtime(router, session, approvals)
+    context = build_tool_context(str(tmp_path), "default", session=session, approvals=approvals)
+
+    approver = asyncio.create_task(approve_everything(session))
+    outcome = await execute_subagent(
+        session, Request(tmp_path),
+        ToolCallRequest(id="d1", name="delegate", arguments={"task": "fix add"}),
+        runtime, runtime.policy, context, TurnLedger(), small_budget(),
+    )
+    approver.cancel()
+
+    events = [event["type"] for event in session.events.events_after(0)]
+    assert "approval.requested" in events
+    assert "edit.applied" in events
+    assert (tmp_path / "calc.py").read_text(encoding="utf-8").strip().endswith("return a + b")
+    # Counted on the parent, so verification and wind-down see the real work.
+    assert outcome.applied_edits == 1
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_edit_that_is_refused_is_not_applied(tmp_path: Path) -> None:
+    from app.agent.loop import execute_subagent
+    from app.sessions.approvals import SessionApprovalBroker
+    from app.sessions.store import SessionStore
+    from app.tools.edit import file_hash
+
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace=str(tmp_path))
+    session.record_read("calc.py", file_hash(tmp_path / "calc.py"))
+    router = ScriptedRouter(
+        call_result("edit_file", {"path": "calc.py", "old_text": "return a - b", "new_text": "return a + b"}),
+        text_result("could not apply"),
+    )
+    approvals = SessionApprovalBroker(timeout_seconds=5)
+    runtime = working_runtime(router, session, approvals)
+    context = build_tool_context(str(tmp_path), "default", session=session, approvals=approvals)
+
+    async def refuse() -> None:
+        while True:
+            await asyncio.sleep(0.005)
+            for approval in list(session.approvals.values()):
+                if approval.accepted is None:
+                    session.resolve_approval(approval.approval_id, accepted=False)
+
+    refuser = asyncio.create_task(refuse())
+    outcome = await execute_subagent(
+        session, Request(tmp_path),
+        ToolCallRequest(id="d1", name="delegate", arguments={"task": "fix add"}),
+        runtime, runtime.policy, context, TurnLedger(), small_budget(),
+    )
+    refuser.cancel()
+
+    assert "return a - b" in (tmp_path / "calc.py").read_text(encoding="utf-8")
+    assert outcome.applied_edits == 0
+
+
+@pytest.mark.asyncio
+async def test_explore_still_cannot_reach_a_write_tool(tmp_path: Path) -> None:
+    """Adding a working variant must not widen the read-only one."""
+    from app.agent.loop import execute_subagent
+    from app.sessions.store import SessionStore
+
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace=str(tmp_path))
+    router = ScriptedRouter(text_result("answer"))
+    runtime = AgentRuntime(model_runtime=router, trace=None, tools=DefaultToolRuntime())
+    context = build_tool_context(str(tmp_path), "default", session=session)
+
+    await execute_subagent(
+        session, Request(tmp_path),
+        ToolCallRequest(id="e1", name="explore", arguments={"question": "where?"}),
+        runtime, None, context, TurnLedger(), small_budget(),
+    )
+
+    for forbidden in ("edit_file", "bash", "delegate", "explore"):
+        assert forbidden not in router.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_cannot_delegate_further(tmp_path: Path) -> None:
+    from app.sessions.store import SessionStore
+
+    session = SessionStore(tmp_path / "s.sqlite").create(workspace=str(tmp_path))
+    router = ScriptedRouter(text_result("done"))
+    runtime = AgentRuntime(model_runtime=router, trace=None, tools=DefaultToolRuntime())
+
+    await run_subagent(
+        runtime=runtime,
+        context=build_tool_context(str(tmp_path), "default", session=session),
+        question="do the thing",
+        budget=small_budget(),
+        allowed=DELEGATE_TOOLS,
+    )
+
+    assert "delegate" not in router.offered[0]
+    assert "explore" not in router.offered[0]
+    assert "edit_file" in router.offered[0]

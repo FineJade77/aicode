@@ -405,6 +405,30 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="delegate",
+        description=(
+            "Hand one self-contained subtask to a worker subagent with its own context. "
+            "Use it when a job splits into parts that do not need each other's details — the worker reads, "
+            "edits and runs tests itself, and reports back what it changed. "
+            "Its edits still require your user's approval and obey the same policy as yours, and its spend "
+            "comes out of this turn's budget. Give it everything it needs in one description: it cannot see "
+            "your conversation and cannot ask you questions."
+        ),
+        read_only=False,
+        approval="none",
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "The complete, self-contained task, including any context the worker needs.",
+                }
+            },
+            "required": ["task"],
+        },
+    ),
+    ToolSpec(
         name="skill",
         description=(
             "Load a named skill's instructions before doing that kind of work. "

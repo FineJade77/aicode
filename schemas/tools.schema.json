@@ -25,6 +25,7 @@
         "stop_command",
         "ask_user",
         "explore",
+        "delegate",
         "skill",
         "update_plan",
         "review_diff"

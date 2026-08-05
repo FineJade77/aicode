@@ -799,7 +799,7 @@ aicode project workspace list
 aicode project workspace remove api
 ```
 
-## Subagent（`explore`）
+## Subagent（`explore` / `delegate`）
 
 `explore` 把一次"读很多文件才能回答的问题"交给一个**独立上下文**的只读子 agent，主历史只拿回一段带文件行号引用的报告。
 
@@ -809,11 +809,15 @@ aicode project workspace remove api
 
 适用："X 在哪里实现"、"谁调用了 Y"、"Z 的流程是怎样的"——问完就不再需要那些文件内容的场景。
 
+`delegate` 则是**把一件事整个交出去**：worker 自己读、自己改、自己跑测试，回报它改了什么。适用于一轮里有几件互不依赖的事——每件交出去一个，主上下文只留下几段报告。
+
 四条边界：
 
-- **只读工具白名单**（`read_file` / `search` / `glob` / `list_files` / `related_files`），且执行前会再拒一次没给过它的工具名。一个用户看不见的运行里弹出审批、去改一个不出现在主 transcript 里的文件，那是名义上的审批；只读工具本就不需要审批，问题因此不存在。
+- **每一次工具调用都走父运行的同一条闸门**（`execute_gated`）。同样的 policy 判定、同样的审批弹窗、同样发到这条会话的事件流、同样的审计记录。**只有消息历史是独立的**——那正是这个功能的全部意义，也应当是唯一独立的东西。实测：worker 的一次 `edit_file` 会依次产生 `approval.requested` → `edit.applied`，文件真的被改，`applied_edits` 回报给父轮。
+- **`explore` 额外受只读白名单约束**，无论模型喊出什么工具名都写不了东西。
 - **预算从本轮剩余里切 25%，不是新发一份**，子 agent 的消耗直接计入本轮账本。否则"派生子 agent"就是绕过花费上限的办法。
-- **深度为 1**，子 agent 拿不到 `explore`。
+- **深度为 1**，子 agent 既拿不到 `explore` 也拿不到 `delegate`。worker 也拿不到 `ask_user`：一个由子 agent 发出的提问，用户没有能安放它的上下文。
+- **不并行**。并行写入会同时引入文件冲突、审批竞争和 read-before-write 记录的竞态，而这三样都在共享的 session 状态上；`explore` 是只读的，要并行研究可以安全地扇出。
 - policy、执行后端、审计全部复用父运行的；`subagent.started` / `subagent.finished` 会显示模型调用数、工具调用数与花费——看不见的工作仍然要可核算。
 
 子 agent 白名单包含 `review_diff`，因此可以用它审阅自己的改动（`explore` + "review my changes"）。**但提示词里的"改完自动 review"规则在实测中不触发**：deepseek-chat 上 8 次多文件改动运行、两种措辞，触发 0 次，而同一句里的"跑测试"每次都执行。可靠的用法是显式要求，或写成 skill 按需调用。

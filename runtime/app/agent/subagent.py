@@ -10,10 +10,14 @@ this feature is that a subagent reuse budget, policy, execution and trace,
 because a second path that skips them is exactly what the rest of the
 architecture exists to prevent. So:
 
-- **Read-only tools only.** Not a limitation to be lifted later: an approval
-  prompt raised inside a run the user cannot see, for an edit that never appears
-  in the main transcript, is an approval in name only. Read-only tools need no
-  approval, so the question does not arise.
+- **Every tool call goes through the parent's `execute_gated`.** Same policy
+  verdict, same approval prompt, same tool events on the same session, same
+  audit record. Only the *message history* is separate — which is the entire
+  point, and the only thing that should be. A child that reached
+  `runtime.tools.run` directly would be a second execution path with no gate,
+  which is exactly what this feature was conditioned on not being.
+- **Read-only children (`explore`) additionally cannot name a write tool**, so a
+  research call can never turn into a write no matter what the model emits.
 - **Budget is carved out of the parent's, never added to it.** Otherwise
   spawning subagents is how a turn escapes its own spend limit.
 - **Depth one.** A subagent cannot spawn another; budget accounting over a tree
@@ -32,9 +36,15 @@ from app.agent.history import estimate_tokens
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message
 from app.models.provider import CompletionResult, ToolCallRequest
 
-# The read-only surface. Named here rather than derived from `spec.read_only` so
-# adding a read-only tool does not silently widen what a subagent may do.
+# The read-only surface for `explore`. Named here rather than derived from
+# `spec.read_only` so adding a read-only tool does not silently widen what a
+# research subagent may do.
 SUBAGENT_TOOLS = ("read_file", "search", "glob", "list_files", "related_files", "review_diff")
+
+# What a delegated worker may reach. `explore` is absent (depth one) and so is
+# `ask_user`: a question raised by a child arrives with no context the user can
+# place it in, and the parent is the one holding the conversation.
+DELEGATE_TOOLS = (*SUBAGENT_TOOLS, "bash", "edit_file", "skill", "read_output", "stop_command")
 
 # A subagent gets a slice of the parent's remaining budget, not a fresh one.
 SUBAGENT_BUDGET_SHARE = 0.25
@@ -58,6 +68,19 @@ something is as useless as one that never does. Rank what you report: a missed
 call site matters, a naming preference does not."""
 
 
+DELEGATE_SYSTEM = """You are a worker subagent for a coding agent.
+
+You have been given one self-contained task. Do it: read what you need, make the
+edits, and run the project's tests to check your work. Every edit still goes
+through the user's approval, and everything you run is subject to the same
+policy as your caller.
+
+You have your own context and the caller has none of it. So when you are done,
+report what you changed and what you verified, with paths — that report is all
+the caller will see. If you could not finish, say what is left and why; a
+confident summary of incomplete work is worse than an honest partial one."""
+
+
 @dataclass(slots=True)
 class SubagentOutcome:
     report: str
@@ -66,6 +89,7 @@ class SubagentOutcome:
     total_cost: float
     tool_calls: int
     stop_reason: str = ""
+    applied_edits: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +98,7 @@ class SubagentOutcome:
             "total_cost": round(self.total_cost, 8),
             "tool_calls": self.tool_calls,
             "stop_reason": self.stop_reason,
+            "applied_edits": self.applied_edits,
             "report_chars": len(self.report),
         }
 
@@ -104,6 +129,12 @@ async def run_subagent(
     context: Any,
     question: str,
     budget: TurnBudget,
+    allowed: tuple[str, ...] = SUBAGENT_TOOLS,
+    system: str = "",
+    session: Any = None,
+    request: Any = None,
+    policy: Any = None,
+    parent_ledger: TurnLedger | None = None,
 ) -> SubagentOutcome:
     """Run the exploration loop and return its report.
 
@@ -116,21 +147,19 @@ async def run_subagent(
     through the same `runtime` and `context` the parent uses.
     """
     assert runtime.model_runtime is not None and runtime.tools is not None
-    schemas = [
-        schema
-        for schema in _schemas(runtime, context)
-        if schema.get("name") in SUBAGENT_TOOLS
-    ]
+    schemas = [schema for schema in _schemas(runtime, context) if schema.get("name") in allowed]
+    system = system or SUBAGENT_SYSTEM
     messages: list[dict[str, Any]] = [user_message(question)]
     ledger = TurnLedger()
     tool_calls = 0
+    applied_edits = 0
     stop_reason = ""
     report = ""
 
     for _step in range(max(1, budget.max_steps)):
         result: CompletionResult = await runtime.model_runtime.stream_complete(
             purpose="summarizer",
-            system=SUBAGENT_SYSTEM,
+            system=system,
             messages=messages,
             tools=schemas,
             max_tokens=budget.max_tokens_per_call,
@@ -147,7 +176,13 @@ async def run_subagent(
             break
         for call in result.tool_calls:
             tool_calls += 1
-            messages.append(tool_message(call.id, await _run_tool(runtime, context, call)))
+            output = await _run_tool(
+                runtime, context, call, allowed,
+                session=session, request=request, policy=policy,
+                ledger=parent_ledger, budget=budget,
+            )
+            messages.append(tool_message(call.id, output.text))
+            applied_edits += output.applied_edits
     else:
         stop_reason = "steps"
 
@@ -163,27 +198,60 @@ async def run_subagent(
         total_cost=ledger.total_cost,
         tool_calls=tool_calls,
         stop_reason=stop_reason,
+        applied_edits=applied_edits,
     )
 
 
-async def _run_tool(runtime: Any, context: Any, call: ToolCallRequest) -> str:
-    """Execute one read-only call through the parent's own tool runtime.
+@dataclass(slots=True)
+class _ToolOutput:
+    text: str
+    applied_edits: int = 0
+
+
+async def _run_tool(
+    runtime: Any,
+    context: Any,
+    call: ToolCallRequest,
+    allowed: tuple[str, ...],
+    *,
+    session: Any = None,
+    request: Any = None,
+    policy: Any = None,
+    ledger: TurnLedger | None = None,
+    budget: TurnBudget | None = None,
+) -> _ToolOutput:
+    """Execute one call the way the parent would.
 
     Refusing an unlisted name here is the second half of the allowlist: the
     schemas were filtered, but a model can still emit a name it was not offered,
     and honouring it would let a subagent reach a tool the caller never granted.
+
+    Beyond that, the call is handed to the parent's `execute_gated` whenever the
+    turn's pieces are available — which is what keeps policy, approval, events
+    and audit identical for parent and child. The direct path below is only for
+    a child running outside a turn, where by construction only read-only tools
+    are on the allowlist and the policy verdict for them is an unconditional
+    allow.
     """
-    if call.name not in SUBAGENT_TOOLS:
-        return f"[refused] {call.name} is not available to a subagent"
+    if call.name not in allowed:
+        return _ToolOutput(f"[refused] {call.name} is not available to this subagent")
+    if session is not None and request is not None and policy is not None:
+        from app.agent.loop import execute_gated
+
+        try:
+            outcome = await execute_gated(session, request, call, runtime, policy, context, ledger, budget)
+        except Exception as exc:  # noqa: BLE001 - a failing call must not end the parent turn
+            return _ToolOutput(f"[tool error] {exc}")
+        return _ToolOutput(outcome.output or "[no output]", outcome.applied_edits)
     error = runtime.tools.validate_arguments(call.name, call.arguments)
     if error is not None:
-        return f"[invalid arguments] {error}"
+        return _ToolOutput(f"[invalid arguments] {error}")
     try:
         result = await runtime.tools.run(call.name, call.arguments, context)
     except Exception as exc:  # noqa: BLE001 - a failing read must not end the parent turn
-        return f"[tool error] {exc}"
+        return _ToolOutput(f"[tool error] {exc}")
     text = result.text if result.success else f"[tool error] {result.error}"
-    return text or "[no output]"
+    return _ToolOutput(text or "[no output]")
 
 
 def _schemas(runtime: Any, context: Any) -> list[dict[str, Any]]:

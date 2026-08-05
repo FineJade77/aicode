@@ -10,7 +10,13 @@ from app.agent.policy import PolicyEngine
 from app.agent.progress import StallTracker
 from app.agent.prompts import build_system_prompt, stall_note, verify_note, wind_down_note
 from app.agent.session import AgentSession, ApprovalDecision
-from app.agent.subagent import run_subagent, subagent_budget
+from app.agent.subagent import (
+    DELEGATE_SYSTEM,
+    DELEGATE_TOOLS,
+    SUBAGENT_TOOLS,
+    run_subagent,
+    subagent_budget,
+)
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRequest, AgentRuntime
 from app.agent.verify import VerifyOutcome, VerifyTracker, summarize_failure
@@ -700,8 +706,8 @@ async def execute_gated(
         )
         return ToolCallResult(f"[denied by policy] {gate.reason}", ok=False)
 
-    if call.name == "explore":
-        return await execute_explore(session, call, runtime, context, ledger, budget)
+    if call.name in {"explore", "delegate"}:
+        return await execute_subagent(session, request, call, runtime, policy, context, ledger, budget)
 
     if spec is not None and spec.approval == "diff":
         # Declared behaviour, not a hardcoded tool name: any future tool that
@@ -871,42 +877,63 @@ def latest_selection(session: AgentSession, kind: str) -> set[str]:
     return set(selection)
 
 
-async def execute_explore(
+async def execute_subagent(
     session: AgentSession,
+    request: AgentRequest,
     call: ToolCallRequest,
     runtime: AgentRuntime,
+    policy: PolicyEngine,
     context: Any,
     ledger: TurnLedger | None,
     budget: TurnBudget | None,
 ) -> ToolCallResult:
-    """Run a read-only subagent and fold its spend into this turn.
+    """Run a subagent and fold its spend into this turn.
 
-    The child's usage is added to the parent's ledger rather than tracked
-    separately: a turn that can spawn work outside its own budget does not have
-    a budget. The report comes back as the tool result, so the main history
-    gains a paragraph where it would otherwise have gained twenty file reads.
+    Two shapes, one path. `explore` gets read-only tools and answers a question;
+    `delegate` gets the working set and does a task. What they share is what
+    matters: the child's calls go through the same gate as the parent's, so its
+    edits raise the user's approval and appear on the same event stream, and its
+    usage is added to the parent's ledger rather than tracked beside it — a turn
+    that can spawn work outside its own budget does not have a budget.
     """
-    question = str(call.arguments.get("question") or "").strip()
+    delegating = call.name == "delegate"
+    field = "task" if delegating else "question"
+    question = str(call.arguments.get(field) or "").strip()
     if not question:
-        return ToolCallResult("[explore failed] a question is required", ok=False)
+        return ToolCallResult(f"[{call.name} failed] a {field} is required", ok=False)
     if ledger is None or budget is None:
-        # Only the turn loop has these. Anything else calling `explore` would be
+        # Only the turn loop has these. Anything else calling a subagent would be
         # spawning unbudgeted work, so it is refused rather than defaulted.
-        return ToolCallResult("[explore failed] subagents are only available inside a turn", ok=False)
+        return ToolCallResult(f"[{call.name} failed] subagents are only available inside a turn", ok=False)
 
     child_budget = subagent_budget(budget, ledger)
     if child_budget.max_total_tokens <= 0:
-        return ToolCallResult("[explore skipped] this turn has no budget left to delegate", ok=False)
+        return ToolCallResult(f"[{call.name} skipped] this turn has no budget left to delegate", ok=False)
 
     await session.events.put(
         {
             "type": "subagent.started",
+            "kind": call.name,
             "question": question[:200],
             "tool_call_id": call.id,
-            "message": f"Subagent started: {question[:120]}",
+            "message": f"Subagent ({call.name}) started: {question[:120]}",
         }
     )
-    outcome = await run_subagent(runtime=runtime, context=context, question=question, budget=child_budget)
+    outcome = await run_subagent(
+        runtime=runtime,
+        context=context,
+        question=question,
+        budget=child_budget,
+        allowed=DELEGATE_TOOLS if delegating else SUBAGENT_TOOLS,
+        system=DELEGATE_SYSTEM if delegating else "",
+        # A delegated worker runs its calls through the parent's gate, so it
+        # needs the turn's pieces. A read-only one deliberately does not get
+        # them: nothing on its allowlist can write, so there is nothing to gate.
+        session=session if delegating else None,
+        request=request if delegating else None,
+        policy=policy if delegating else None,
+        parent_ledger=ledger if delegating else None,
+    )
     # Charged to the parent before anything else can spend.
     ledger.total_tokens += outcome.total_tokens
     ledger.total_cost += outcome.total_cost
@@ -925,13 +952,17 @@ async def execute_explore(
             "type": "subagent.finished",
             "tool_call_id": call.id,
             **payload,
+            "kind": call.name,
             "message": (
-                f"Subagent finished: {outcome.model_calls} model calls, "
-                f"{outcome.tool_calls} tool calls, {len(outcome.report)} characters reported."
+                f"Subagent ({call.name}) finished: {outcome.model_calls} model calls, "
+                f"{outcome.tool_calls} tool calls, {outcome.applied_edits} edit(s), "
+                f"{len(outcome.report)} characters reported."
             ),
         }
     )
-    return ToolCallResult(outcome.report, ok=True)
+    # The parent's own edit count includes the child's, so verification and the
+    # turn's wind-down see the work that actually happened.
+    return ToolCallResult(outcome.report, ok=True, applied_edits=outcome.applied_edits)
 
 
 async def execute_edit(
