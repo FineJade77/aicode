@@ -252,3 +252,66 @@ async def test_a_silent_subagent_still_reports_something(tmp_path: Path) -> None
     )
 
     assert outcome.report.strip()
+
+
+# --- reviewing your own change ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_can_reach_the_deterministic_reviewer(tmp_path: Path) -> None:
+    """`review_diff` is what makes a review subagent more than a second opinion.
+
+    Without it the reviewer would be re-reading files and guessing what changed;
+    with it, it starts from the 18 deterministic findings and spends its budget
+    on what those rules cannot see.
+    """
+    router = ScriptedRouter(text_result("no problems found"))
+
+    await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="review my changes",
+        budget=small_budget(),
+    )
+
+    assert "review_diff" in router.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_the_reviewer_still_cannot_write(tmp_path: Path) -> None:
+    """Adding the reviewer must not widen the surface.
+
+    A subagent that can fix what it found would be applying edits the user never
+    saw proposed.
+    """
+    router = ScriptedRouter(text_result("ok"))
+
+    await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="review my changes",
+        budget=small_budget(),
+    )
+
+    for forbidden in ("edit_file", "bash", "explore"):
+        assert forbidden not in router.offered[0]
+
+
+def test_the_prompt_asks_for_a_review_only_when_it_is_worth_it(tmp_path: Path) -> None:
+    """A rule that fires on every one-line fix is a tax, not a check.
+
+    The wording has to carry the exemption, because the model has no other way
+    to know the review costs a quarter of the remaining budget.
+    """
+    from app.agent.prompts import build_system_prompt
+    from app.tools.workspace import LocalWorkspaceRuntime
+
+    class Request:
+        workspace = str(tmp_path)
+        mode = "default"
+        message = "go"
+
+    prompt = build_system_prompt(Request(), LocalWorkspaceRuntime().prompt_context(tmp_path))
+
+    assert "review my changes" in prompt
+    assert "One-file fixes do not need it" in prompt

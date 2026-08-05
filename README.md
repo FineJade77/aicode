@@ -816,6 +816,8 @@ aicode project workspace remove api
 - **深度为 1**，子 agent 拿不到 `explore`。
 - policy、执行后端、审计全部复用父运行的；`subagent.started` / `subagent.finished` 会显示模型调用数、工具调用数与花费——看不见的工作仍然要可核算。
 
+子 agent 白名单包含 `review_diff`，因此可以用它审阅自己的改动（`explore` + "review my changes"）。**但提示词里的"改完自动 review"规则在实测中不触发**：deepseek-chat 上 8 次多文件改动运行、两种措辞，触发 0 次，而同一句里的"跑测试"每次都执行。可靠的用法是显式要求，或写成 skill 按需调用。
+
 **这个功能的触发条件其实没满足**：42 次真实运行里探索占工具输出 57%，但压缩次数是 0/42，没有任何因上下文导致的失败。它是按产品决定启动的，理由与测量都记在 [TASKS.md](TASKS.md) 的 T-048。要判断它是否真的有用，需要一档能制造真实上下文压力的评测。
 
 ## Skills

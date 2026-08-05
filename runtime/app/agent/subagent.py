@@ -34,7 +34,7 @@ from app.models.provider import CompletionResult, ToolCallRequest
 
 # The read-only surface. Named here rather than derived from `spec.read_only` so
 # adding a read-only tool does not silently widen what a subagent may do.
-SUBAGENT_TOOLS = ("read_file", "search", "glob", "list_files", "related_files")
+SUBAGENT_TOOLS = ("read_file", "search", "glob", "list_files", "related_files", "review_diff")
 
 # A subagent gets a slice of the parent's remaining budget, not a fresh one.
 SUBAGENT_BUDGET_SHARE = 0.25
@@ -49,7 +49,13 @@ do is visible to the user, so do not address them.
 Answer the question you were given by reading the workspace, then reply with a
 compact report: the answer first, then the specific files and line ranges that
 support it. Cite paths so the caller can go straight there. Do not speculate
-beyond what you read; if the workspace does not answer the question, say so."""
+beyond what you read; if the workspace does not answer the question, say so.
+
+If you were asked to review a change, use review_diff for the deterministic
+findings and read the changed files yourself for the rest. Report problems, not
+praise, and say plainly when you find none — a reviewer that always finds
+something is as useless as one that never does. Rank what you report: a missed
+call site matters, a naming preference does not."""
 
 
 @dataclass(slots=True)

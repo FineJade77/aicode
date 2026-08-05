@@ -84,7 +84,12 @@ def build_system_prompt(request: Any, project: Any) -> str:
         "- read_file is required before editing an existing file; edit_file will refuse otherwise. old_text must match the file exactly and uniquely.",
         "- Every edit_file call presents a diff for user approval. If rejected, adjust the plan or ask; do not retry the same edit unchanged.",
         "- If a command is blocked by policy, use a safer alternative or include the manual command in the final answer.",
-        "- After applying changes, run relevant tests. If tool output is truncated, continue reading with offset.",
+        (
+            "- After applying changes, run relevant tests. If tool output is truncated, continue reading "
+            "with offset. When the change touched more than one file, also call explore with "
+            "\"review my changes\" once the tests pass: it reads your diff with no memory of why you wrote "
+            "it, so it does not share the assumption that produced the mistake. One-file fixes do not need it."
+        ),
         "- For a task that needs several steps, call update_plan first, keep exactly one item in_progress, and mark it done before moving on. Skip the plan for single-step tasks.",
         "- ask_user blocks the turn waiting on a person. Use it only when the requirement is genuinely ambiguous and guessing wrong would waste the work; anything you can settle by reading the project, read instead.",
         "- When the task is complete or no work remains, answer directly; do not keep calling tools.",
