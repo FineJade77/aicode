@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | Agent Loop | `[x]` | 原生 function calling，模型自主调用工具；单一历史来源，无内存 transcript 副本。 |
 | 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic，含 jitter 退避与 `Retry-After`；可选 fallback（默认关闭，切换必然可见）。 |
-| 工具系统 | `[x]` | 12 个内置工具；`ToolSpec` 单一声明，policy 与 loop 不再各持名单。 |
+| 工具系统 | `[x]` | 13 个内置工具；`ToolSpec` 单一声明，policy 与 loop 不再各持名单。 |
 | 只读工具并发 | `[x]` | 连续只读调用成组并发（上限 8），结果按调用顺序写回。 |
 | 计划状态 | `[x]` | `update_plan` + `plan.updated`，跨 daemon 重启可见，随 fork 带走。 |
 | 批量编辑 | `[x]` | 同文件多处替换一次审批；任一不匹配整体失败，不半应用。 |
@@ -59,6 +59,7 @@
 | 三级上下文管理 | `[x]` | 写入截断 → 折叠旧工具输出 → 结构化摘要；`pending` 由代码续接。 |
 | 失效读取检测 | `[x]` | 按读取当时的 hash 比对，过期内容不以事实形态进入摘要。 |
 | Session fork | `[x]` | 从任意消息派生新 session；历史复制而非共享，compaction 边界重映射。 |
+| Skills | `[x]` | 命名指令单；prompt 只放目录、`skill` 工具按需读正文；项目技能受 trust 门控并带来源标注。 |
 | MCP 外部工具 | `[x]` | stdio 与 Streamable HTTP 两种 transport；trust 门控、强制审批、按 workspace 缓存。 |
 | 上下文索引 | `[~]` | `related_files` + `glob` 启发式已完成；符号 / import / test mapping 未做，见 §4.1。 |
 

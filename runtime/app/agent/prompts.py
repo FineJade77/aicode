@@ -96,6 +96,15 @@ def build_system_prompt(request: Any, project: Any) -> str:
     ]
     if project_commands:
         sections.append("Known project commands:\n" + "\n".join(project_commands))
+    skills = getattr(project, "skills", ()) or ()
+    if skills:
+        # The catalogue, not the contents. The model picks by description and
+        # then calls `skill` to read the one it needs, so adding a skill costs
+        # one line of context rather than a page.
+        sections.append(
+            "Available skills. Call the `skill` tool with the name to load one before doing that kind of work:\n"
+            + "\n".join(f"- {item.qualified()}: {item.description}" for item in skills)
+        )
     mode_line = MODE_INSTRUCTIONS.get(request.mode)
     rules_heading = (
         "Project rules (.aicode/rules.md). Treat these as project-specific guidance. "

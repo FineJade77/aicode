@@ -385,6 +385,20 @@ Runtime 当前注册 12 个内置工具：
 
 `edits[]` 存在的理由是**一次审批**：同一文件的 N 处改动逐个提交会产生 N 个 diff 提示，用户看到的是碎片而不是一次变更，而且中间状态的文件是不自洽的。所有替换都针对**当前文件内容**匹配，然后一起应用——按顺序逐个应用会让第二处的 `old_text` 需要预测第一处应用后的文本，那是模型算不准的东西。
 
+### 7.1b Skills
+
+命名指令单，两个来源：`~/.aicode/skills/`（用户）与 `<workspace>/.aicode/skills/`（项目）。系统 prompt 只注入**目录**（`name: description`），正文由 `skill` 工具按需读取——把全部正文放进 prompt，等于为这一轮不做的那十九件事付上下文。
+
+| 约束 | 理由 |
+| --- | --- |
+| 项目技能仅 `trusted` 生效 | 仓库自带技能 = 克隆仓库向 Agent 提议指令，与 hooks / MCP 同一种权限，答案必须一致 |
+| 项目技能命名空间 `project:<name>` | 否则仓库能接管用户已有的名字 |
+| 加载时附来源声明 | 不标注时，克隆仓库里的指令单与用户自己写的不可区分 |
+| 名字不进文件系统路径 | 与目录条目比对而非拼接路径，`../` 解析不到任何东西 |
+| 正文超限**明说**截断 | 悄悄少掉最后一步的指令单，读起来像一份完整的 |
+
+`skill` 工具 `read_only=True` / `approval="none"`：它读一份用户或项目放在那里的文件并返回文本，为它加闸门只会训练用户闭眼点过。`commit_message` 模式由 `NO_TOOL_MODES` 统一排除；review / explain 保留它，因为"review 检查清单"正是这类技能的用途。
+
 ### 7.2 MCP 外部工具
 
 `.aicode/config.json` 的 `mcp.servers[]` 声明的服务器以子进程启动，通过 stdio 讲 JSON-RPC（`initialize` → `tools/list` → `tools/call`）。它们的工具经 `ToolSpec` 注册进同一个 registry，因此走与内置工具完全相同的 policy gate 和审批链路。

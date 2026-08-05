@@ -8,6 +8,7 @@ from pathlib import Path
 from app.config import settings
 from app.project.config import ProjectConfig, load_project_config
 from app.project.detect import detect_project_command, detect_test_command
+from app.project.skills import discover_skills
 from app.tools.registry import resolve_bash_backend
 from app.tools.review import review_rules_data
 
@@ -26,6 +27,10 @@ class ProjectPromptContext:
     test_command: str
     rules_text: str
     memory_text: str
+    # Names and one-line descriptions only. Bodies are loaded by the `skill`
+    # tool when one is chosen; putting them all here would spend the window on
+    # instructions for the skills this turn is not doing.
+    skills: tuple = ()
     bash_environment: str = BASH_ENVIRONMENT_DESCRIPTIONS["host"]
 
 
@@ -51,6 +56,7 @@ class LocalWorkspaceRuntime:
             test_command=test_command,
             rules_text=self._context_file(workspace, "rules.md"),
             memory_text=self._context_file(workspace, "memory.md"),
+            skills=tuple(discover_skills(workspace, trust_level=trust_level)),
             bash_environment=BASH_ENVIRONMENT_DESCRIPTIONS[backend],
         )
 
