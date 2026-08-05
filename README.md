@@ -1,67 +1,104 @@
 # aicode
 
-在你自己的机器上跑的编码 Agent：读代码、跑命令、改文件，但每一次写入你都先看到 diff。
+在你自己的机器上跑的编码 Agent。它读代码、跑命令、改文件——**但每一次写入你都先看到 diff，每一条命令都先过策略闸门。**
 
-`aicode` 由两部分组成。Go CLI 是入口，负责命令行交互、daemon 生命周期、SSE 渲染和审批输入；Python Runtime 是唯一的 agent 大脑，负责模型调用、工具执行、安全策略、审计、session 持久化和用量统计。二者之间是版本化 contract，因此将来的 IDE 插件或脚本嵌入只能复用它，不能另写一份 agent 逻辑。
+```console
+$ aicode "修一下 calc.py 里 add 的 bug，然后跑测试"
 
-模型通过 OpenAI-compatible `tools` 或 Anthropic `tool_use` 自主调用工具探索代码。这部分和别的编码 Agent 没有区别；不同的是边界怎么划：
+Tool: read_file
+calc.py has 12 lines; showing 1-12
 
-- **workspace 默认不可信。** 没有显式 `trust` 的仓库，Agent 的每一条 shell 命令都进沙箱（Docker 或 macOS seatbelt），项目 hooks 一律不执行——clone 一个仓库不该等于同意运行它的代码。
-- **写入必须过 diff。** 模型不直接落盘：它提交 patch proposal，你看到 unified diff 再决定。编辑前还要求它读过那个文件，否则拒绝——凭空捏造的 `old_text` 和"文件内容确实不同"在报错里长得一样。
-- **一轮对话有硬上限。** 步数、累计 token、累计成本、编辑后的验证轮次、连续重复动作，五个闸门。任何一个触发都走同一条收尾路径：你拿到的是一份总结，不是被截断的对话。
-- **审计日志是证据链。** 队列满时降级为同步写入而不是丢事件——丢一条记录会让"没有危险命令的记录"和"没有发生危险命令"变得无法区分。
-- **不做假成功。** provider 没配好就直接报错，不回退 stub；沙箱不可用就拒绝执行，不悄悄回退到宿主机；追踪开了但 SDK 没装就报错，不静默不追踪。
+Approval required: waiting for user approval
+--- a/calc.py
++++ b/calc.py
+@@ -1,2 +1,2 @@
+ def add(a, b):
+-    return a - b
++    return a + b
+Apply this edit? [y=apply / a=apply and allow later edits in this session / other=deny]: y
 
-配套有一套评测 harness：scripted 档零成本零抖动、做 CI 门禁；四档 live 用真实模型跑真实任务，每道题都有经校验的参考解，因此"模型不行"和"题出错了"能分开。
+Edit applied: calc.py (replace)
+Tool: bash
+  1 passed in 0.03s
 
-## 目录
+已修复 calc.py:2，add 现在返回 a + b，测试通过。
+```
+
+装好就能用，不需要账号、不需要服务端——只需要一个模型 API key。
+
+## 60 秒上手
+
+```bash
+make build                                   # 构建 CLI
+export OPENAI_API_KEY=sk-...                 # 或 ANTHROPIC_API_KEY
+./bin/aicode "解释这个项目的入口在哪"          # 一次性任务
+./bin/aicode chat                            # 常驻对话
+./bin/aicode tui                             # 全屏界面
+```
+
+首次运行会自动拉起本地 Runtime daemon。完整安装与依赖见 [快速开始](#快速开始)。
+
+## 它和别的编码 Agent 有什么不同
+
+模型通过 OpenAI-compatible `tools` 或 Anthropic `tool_use` 自主调用工具探索代码——这部分和别家没区别。不同的是**边界怎么划**，以及**出错时它承认还是遮掩**：
+
+- **workspace 默认不可信。** 没有显式 `trust` 的仓库，项目 hooks 一律不执行，运行仓库代码的命令逐次审批——clone 一个仓库不该等于同意运行它的代码。
+- **写入必须过 diff。** 模型不直接落盘：它提交 patch proposal，你看 unified diff 再决定。编辑前还要求它读过那个文件——凭空捏造的 `old_text` 和"文件确实变了"在报错里长得一样。
+- **一轮对话有硬上限。** 步数、累计 token、累计成本、验证轮次、连续重复动作，五个闸门。任何一个触发都走同一条收尾路径：你拿到一份总结，不是被截断的对话。
+- **审计日志是证据链。** 队列满时降级为同步写入而不是丢事件——丢一条会让"没有危险命令的记录"和"没有发生危险命令"变得无法区分。
+- **不做假成功。** provider 没配好直接报错，不回退 stub；沙箱不可用就拒绝执行，不悄悄回到宿主机；追踪开了但 SDK 没装就报错，不静默不追踪。
+
+配套的评测 harness 是这套主张的检验方式：`smoke` 档零成本零抖动做 CI 门禁，六档 live 用真实模型跑真实任务，**每道题都有经校验的参考解**，因此"模型不行"和"题出错了"能分开。评测跑出来的结论——包括几次证伪了我们自己假设的——记在 [ROADMAP.md](ROADMAP.md) 和 [TASKS.md](TASKS.md) 里。
+
+## 能力一览
+
+| 领域 | 能力 |
+| --- | --- |
+| **交互** | 一次性任务、`chat` 常驻 REPL、`tui` 全屏界面；SSE 流式输出、中途 steer、cancel、session resume/fork |
+| **工具** | 15 个内置工具：读/搜/列/关联文件、`bash`（含后台命令）、`edit_file`、`review_diff`、`ask_user`、`update_plan`、`skill`、`explore`/`delegate` 子 agent |
+| **安全** | Project Trust、Policy Engine 三态闸门、mandatory protected paths、read-before-write 与 stale 检测、secret 脱敏、子进程 env allowlist |
+| **执行** | 宿主机 / Docker 沙箱 / OS 沙箱（macOS seatbelt）三种后端，共用同一 execution contract、取消与审计 |
+| **上下文** | 三级管理：写入截断 → 折叠旧工具输出 → 结构化摘要；读取在行数/行宽/字节三轴有界；折叠占位符可被跟随重读 |
+| **扩展** | MCP 外部工具（stdio + Streamable HTTP）、Skills 指令单、项目 hooks、stdio JSONL RPC 供嵌入 |
+| **可运维** | SQLite 持久化、JSONL 审计（不丢事件）、可选 OTLP 追踪、token/成本统计、`runtime doctor` 诊断 |
+| **评测** | `smoke` CI 门禁 + 六档 live；确定性 grader，无 LLM-as-judge |
+
+## 项目结构
 
 ```text
-cli/        Go CLI
-runtime/    Python FastAPI Runtime daemon
-evals/      任务级评测：任务集、fixture、grader、runner、baseline
-schemas/    配置、工具、事件、执行、评测 schema
+cli/        Go CLI（零第三方依赖）
+runtime/    Python FastAPI Runtime daemon —— 唯一的 agent 大脑
+evals/      任务集、fixture、grader、runner、baseline
+schemas/    配置、工具、事件、执行、评测 contract
 scripts/    安装器、clean-home E2E、评测曲线分析
 ```
 
+CLI 和 Runtime 之间是**版本化 contract**，所以将来的 IDE 插件或脚本嵌入只能复用它，不能另写一份 agent 逻辑。
+
 核心文档：
 
-- [ARCHITECTURE.md](ARCHITECTURE.md)：当前架构和关键设计
-- [ROADMAP.md](ROADMAP.md)：能力状态和剩余计划
-- [TASKS.md](TASKS.md)：按依赖执行的任务台账、当前状态和完成记录
-- [schemas/config.schema.json](schemas/config.schema.json)：项目级 `.aicode/config.json` schema
-- [schemas/execution.schema.json](schemas/execution.schema.json)：Host/Docker/OS 沙箱共用 execution contract
-- [schemas/project-trust.schema.json](schemas/project-trust.schema.json)：仓库外 Project Trust store contract
-- [schemas/application-contract.schema.json](schemas/application-contract.schema.json)：Application Runtime 的 Session/Turn/Run contract v2
+- [ARCHITECTURE.md](ARCHITECTURE.md)：当前架构与关键设计取舍
+- [ROADMAP.md](ROADMAP.md)：能力状态与剩余计划
+- [TASKS.md](TASKS.md)：任务台账，含**为什么这么做**以及被证伪的假设
+- [schemas/](schemas/)：配置、执行、Project Trust、Application Runtime 的 contract
 
-设计计划、架构评审、评测报告和 SDK 示例放在 `docs/` 下。**`docs/` 在 `.gitignore` 里，不随仓库分发**，因此下文引用的 `docs/...` 路径只在本地检出中存在。
-
-## 已具备能力
-
-- CLI 自动启动、停止和查询 Runtime daemon；`aicode runtime doctor` 只读诊断。
-- HTTP + SSE 事件流，支持 `assistant.delta` 流式输出；Application contract v2 固定 Session snapshot、Turn request、Run/control receipt。
-- 原生 function calling Agent Loop，支持 OpenAI-compatible provider 和 Anthropic provider。
-- 12 个内置工具：`read_file`、`search`、`glob`、`list_files`、`related_files`、`review_diff`、`bash`、`edit_file`、`read_output`、`stop_command`、`ask_user`、`update_plan`。
-- `edit_file` 逐次展示 unified diff 并等待确认；同文件多处改动可用 `edits[]` 合成一次审批。
-- 长时命令：`bash(background=true)` 返回句柄，配 `read_output` / `stop_command`。
-- 中途提问：`ask_user` 在需求真正模糊时阻塞一轮问用户，超时与拒绝明确区分。
-- 计划状态：`update_plan` 登记多步计划，随 SSE 暴露进度。
-- 四类硬闸门：单轮预算、步数、无进展检测、编辑后验证；全部走同一条收尾路径，产出总结而不是截断对话。
-- 三级上下文管理：写入截断 → 折叠旧工具输出 → 结构化摘要；失效读取不进入摘要。读取在行数、单行宽度、总字节三个轴上都有界，折叠后的占位符点名被替换的调用，因此可被跟随重读。
-- 仓库外 Project Trust、shell 语句级风险分析、mandatory protected paths、read-before-write 与 stale 检测。
-- Policy Engine 三态闸门：`allow` / `ask` / `deny`；deny 不可由 approval 覆盖。
-- 三种执行后端：宿主机、Docker 沙箱、OS 级沙箱（macOS seatbelt）。
-- 项目 hooks：`post_edit` 格式化、`pre_bash` 门禁，与 Agent 命令共用 policy 与审计路径。
-- MCP 外部工具（stdio transport），与内置工具共用同一条审批链路。
-- SQLite session/message 持久化，支持 resume、fork、prune。
-- 常驻 `aicode chat` REPL：同 session follow-up、safe-boundary steer、cancel、status/model/compact/new/resume。
-- 本地 JSONL 审计日志（不丢事件、按大小轮转），可选 OTLP 分布式追踪。
-- token/cost 本地统计，支持按天、session、purpose/model/provider 查看。
-- Anthropic prompt caching（默认关闭），含 cache token 统计与分档计价。
-- 嵌入用 stdio JSONL RPC（`python -m app.sdk`），与 HTTP 共用同一个 Runtime。
-- 五档评测套件：`smoke`（CI 门禁）+ 四档 live。
+设计计划、架构评审与评测报告在 `docs/` 下。**`docs/` 在 `.gitignore` 里，不随仓库分发**，因此下文引用的 `docs/...` 路径只在本地检出中存在。
 
 ## 快速开始
+
+> 下文是参考手册。按需跳转：
+> [命令总览](#命令总览) ·
+> [Runtime daemon](#runtime-daemon) ·
+> [Project Trust 与本地执行安全](#project-trust-与本地执行安全) ·
+> [用户级配置](#用户级配置) ·
+> [项目级配置](#项目级配置) ·
+> [Subagent](#subagentexplore--delegate) ·
+> [Skills](#skills) ·
+> [MCP](#mcp-外部工具) ·
+> [Docker sandbox](#docker-sandbox) ·
+> [TUI](#全屏-tui) ·
+> [评测](#agent-eval-与-trace) ·
+> [当前边界](#当前边界)
 
 依赖：
 
@@ -164,6 +201,7 @@ CLI 会自动启动 Runtime daemon，并创建 session。没有配置可用 prov
 ```bash
 aicode "<task>"                  # 自由文本任务
 aicode chat [message]            # REPL 或单次对话
+aicode tui                       # 全屏界面（macOS / Linux）
 
 aicode task review
 aicode task diff
@@ -1190,6 +1228,8 @@ GOCACHE=.cache/go-build GOMODCACHE=.cache/go-mod go test ./cli/...
 - 不支持跨仓库自动写入；额外 workspace 只读。
 - 不默认访问互联网；网络相关动作需要经过策略和用户确认。
 - 不做无监督自动上线。
-- Docker sandbox 目前不支持可选写入挂载和 artifact 导出。
-- OS 级沙箱只支持 macOS。
+- OS 级沙箱只支持 macOS；Linux 明确不做（用 `docker` 后端），非 macOS 上选 `os` 会直接失败而不是假装生效。
+- `aicode tui` 只支持 macOS 与 Linux，且需要真实终端。
+- 子 agent 不并行：并行写入会引入文件冲突、审批竞争与 read-before-write 记录的竞态。
+- 提示词让模型主动调用子 agent **实测不生效**（deepseek-chat 上 0/4）；可靠用法是显式要求。
 - tree-sitter 索引、持久化 symbol/import/test mapping 已按 `live_scale_curve` 的结果降级：增长指数次线性（0.35）且在 100 模块处走平，模块数量这根轴上索引收益有限。仓库整体超出上下文窗口的情形尚未测过。
