@@ -299,7 +299,24 @@
       "message": "Primary provider 'anthropic' was unavailable; answered with 'openai_compatible' (gpt-5)."
     },
     {
-      "event_id": 32,
+      "type": "subagent.started",
+      "question": "Where is retry backoff implemented?",
+      "message": "Subagent started: Where is retry backoff implemented?",
+      "event_id": 32
+    },
+    {
+      "type": "subagent.finished",
+      "model_calls": 3,
+      "total_tokens": 4120,
+      "total_cost": 0.0012,
+      "tool_calls": 5,
+      "stop_reason": "",
+      "report_chars": 480,
+      "message": "Subagent finished: 3 model calls, 5 tool calls, 480 characters reported.",
+      "event_id": 33
+    },
+    {
+      "event_id": 34,
       "type": "final",
       "run_id": "run_fixture",
       "status": "completed",

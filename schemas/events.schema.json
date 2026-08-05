@@ -25,6 +25,8 @@
         "plan.updated",
         "mcp.server.failed",
         "provider.fallback",
+        "subagent.started",
+        "subagent.finished",
         "mcp.server.started",
         "assistant.delta",
         "tool.started",

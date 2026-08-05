@@ -24,6 +24,7 @@
         "read_output",
         "stop_command",
         "ask_user",
+        "explore",
         "skill",
         "update_plan",
         "review_diff"

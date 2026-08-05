@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | Agent Loop | `[x]` | 原生 function calling，模型自主调用工具；单一历史来源，无内存 transcript 副本。 |
 | 双 Provider | `[x]` | OpenAI-compatible 与 Anthropic，含 jitter 退避与 `Retry-After`；可选 fallback（默认关闭，切换必然可见）。 |
-| 工具系统 | `[x]` | 13 个内置工具；`ToolSpec` 单一声明，policy 与 loop 不再各持名单。 |
+| 工具系统 | `[x]` | 14 个内置工具；`ToolSpec` 单一声明，policy 与 loop 不再各持名单。 |
 | 只读工具并发 | `[x]` | 连续只读调用成组并发（上限 8），结果按调用顺序写回。 |
 | 计划状态 | `[x]` | `update_plan` + `plan.updated`，跨 daemon 重启可见，随 fork 带走。 |
 | 批量编辑 | `[x]` | 同文件多处替换一次审批；任一不匹配整体失败，不半应用。 |
@@ -214,7 +214,7 @@
 
 **触发条件**：评测显示跨会话重复解释同一项目约定造成可观测的 token 浪费。**当前未满足。**
 
-### 4.3 subagent（T-048）
+### 4.3 subagent（T-048）— 已交付，但触发条件未满足
 
 **触发条件**：评测显示主上下文被探索过程显著污染。**当前未满足。**
 

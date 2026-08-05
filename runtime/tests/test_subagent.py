@@ -1,0 +1,254 @@
+"""Read-only exploration in its own context.
+
+Started by explicit user decision, not by the evidence gate: across 42 live runs
+exploration was 57% of tool output but produced zero compactions and zero
+context-attributed failures, so the roadmap's trigger was not met. That is
+recorded in TASKS.md; these tests pin the boundaries that make the feature safe
+regardless of whether it proves valuable.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app.agent.subagent import (
+    MAX_REPORT_CHARS,
+    SUBAGENT_TOOLS,
+    run_subagent,
+    subagent_budget,
+)
+from app.agent.turn import TurnBudget, TurnLedger
+from app.agent.types import AgentRuntime
+from app.models.provider import CompletionResult, ToolCallRequest
+from app.tools.registry import build_tool_context
+from app.tools.runtime import DefaultToolRuntime
+
+
+class ScriptedRouter:
+    """Returns queued completions; records the tool schemas it was offered."""
+
+    settings = None
+    primary = None
+
+    def __init__(self, *results: CompletionResult) -> None:
+        self.results = list(results)
+        self.offered: list[list[str]] = []
+
+    async def stream_complete(self, **kwargs):
+        self.offered.append([schema["name"] for schema in kwargs.get("tools") or []])
+        return self.results.pop(0) if self.results else text_result("done")
+
+
+def text_result(text: str, *, tokens: int = 100, cost: float = 0.001) -> CompletionResult:
+    return CompletionResult(
+        text=text, model="m", provider="p", input_tokens=tokens, output_tokens=10,
+        estimated_cost=cost, tool_calls=[],
+    )
+
+
+def call_result(name: str, arguments: dict, *, call_id: str = "c1") -> CompletionResult:
+    return CompletionResult(
+        text="", model="m", provider="p", input_tokens=100, output_tokens=10, estimated_cost=0.001,
+        tool_calls=[ToolCallRequest(id=call_id, name=name, arguments=arguments)],
+    )
+
+
+def make_runtime(router: ScriptedRouter) -> AgentRuntime:
+    return AgentRuntime(model_runtime=router, trace=None, tools=DefaultToolRuntime())
+
+
+def small_budget(**overrides) -> TurnBudget:
+    base = {"max_total_tokens": 100_000, "max_total_cost": 1.0, "max_steps": 6}
+    base.update(overrides)
+    return TurnBudget(**base)
+
+
+def test_the_budget_is_carved_from_what_the_parent_has_left() -> None:
+    """A fresh budget per child is how a turn escapes its own spend limit."""
+    parent = TurnBudget(max_total_tokens=1_000_000, max_total_cost=4.0)
+    spent = TurnLedger()
+    spent.total_tokens = 800_000
+    spent.total_cost = 3.0
+
+    child = subagent_budget(parent, spent)
+
+    assert child.max_total_tokens == 50_000  # (1,000,000 - 800,000) * 0.25
+    assert child.max_total_cost == pytest.approx(0.25)
+    assert child.max_steps <= parent.max_steps
+
+
+def test_a_spent_parent_leaves_nothing_to_delegate() -> None:
+    parent = TurnBudget(max_total_tokens=1_000, max_total_cost=1.0)
+    spent = TurnLedger()
+    spent.total_tokens = 1_000
+
+    assert subagent_budget(parent, spent).max_total_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_only_read_only_tools_are_offered(tmp_path: Path) -> None:
+    router = ScriptedRouter(text_result("answer"))
+
+    await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="where?",
+        budget=small_budget(),
+    )
+
+    assert set(router.offered[0]) == set(SUBAGENT_TOOLS)
+    for forbidden in ("edit_file", "bash", "explore", "ask_user", "update_plan"):
+        assert forbidden not in router.offered[0]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_it_was_not_offered_is_refused(tmp_path: Path) -> None:
+    """Filtering the schemas is only half of an allowlist.
+
+    A model can emit a name it was never shown, and honouring it would let a
+    subagent reach a tool the caller did not grant — including `edit_file`,
+    whose approval prompt nobody would see.
+    """
+    router = ScriptedRouter(
+        call_result("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}),
+        text_result("done"),
+    )
+    (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
+
+    await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="edit it",
+        budget=small_budget(),
+    )
+
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x\n"
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_cannot_spawn_a_subagent(tmp_path: Path) -> None:
+    """Depth one. Budget accounting over a tree is a problem worth not having."""
+    router = ScriptedRouter(call_result("explore", {"question": "deeper"}), text_result("done"))
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="go deeper",
+        budget=small_budget(),
+    )
+
+    assert "explore" not in router.offered[0]
+    assert outcome.model_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_the_report_replaces_the_reading(tmp_path: Path) -> None:
+    """The whole point: the caller gains a paragraph, not the files."""
+    body = "\n".join(f"# line {index}" for index in range(400))
+    (tmp_path / "big.py").write_text(body, encoding="utf-8")
+    router = ScriptedRouter(
+        call_result("read_file", {"path": "big.py"}),
+        text_result("It is in big.py:1-400."),
+    )
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="where?",
+        budget=small_budget(),
+    )
+
+    assert outcome.report == "It is in big.py:1-400."
+    assert len(outcome.report) < len(body) / 10
+    assert outcome.tool_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_budget_stops_the_subagent(tmp_path: Path) -> None:
+    """Tool calls, not text: a text-only reply ends the subagent by answering,
+    which is a different exit than being cut off."""
+    router = ScriptedRouter(
+        *[
+            CompletionResult(
+                text="", model="m", provider="p", input_tokens=5_000, output_tokens=10,
+                estimated_cost=0.001,
+                tool_calls=[ToolCallRequest(id=f"c{index}", name="list_files", arguments={"path": "."})],
+            )
+            for index in range(6)
+        ]
+    )
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="loop",
+        budget=small_budget(max_total_tokens=6_000),
+    )
+
+    assert outcome.stop_reason == "tokens"
+    assert outcome.total_tokens >= 5_000
+
+
+@pytest.mark.asyncio
+async def test_a_runaway_subagent_stops_at_the_step_cap(tmp_path: Path) -> None:
+    router = ScriptedRouter(*[call_result("list_files", {"path": "."}, call_id=f"c{i}") for i in range(20)])
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="loop",
+        budget=small_budget(max_steps=3),
+    )
+
+    assert outcome.stop_reason == "steps"
+    assert outcome.model_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_a_failing_tool_does_not_end_the_subagent(tmp_path: Path) -> None:
+    """A missing file is a fact to report, not a crash to propagate upward."""
+    router = ScriptedRouter(
+        call_result("read_file", {"path": "nope.py"}),
+        text_result("That file does not exist."),
+    )
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="read it",
+        budget=small_budget(),
+    )
+
+    assert outcome.report == "That file does not exist."
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_report_is_truncated(tmp_path: Path) -> None:
+    """A report longer than the reading it replaces defeats the purpose."""
+    router = ScriptedRouter(text_result("x" * (MAX_REPORT_CHARS + 1_000)))
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="ramble",
+        budget=small_budget(),
+    )
+
+    assert "report truncated" in outcome.report
+    assert len(outcome.report) <= MAX_REPORT_CHARS + 50
+
+
+@pytest.mark.asyncio
+async def test_a_silent_subagent_still_reports_something(tmp_path: Path) -> None:
+    router = ScriptedRouter(text_result(""))
+
+    outcome = await run_subagent(
+        runtime=make_runtime(router),
+        context=build_tool_context(str(tmp_path), "default"),
+        question="say nothing",
+        budget=small_budget(),
+    )
+
+    assert outcome.report.strip()

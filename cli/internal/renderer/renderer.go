@@ -499,6 +499,12 @@ func RenderEventTo(out io.Writer, event map[string]any) {
 		// Reported rather than swallowed: the user configured this server and
 		// would otherwise just find its tools quietly missing.
 		fmt.Fprintf(out, "MCP server %q failed to start: %s\n", stringValue(event["server"]), stringValue(event["error"]))
+	case "subagent.started":
+		fmt.Fprintf(out, "\n%s\n", stringValue(event["message"]))
+	case "subagent.finished":
+		// The cost is shown because the subagent's spend comes out of this
+		// turn's budget: work the user cannot see still has to be accountable.
+		fmt.Fprintf(out, "%s\n", stringValue(event["message"]))
 	case "provider.fallback":
 		// Never silent. Answering from another provider changes the price, the
 		// declared capabilities and what a rerun would produce, so the switch is

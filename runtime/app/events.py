@@ -22,6 +22,8 @@ EVENT_TYPES = frozenset(
         "mcp.server.started",
         "mcp.server.failed",
         "provider.fallback",
+        "subagent.started",
+        "subagent.finished",
         "assistant.delta",
         "tool.started",
         "tool.output",

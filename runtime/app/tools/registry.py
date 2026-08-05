@@ -374,6 +374,37 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="explore",
+        description=(
+            "Delegate a focused read-only investigation to a subagent with its own context. "
+            "Use it when answering a question would mean reading many files whose contents you will not "
+            "need afterwards: 'where is X implemented', 'which callers depend on Y', 'how does Z flow'. "
+            "You get back a short report with file and line citations, not the files themselves. "
+            "The subagent cannot edit files or run commands, and its spend comes out of this turn's budget."
+        ),
+        # Read-only: it can only reach read-only tools, so it needs no approval
+        # for the same reason `read_file` needs none. Not parallelisable with
+        # other calls, though — see `read_only` below, which the loop uses to
+        # decide grouping; a subagent is expensive and should not be fanned out
+        # by accident.
+        read_only=False,
+        approval="none",
+        # Hidden in the read-only modes rather than offered there: `read_only`
+        # is False, so the policy engine would deny it, and offering a tool that
+        # is always refused teaches the model to spend calls on it.
+        hidden_in_modes=WRITE_HIDDEN_MODES,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "One specific question to answer by reading the workspace.",
+                }
+            },
+            "required": ["question"],
+        },
+    ),
+    ToolSpec(
         name="skill",
         description=(
             "Load a named skill's instructions before doing that kind of work. "

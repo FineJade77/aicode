@@ -10,6 +10,7 @@ from app.agent.policy import PolicyEngine
 from app.agent.progress import StallTracker
 from app.agent.prompts import build_system_prompt, stall_note, verify_note, wind_down_note
 from app.agent.session import AgentSession, ApprovalDecision
+from app.agent.subagent import run_subagent, subagent_budget
 from app.agent.turn import TurnBudget, TurnLedger, assistant_message, tool_message, user_message, user_note
 from app.agent.types import AgentRequest, AgentRuntime
 from app.agent.verify import VerifyOutcome, VerifyTracker, summarize_failure
@@ -177,6 +178,8 @@ async def run_turn(session: AgentSession, request: AgentRequest, runtime: AgentR
             policy,
             context,
             edits_applied_before=applied_edits,
+            ledger=ledger,
+            budget=budget,
         )
         if step.applied_edits:
             verify.note_edit_applied()
@@ -441,6 +444,8 @@ async def execute_tool_calls(
     context: Any,
     *,
     edits_applied_before: int = 0,
+    ledger: TurnLedger | None = None,
+    budget: TurnBudget | None = None,
 ) -> StepOutcome:
     """Run one turn's tool calls, overlapping consecutive read-only ones.
 
@@ -474,7 +479,9 @@ async def execute_tool_calls(
             )
         else:
             session.mark_agent_progress(f"tool.{group[0].name}")
-            outcomes = [await execute_gated(session, request, group[0], runtime, policy, context)]
+            outcomes = [
+                await execute_gated(session, request, group[0], runtime, policy, context, ledger, budget)
+            ]
 
         for call, call_result in zip(group, outcomes, strict=True):
             outcome.applied_edits += call_result.applied_edits
@@ -579,6 +586,8 @@ async def execute_gated(
     runtime: AgentRuntime,
     policy: PolicyEngine,
     context: Any,
+    ledger: TurnLedger | None = None,
+    budget: TurnBudget | None = None,
 ) -> ToolCallResult:
     parse_error = None
     if not isinstance(call.arguments, dict):
@@ -690,6 +699,9 @@ async def execute_gated(
             }
         )
         return ToolCallResult(f"[denied by policy] {gate.reason}", ok=False)
+
+    if call.name == "explore":
+        return await execute_explore(session, call, runtime, context, ledger, budget)
 
     if spec is not None and spec.approval == "diff":
         # Declared behaviour, not a hardcoded tool name: any future tool that
@@ -857,6 +869,69 @@ def latest_selection(session: AgentSession, kind: str) -> set[str]:
             newest = approval.created_at
             selection = approval.selection
     return set(selection)
+
+
+async def execute_explore(
+    session: AgentSession,
+    call: ToolCallRequest,
+    runtime: AgentRuntime,
+    context: Any,
+    ledger: TurnLedger | None,
+    budget: TurnBudget | None,
+) -> ToolCallResult:
+    """Run a read-only subagent and fold its spend into this turn.
+
+    The child's usage is added to the parent's ledger rather than tracked
+    separately: a turn that can spawn work outside its own budget does not have
+    a budget. The report comes back as the tool result, so the main history
+    gains a paragraph where it would otherwise have gained twenty file reads.
+    """
+    question = str(call.arguments.get("question") or "").strip()
+    if not question:
+        return ToolCallResult("[explore failed] a question is required", ok=False)
+    if ledger is None or budget is None:
+        # Only the turn loop has these. Anything else calling `explore` would be
+        # spawning unbudgeted work, so it is refused rather than defaulted.
+        return ToolCallResult("[explore failed] subagents are only available inside a turn", ok=False)
+
+    child_budget = subagent_budget(budget, ledger)
+    if child_budget.max_total_tokens <= 0:
+        return ToolCallResult("[explore skipped] this turn has no budget left to delegate", ok=False)
+
+    await session.events.put(
+        {
+            "type": "subagent.started",
+            "question": question[:200],
+            "tool_call_id": call.id,
+            "message": f"Subagent started: {question[:120]}",
+        }
+    )
+    outcome = await run_subagent(runtime=runtime, context=context, question=question, budget=child_budget)
+    # Charged to the parent before anything else can spend.
+    ledger.total_tokens += outcome.total_tokens
+    ledger.total_cost += outcome.total_cost
+    ledger.model_calls += outcome.model_calls
+
+    payload = outcome.to_dict()
+    if runtime.trace is not None:
+        runtime.trace.record(
+            "subagent.finished",
+            session_id=session.session_id,
+            workspace=session.workspace,
+            data={"question_hash": stable_hash(question), **payload},
+        )
+    await session.events.put(
+        {
+            "type": "subagent.finished",
+            "tool_call_id": call.id,
+            **payload,
+            "message": (
+                f"Subagent finished: {outcome.model_calls} model calls, "
+                f"{outcome.tool_calls} tool calls, {len(outcome.report)} characters reported."
+            ),
+        }
+    )
+    return ToolCallResult(outcome.report, ok=True)
 
 
 async def execute_edit(

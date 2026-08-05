@@ -24,7 +24,7 @@ def test_schema_names_and_modes():
     assert names == {
         "read_file", "search", "glob", "list_files", "related_files",
         "bash", "edit_file", "update_plan", "ask_user", "review_diff",
-        "read_output", "stop_command", "skill",
+        "read_output", "stop_command", "skill", "explore",
     }
     # `skill` stays available in the read-only modes: a review checklist is
     # exactly the kind of instruction sheet a skill is for, and loading one
