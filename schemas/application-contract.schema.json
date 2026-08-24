@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/application-contract.schema.json",
+  "x-aicode-contract-version": "2.0",
+  "title": "aicode Application Runtime Contract",
+  "$defs": {
+    "turnRequest": {
+      "type": "object",
+      "required": [
+        "message",
+        "mode",
+        "workspace"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "runReceipt": {
+      "type": "object",
+      "required": [
+        "status",
+        "run_id"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "accepted",
+            "queued"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runControl": {
+      "type": "object",
+      "required": [
+        "status",
+        "run_id",
+        "queued"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "cancelled",
+            "idle"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "steerReceipt": {
+      "type": "object",
+      "required": [
+        "status",
+        "run_id",
+        "pending"
+      ],
+      "properties": {
+        "status": {
+          "const": "queued"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "compactionReceipt": {
+      "type": "object",
+      "required": [
+        "status",
+        "compaction"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "compacted",
+            "unchanged"
+          ]
+        },
+        "compaction": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentRunState": {
+      "type": "object",
+      "required": [
+        "running",
+        "queued",
+        "pending_steers",
+        "current_run_id",
+        "stage",
+        "started_at",
+        "last_progress_at",
+        "elapsed_seconds",
+        "stalled_seconds"
+      ],
+      "properties": {
+        "running": {
+          "type": "boolean"
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending_steers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "current_run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_progress_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elapsed_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stalled_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "sessionSnapshot": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "workspace",
+        "created_at",
+        "updated_at",
+        "messages",
+        "approvals",
+        "agent"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "agent": {
+          "$ref": "#/$defs/agentRunState"
+        },
+        "plan": {
+          "type": "array",
+          "description": "The model's externalised plan for the current task; replaced wholesale by update_plan.",
+          "items": {
+            "type": "object",
+            "required": [
+              "text",
+              "status"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "done"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

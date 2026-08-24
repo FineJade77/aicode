@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/install-manifest.schema.json",
+  "title": "aicode Install Manifest",
+  "type": "object",
+  "required": ["schema_version", "version", "runtime_dir", "python"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Runtime directory relative to the manifest directory."
+    },
+    "python": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Managed Python executable relative to the manifest directory."
+    }
+  },
+  "additionalProperties": false
+}

@@ -13,10 +13,10 @@ import (
 func SetReviewRuleDisabled(workspacePath string, rule string, disabled bool, knownRules []string) (string, []string, error) {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
-		return "", nil, errors.New("rule id 不能为空")
+		return "", nil, errors.New("rule id must not be empty")
 	}
 	if !knownRuleSet(knownRules)[rule] {
-		return "", nil, fmt.Errorf("未知 review 规则: %s。运行 aicode review-rules 查看支持列表", rule)
+		return "", nil, fmt.Errorf("unknown review rule: %s; run aicode project review list for supported rules", rule)
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -77,7 +77,7 @@ func SetReviewNumber(workspacePath string, key string, value int) (string, strin
 		return "", "", 0, err
 	}
 	if value < minValue || value > maxValue {
-		return "", "", 0, fmt.Errorf("%s 必须在 %d 到 %d 之间", key, minValue, maxValue)
+		return "", "", 0, fmt.Errorf("%s must be between %d and %d", key, minValue, maxValue)
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -123,7 +123,7 @@ func reviewNumberField(key string) (string, int, int, error) {
 	case "maxFindings":
 		return "maxFindings", 1, 500, nil
 	default:
-		return "", 0, 0, fmt.Errorf("未知 review 配置项: %s。支持 largeDiffThreshold 或 maxFindings", key)
+		return "", 0, 0, fmt.Errorf("unknown review setting: %s; use largeDiffThreshold or maxFindings", key)
 	}
 }
 
@@ -152,7 +152,7 @@ func readProjectConfig(path string) (map[string]any, error) {
 
 	var raw map[string]any
 	if err := json.Unmarshal(content, &raw); err != nil {
-		return nil, fmt.Errorf("项目配置不是合法 JSON: %w", err)
+		return nil, fmt.Errorf("project configuration is not valid JSON: %w", err)
 	}
 	return raw, nil
 }

@@ -1,0 +1,82 @@
+{
+  "contract_version": "1.0",
+  "task_id": "live_cross_move_helper",
+  "suite": "live",
+  "description": "Move a helper into a shared module and update its caller.",
+  "fixture": "live_move_helper",
+  "user_request": "Move slugify out of posts.py into text_utils.py, and have posts.py import it from there instead of defining it. Run the tests.",
+  "mode": "default",
+  "tags": [
+    "cross_file",
+    "edit",
+    "verification"
+  ],
+  "trust": "trusted",
+  "approval_policy": {
+    "edit": "accept",
+    "tool": "accept"
+  },
+  "provider_mode": "live",
+  "profile": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "context_window": 200000,
+    "max_output_tokens": 8192,
+    "input_per_1m": 3.0,
+    "output_per_1m": 15.0
+  },
+  "budgets": {
+    "max_model_calls": 40,
+    "max_tokens": 300000,
+    "max_cost": 0.5,
+    "wall_time_seconds": 300
+  },
+  "checks": {
+    "test_commands": [
+      [
+        "python3",
+        "-m",
+        "pytest",
+        "-q"
+      ]
+    ],
+    "required_events": [
+      "edit.applied",
+      "usage.recorded",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "tool.finished",
+      "session.final"
+    ],
+    "minimum_compactions": 0,
+    "expected_approvals": {
+      "edit": "accept"
+    },
+    "files": [
+      {
+        "path": "text_utils.py",
+        "contains": [
+          "def slugify"
+        ]
+      },
+      {
+        "path": "posts.py",
+        "contains": [
+          "text_utils"
+        ],
+        "not_contains": [
+          "def slugify"
+        ]
+      }
+    ],
+    "allowed_changed_paths": [
+      "text_utils.py",
+      "posts.py"
+    ],
+    "forbidden_changed_paths": [
+      "test_move_helper.py"
+    ]
+  }
+}

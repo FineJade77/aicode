@@ -1,0 +1,334 @@
+{
+  "contract_version": "2.0",
+  "events": [
+    {
+      "event_id": 1,
+      "type": "session.created",
+      "session_id": "sess_fixture",
+      "workspace": "/workspace"
+    },
+    {
+      "event_id": 2,
+      "type": "run.queued",
+      "run_id": "run_fixture",
+      "status": "accepted",
+      "queue_position": 1,
+      "message": "Run accepted."
+    },
+    {
+      "event_id": 3,
+      "type": "run.started",
+      "run_id": "run_fixture",
+      "message": "Started the current run."
+    },
+    {
+      "event_id": 4,
+      "type": "assistant.delta",
+      "run_id": "run_fixture",
+      "text": "Inspecting"
+    },
+    {
+      "event_id": 5,
+      "type": "tool.started",
+      "run_id": "run_fixture",
+      "tool": "read_file",
+      "tool_call_id": "tool_fixture",
+      "args": {
+        "path": "README.md"
+      },
+      "risk_level": "low"
+    },
+    {
+      "event_id": 6,
+      "type": "tool.output",
+      "run_id": "run_fixture",
+      "tool": "read_file",
+      "tool_call_id": "tool_fixture",
+      "text": "# fixture",
+      "data": {
+        "path": "README.md",
+        "truncated": false
+      },
+      "duration_ms": 12,
+      "future_field": {
+        "cache_hit": true
+      }
+    },
+    {
+      "event_id": 7,
+      "type": "tool.denied",
+      "run_id": "run_fixture",
+      "tool": "bash",
+      "tool_call_id": "tool_denied",
+      "error": "denied by policy",
+      "risk_level": "high"
+    },
+    {
+      "event_id": 8,
+      "type": "tool.rejected",
+      "run_id": "run_fixture",
+      "tool": "bash",
+      "tool_call_id": "tool_rejected",
+      "error": "rejected by user",
+      "risk_level": "medium"
+    },
+    {
+      "event_id": 9,
+      "type": "tool.error",
+      "run_id": "run_fixture",
+      "tool": "bash",
+      "tool_call_id": "tool_error",
+      "error": "command failed",
+      "duration_ms": 20,
+      "exit_code": 1,
+      "timed_out": false
+    },
+    {
+      "event_id": 10,
+      "type": "approval.requested",
+      "run_id": "run_fixture",
+      "approval_id": "appr_fixture",
+      "kind": "tool",
+      "tool": "bash",
+      "tool_call_id": "tool_approval",
+      "message": "waiting for user approval"
+    },
+    {
+      "type": "question.asked",
+      "run_id": "run_fixture",
+      "approval_id": "appr_fixture_q",
+      "question": "Which test framework should the new tests use?",
+      "options": [
+        "pytest",
+        "unittest"
+      ],
+      "message": "waiting for the user to answer",
+      "event_id": 11
+    },
+    {
+      "event_id": 12,
+      "type": "approval.expired",
+      "run_id": "run_fixture",
+      "approval_id": "appr_fixture",
+      "kind": "tool",
+      "tool_call_id": "tool_approval",
+      "message": "approval expired"
+    },
+    {
+      "event_id": 13,
+      "type": "edit.auto_approved",
+      "run_id": "run_fixture",
+      "path": "app.py",
+      "tool_call_id": "tool_edit_auto"
+    },
+    {
+      "event_id": 14,
+      "type": "hook.finished",
+      "event": "post_edit",
+      "path": "app.py",
+      "tool_call_id": "tc_1",
+      "hooks": [
+        "ruff format {path}"
+      ]
+    },
+    {
+      "event_id": 15,
+      "type": "hook.blocked",
+      "event": "pre_bash",
+      "hooks": [
+        "make lint"
+      ],
+      "reason": "hook `make lint` failed (exit=1)"
+    },
+    {
+      "event_id": 16,
+      "type": "edit.applied",
+      "run_id": "run_fixture",
+      "path": "app.py",
+      "kind": "replace",
+      "tool_call_id": "tool_edit",
+      "patch_hash": "sha256:fixture",
+      "duration_ms": 8
+    },
+    {
+      "event_id": 17,
+      "type": "edit.rejected",
+      "run_id": "run_fixture",
+      "path": "config.py",
+      "tool_call_id": "tool_edit_rejected"
+    },
+    {
+      "event_id": 18,
+      "type": "usage.recorded",
+      "run_id": "run_fixture",
+      "provider": "fixture",
+      "model": "fixture-model",
+      "purpose": "main",
+      "input_tokens": 10,
+      "output_tokens": 5,
+      "estimated_cost": 0
+    },
+    {
+      "event_id": 19,
+      "type": "context.budget",
+      "run_id": "run_fixture",
+      "purpose": "history",
+      "compacted": true,
+      "before_tokens": 100,
+      "after_tokens": 50,
+      "stale_reads": [
+        "calc.py"
+      ]
+    },
+    {
+      "event_id": 20,
+      "type": "run.cancelled",
+      "run_id": "run_fixture",
+      "status": "cancelled",
+      "message": "The current run was cancelled."
+    },
+    {
+      "event_id": 21,
+      "type": "error",
+      "run_id": "run_fixture",
+      "error": "Agent execution failed",
+      "error_type": "RuntimeError"
+    },
+    {
+      "event_id": 22,
+      "type": "run.steer.queued",
+      "run_id": "run_fixture",
+      "status": "queued",
+      "pending": 1,
+      "message": "Steering guidance queued."
+    },
+    {
+      "event_id": 23,
+      "type": "run.steer.applied",
+      "run_id": "run_fixture",
+      "count": 1,
+      "skipped_tool_calls": 0,
+      "message": "Steering guidance applied."
+    },
+    {
+      "event_id": 24,
+      "type": "run.budget.exceeded",
+      "run_id": "run_fixture",
+      "reason": "cost",
+      "total_tokens": 1200,
+      "total_cost": 5.0,
+      "model_calls": 7,
+      "limit": 5.0,
+      "message": "The cost budget for this turn is exhausted; wrapping up without further tool calls."
+    },
+    {
+      "event_id": 25,
+      "type": "mcp.server.started",
+      "server": "files",
+      "tools": [
+        "mcp__files__read",
+        "mcp__files__stat"
+      ],
+      "message": "MCP server 'files' started with 2 tools."
+    },
+    {
+      "event_id": 26,
+      "type": "mcp.server.failed",
+      "server": "broken",
+      "error": "RuntimeError: server exited during handshake",
+      "message": "MCP server 'broken' did not start; its tools are unavailable."
+    },
+    {
+      "event_id": 27,
+      "type": "plan.updated",
+      "items": [
+        {
+          "text": "Locate the failing assertion",
+          "status": "done"
+        },
+        {
+          "text": "Fix the off-by-one",
+          "status": "in_progress"
+        },
+        {
+          "text": "Run the test suite",
+          "status": "pending"
+        }
+      ],
+      "message": "Plan updated (3 items)."
+    },
+    {
+      "event_id": 28,
+      "type": "verify.attempt",
+      "round": 1,
+      "limit": 3,
+      "passed": false,
+      "exit_code": 1,
+      "summary": "FAILED tests/test_math.py::test_add",
+      "message": "Verification attempt 1 of 3 failed (exit 1)."
+    },
+    {
+      "event_id": 29,
+      "type": "run.verification.exhausted",
+      "run_id": "run_fixture",
+      "rounds": 3,
+      "limit": 3,
+      "command": "pytest -q",
+      "exit_code": 1,
+      "summary": "FAILED tests/test_math.py::test_add",
+      "message": "Verification did not pass in 3 attempts; wrapping up with a report instead of continuing to edit."
+    },
+    {
+      "type": "run.no_progress",
+      "run_id": "run_fixture",
+      "reason": "repeated_failure",
+      "count": 5,
+      "limit": 5,
+      "stopped": true,
+      "message": "No progress: the same action repeated 5 times; wrapping up with a report.",
+      "event_id": 30
+    },
+    {
+      "event_id": 31,
+      "type": "provider.fallback",
+      "purpose": "main",
+      "primary": "anthropic",
+      "fallback": "openai_compatible",
+      "model": "gpt-5",
+      "error": "anthropic HTTP 503: overloaded",
+      "message": "Primary provider 'anthropic' was unavailable; answered with 'openai_compatible' (gpt-5)."
+    },
+    {
+      "type": "subagent.started",
+      "question": "Where is retry backoff implemented?",
+      "message": "Subagent started: Where is retry backoff implemented?",
+      "event_id": 32
+    },
+    {
+      "type": "subagent.finished",
+      "model_calls": 3,
+      "total_tokens": 4120,
+      "total_cost": 0.0012,
+      "tool_calls": 5,
+      "stop_reason": "",
+      "report_chars": 480,
+      "message": "Subagent finished: 3 model calls, 5 tool calls, 480 characters reported.",
+      "event_id": 33
+    },
+    {
+      "event_id": 34,
+      "type": "final",
+      "run_id": "run_fixture",
+      "status": "completed",
+      "summary": "fixture complete"
+    }
+  ],
+  "forward_compat_event": {
+    "event_id": 100,
+    "type": "future.progress",
+    "message": "future event",
+    "future_field": {
+      "percent": 50
+    }
+  }
+}

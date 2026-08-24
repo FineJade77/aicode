@@ -28,7 +28,7 @@ func GetCommand(workspacePath string, name string) (string, string, bool, error)
 func SetTestCommand(workspacePath string, command string) (string, string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return "", "", errors.New("test command 不能为空")
+		return "", "", errors.New("test command must not be empty")
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")

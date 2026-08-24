@@ -1,0 +1,16 @@
+"""Shipment Log handler."""
+
+from contracts import Result
+
+
+def handle(records):
+    """Summarise shipment_log records.
+
+    Returns a Result whose `total` is the number of records processed.
+    """
+    total = 0
+    for record in records:
+        if record.get("kind") != "shipment_log":
+            continue
+        total += 1
+    return Result(name="shipment_log", total=total)

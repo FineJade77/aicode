@@ -6,22 +6,18 @@
   "properties": {
     "projectName": {
       "type": "string",
-      "description": "项目显示名，仅作为上下文提示。"
-    },
-    "defaultLanguage": {
-      "type": "string",
-      "enum": ["zh-CN", "en-US"],
-      "description": "项目级默认交互语言；创建 session 时优先于用户级 ui.language。"
+      "description": "Project display name, used only as a context hint."
     },
     "commands": {
       "type": "object",
-      "description": "项目常用命令记忆，会注入 prompt；commands.test/build/lint 也用于 Docker sandbox 命令探测，commands.test 还用于 aicode test。",
+      "description": "Known project commands injected into the prompt. commands.test/build/lint are also used for Docker sandbox detection, and commands.test is used by aicode test.",
       "additionalProperties": {
         "type": "string"
       }
     },
     "protectedPaths": {
       "type": "array",
+      "description": "Additional protected-path globs. Built-in .env, SSH/GPG/cloud credential, and private-key rules always apply and cannot be removed by repository configuration. Project Trust is also external to repository configuration.",
       "items": {
         "type": "string"
       }
@@ -52,7 +48,11 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name", "path", "mode"],
+        "required": [
+          "name",
+          "path",
+          "mode"
+        ],
         "properties": {
           "name": {
             "type": "string"
@@ -62,9 +62,118 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["read_only"]
+            "enum": [
+              "read_only"
+            ]
           }
         }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "description": "Project-level overrides for where Agent-issued commands run.",
+      "properties": {
+        "agentBashBackend": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "host",
+            "docker",
+            "os"
+          ],
+          "description": "Where the Agent's bash tool runs. 'auto' (default) keeps trusted workspaces on the host and sandboxes untrusted ones; 'host' always runs on the host; 'docker' always sandboxes in a container; 'os' always sandboxes with the platform sandbox (macOS seatbelt), which starts in milliseconds and needs no image but is a weaker boundary than a container. Omit to inherit the Runtime-wide AICODE_AGENT_BASH_BACKEND setting."
+        }
+      },
+      "additionalProperties": true
+    },
+    "mcp": {
+      "type": "object",
+      "description": "External tool servers spoken to over the Model Context Protocol.",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "command"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Namespace for this server's tools; they are exposed as mcp__<name>__<tool>."
+              },
+              "command": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "description": "argv used to launch the server; it speaks MCP over stdio."
+              },
+              "envAllowlist": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra environment variables the server may inherit, on top of the minimal default set. Provider keys and the Runtime token are never passed."
+              },
+              "startupTimeoutSeconds": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 300,
+                "default": 20
+              },
+              "callTimeoutSeconds": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 600,
+                "default": 60
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "hooks": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "Commands run around tool events. 'post_edit' runs after an edit lands (format what was written) and cannot veto it; 'pre_bash' runs before a shell command and refuses it on a non-zero exit, which is how a lint gate before commit works. Hook commands go through the same execution, policy and audit path as Agent commands, and are ignored entirely in an untrusted workspace because a hook is code chosen by whoever wrote the repository.",
+      "items": {
+        "type": "object",
+        "required": [
+          "event",
+          "command"
+        ],
+        "properties": {
+          "event": {
+            "enum": [
+              "post_edit",
+              "pre_bash"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shell command. {path} and {command} are substituted shell-quoted."
+          },
+          "match": {
+            "type": "string",
+            "description": "Glob against the edited path or the shell command; omit to match everything."
+          },
+          "timeout": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 600
+          },
+          "blocking": {
+            "type": "boolean",
+            "description": "pre_bash only: refuse the command when the hook fails. Default true."
+          }
+        },
+        "additionalProperties": false
       }
     }
   },

@@ -8,6 +8,7 @@ from app.tools.base import (
     ToolResult,
     display_path,
     is_protected_path,
+    is_within_workspace,
     resolve_tool_workspace,
     resolve_workspace_path,
     scoped_display_path,
@@ -24,13 +25,13 @@ class ListFilesTool:
         limit = int(args.get("limit", 80))
 
         if not root.exists():
-            return ToolResult(success=False, error=f"路径不存在: {root}")
+            return ToolResult(success=False, error=f"path does not exist: {root}")
         if not root.is_dir():
-            return ToolResult(success=False, error=f"不是目录: {root}")
+            return ToolResult(success=False, error=f"path is not a directory: {root}")
 
         files: list[str] = []
         walk(root, workspace_root, workspace_name, files, max_depth=max_depth, limit=limit, protected_paths=context.protected_paths)
-        text = "\n".join(f"- {item}" for item in files) if files else "未发现文件"
+        text = "\n".join(f"- {item}" for item in files) if files else "No files found"
         return ToolResult(success=True, text=text, data={"files": files, "workspace": workspace_name or "main"})
 
 
@@ -52,6 +53,8 @@ def walk(
     for child in sorted(root.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
         if len(out) >= limit:
             return
+        if not is_within_workspace(workspace, child):
+            continue
         if child.name in IGNORED_DIRS:
             continue
         rel = display_path(workspace, child)
@@ -59,7 +62,7 @@ def walk(
             continue
         suffix = "/" if child.is_dir() else ""
         out.append(scoped_display_path(workspace_name, workspace, child) + suffix)
-        if child.is_dir() and depth < max_depth:
+        if child.is_dir() and not child.is_symlink() and depth < max_depth:
             walk(
                 child,
                 workspace,

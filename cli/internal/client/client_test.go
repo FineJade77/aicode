@@ -25,7 +25,7 @@ func TestStreamEventsReconnectsWithLastEventID(t *testing.T) {
 		requestCount++
 		switch requestCount {
 		case 1:
-			return sseResponse("id: 1\nevent: plan.created\ndata: {\"type\":\"plan.created\",\"event_id\":1}\n\n"), nil
+			return sseResponse("id: 1\nevent: run.started\ndata: {\"type\":\"run.started\",\"event_id\":1}\n\n"), nil
 		case 2:
 			secondAfter = r.URL.Query().Get("after")
 			secondLastEventID = r.Header.Get("Last-Event-ID")
@@ -52,7 +52,7 @@ func TestStreamEventsReconnectsWithLastEventID(t *testing.T) {
 	if secondLastEventID != "1" {
 		t.Fatalf("Last-Event-ID = %q, want 1", secondLastEventID)
 	}
-	if want := []string{"plan.created", "final"}; !reflect.DeepEqual(eventTypes, want) {
+	if want := []string{"run.started", "final"}; !reflect.DeepEqual(eventTypes, want) {
 		t.Fatalf("events = %#v, want %#v", eventTypes, want)
 	}
 }
@@ -110,10 +110,14 @@ func TestStreamRunEventsSendsRunID(t *testing.T) {
 }
 
 func TestSendMessageReturnsRunID(t *testing.T) {
+	var requestBody map[string]any
 	api := New("http://runtime.test", "")
 	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost {
 			return nil, fmt.Errorf("method = %s, want POST", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			return nil, err
 		}
 		return jsonResponse(`{"status":"queued","run_id":"run_123"}`), nil
 	})}
@@ -125,7 +129,6 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 		Message:   "hello",
 		Mode:      "default",
 		Workspace: "/repo",
-		Language:  "zh-CN",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +136,9 @@ func TestSendMessageReturnsRunID(t *testing.T) {
 
 	if response.Status != "queued" || response.RunID != "run_123" {
 		t.Fatalf("response = %#v", response)
+	}
+	if _, ok := requestBody["language"]; ok {
+		t.Fatalf("send-message request contains removed language field: %#v", requestBody)
 	}
 }
 
@@ -157,7 +163,73 @@ func TestCancelRunReturnsCancelledRun(t *testing.T) {
 	if gotPath != "/v1/sessions/sess_1/cancel" {
 		t.Fatalf("path = %q", gotPath)
 	}
-	if response.Status != "cancelled" || response.RunID != "run_123" || response.Queued != 2 {
+	if response.Status != "cancelled" || response.RunID == nil || *response.RunID != "run_123" || response.Queued != 2 {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestExecutePostsVersionedExecutionContract(t *testing.T) {
+	var gotPath string
+	var got ExecutionRequest
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			return nil, err
+		}
+		return jsonResponse(`{
+			"execution_id":"exec_123",
+			"backend":"docker",
+			"action":"test",
+			"status":"succeeded",
+			"exit_code":0,
+			"stdout":"ok\n",
+			"stderr":"",
+			"duration_ms":12,
+			"timed_out":false,
+			"cancelled":false,
+			"future_field":"ignored"
+		}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := api.Execute(ctx, ExecutionRequest{
+		ExecutionID:    "exec_123",
+		Backend:        "docker",
+		Action:         "test",
+		Workspace:      "/repo",
+		TimeoutSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/executions" || got.Workspace != "/repo" {
+		t.Fatalf("path = %q, request = %#v", gotPath, got)
+	}
+	if response.Status != "succeeded" || response.ExitCode != 0 || response.ExecutionID != "exec_123" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestCancelExecutionEscapesID(t *testing.T) {
+	var gotPath string
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		return jsonResponse(`{"status":"cancelled","execution_id":"exec/1"}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := api.CancelExecution(ctx, "exec/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/executions/exec%2F1/cancel" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if response.Status != "cancelled" {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -325,7 +397,7 @@ func TestStreamUnauthorizedExplainsTokenRecovery(t *testing.T) {
 func assertRuntimeAuthHint(t *testing.T, err error) {
 	t.Helper()
 	text := err.Error()
-	for _, want := range []string{"Runtime 认证失败", "runtime.token", "aicode daemon stop", "aicode daemon start"} {
+	for _, want := range []string{"Runtime authentication failed", "runtime.token", "aicode runtime stop", "aicode runtime start"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("error %q does not contain %q", text, want)
 		}
@@ -361,5 +433,59 @@ func unauthorizedResponse() *http.Response {
 		StatusCode: http.StatusUnauthorized,
 		Status:     "401 Unauthorized",
 		Body:       io.NopCloser(strings.NewReader(`{"detail":"unauthorized"}`)),
+	}
+}
+
+func TestForkSessionSendsTheMessageID(t *testing.T) {
+	var gotPath string
+	var body map[string]any
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.EscapedPath()
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return jsonResponse(`{"session_id":"sess_new","source_session_id":"sess_1","message_count":3}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	messageID := 7
+	response, err := api.ForkSession(ctx, "sess_1", &messageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/sessions/sess_1/fork" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if body["message_id"] != float64(7) {
+		t.Fatalf("message_id = %#v", body["message_id"])
+	}
+	if response.SessionID != "sess_new" || response.MessageCount != 3 {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestForkSessionOmitsTheMessageIDWhenForkingAtTheTip(t *testing.T) {
+	var body map[string]any
+	api := New("http://runtime.test", "")
+	api.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return jsonResponse(`{"session_id":"sess_new","source_session_id":"sess_1","message_count":9}`), nil
+	})}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if _, err := api.ForkSession(ctx, "sess_1", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Omitted rather than sent as null, so the server's "fork at the tip"
+	// default is what applies.
+	if _, present := body["message_id"]; present {
+		t.Fatalf("message_id should be omitted, got %#v", body)
 	}
 }

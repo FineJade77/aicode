@@ -2,14 +2,13 @@ import json
 from pathlib import Path
 
 from app.project.config import load_project_config, parse_project_config
-from app.project.detect import detect_test_command
+from app.project.detect import detect_project_command, detect_test_command
 
 
 def test_parse_project_config() -> None:
     config = parse_project_config(
         {
             "projectName": "demo",
-            "defaultLanguage": "en-US",
             "commands": {"test": "python3 -m pytest tests/unit"},
             "protectedPaths": [".env", "secret/**"],
             "workspaces": [{"name": "api", "path": "../api", "mode": "read_only"}],
@@ -22,9 +21,12 @@ def test_parse_project_config() -> None:
     )
 
     assert config.project_name == "demo"
-    assert config.default_language == "en-US"
     assert config.commands["test"] == "python3 -m pytest tests/unit"
-    assert config.protected_paths == [".env", "secret/**"]
+    assert ".env" in config.protected_paths
+    assert ".ssh/**" in config.protected_paths
+    assert ".docker/**" in config.protected_paths
+    assert ".git/config" in config.protected_paths
+    assert "secret/**" in config.protected_paths
     assert config.workspaces[0].name == "api"
     assert config.review.disabled_rules == ["large_diff"]
     assert config.review.large_diff_threshold == 1200
@@ -55,7 +57,38 @@ def test_detect_test_command_uses_project_config_override(tmp_path: Path) -> Non
     assert detect_test_command(tmp_path) == "python3 -m pytest tests/unit"
 
 
+def test_detect_project_commands_for_go_workspace(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.test/demo\n", encoding="utf-8")
+
+    assert detect_project_command(tmp_path, "test") == "go test ./..."
+    assert detect_project_command(tmp_path, "build") == "go build ./..."
+    assert detect_project_command(tmp_path, "lint") == "go vet ./..."
+
+
+def test_detect_project_lint_uses_package_manager(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text('{"scripts":{"lint":"eslint ."}}', encoding="utf-8")
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
+
+    assert detect_project_command(tmp_path, "lint") == "pnpm lint"
+
+
 def write_project_config(tmp_path: Path, data: dict) -> None:
     config_dir = tmp_path / ".aicode"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_parse_project_config_reads_agent_bash_backend() -> None:
+    config = parse_project_config({"execution": {"agentBashBackend": "docker"}})
+    assert config.execution.agent_bash_backend == "docker"
+
+
+def test_parse_project_config_defaults_agent_bash_backend_to_inherit() -> None:
+    assert parse_project_config({}).execution.agent_bash_backend == ""
+
+
+def test_parse_project_config_ignores_unknown_agent_bash_backend() -> None:
+    """A typo must fall back to "inherit the Runtime setting", never to a
+    permissive default that would silently weaken the sandbox."""
+    config = parse_project_config({"execution": {"agentBashBackend": "hostt"}})
+    assert config.execution.agent_bash_backend == ""

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicode.dev/schemas/execution.schema.json",
+  "x-aicode-contract-version": "1.0",
+  "title": "aicode Execution Contract",
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "timed_out", "cancelled"]
+    },
+    "request": {
+      "type": "object",
+      "required": ["execution_id", "backend", "workspace"],
+      "properties": {
+        "execution_id": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "enum": ["host", "docker"]},
+        "argv": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "shell_command": {"type": "string", "minLength": 1},
+        "workspace": {"type": "string", "minLength": 1},
+        "action": {"type": "string"},
+        "mode": {"type": "string"},
+        "session_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "tool_call_id": {"type": "string"},
+        "allowed_roots": {"type": "array", "items": {"type": "string"}},
+        "writable_paths": {"type": "array", "items": {"type": "string"}},
+        "masked_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Paths that execution backends must hide or deny."
+        },
+        "env_allowlist": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Only these non-sensitive parent environment keys may reach the subprocess."
+        },
+        "trust_level": {
+          "type": "string",
+          "enum": ["trusted", "untrusted", "unspecified"]
+        },
+        "network": {"type": "string"},
+        "limits": {
+          "type": "object",
+          "required": ["timeout_seconds"],
+          "properties": {
+            "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 3600},
+            "cpus": {"type": ["string", "null"]},
+            "memory": {"type": ["string", "null"]},
+            "pids_limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 65535}
+          },
+          "additionalProperties": false
+        }
+      },
+      "oneOf": [
+        {"required": ["argv"], "not": {"required": ["shell_command"]}},
+        {"required": ["shell_command"], "not": {"required": ["argv"]}}
+      ],
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "backend",
+        "status",
+        "exit_code",
+        "stdout",
+        "stderr",
+        "duration_ms",
+        "timed_out",
+        "cancelled"
+      ],
+      "properties": {
+        "execution_id": {"type": "string"},
+        "backend": {"type": "string", "enum": ["host", "docker"]},
+        "status": {"$ref": "#/$defs/status"},
+        "exit_code": {"type": "integer"},
+        "stdout": {"type": "string"},
+        "stderr": {"type": "string"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "timed_out": {"type": "boolean"},
+        "cancelled": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

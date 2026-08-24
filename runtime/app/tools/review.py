@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from app.tools.base import ToolContext, ToolResult, is_protected_path, resolve_workspace_path
 from app.tools.command import CommandResult, run_command
-
 
 DEFAULT_MAX_FINDINGS = 50
 DEFAULT_LARGE_DIFF_THRESHOLD = 500
@@ -25,18 +24,18 @@ SECRET_PATTERNS = [
 ]
 
 RISKY_CODE_PATTERNS = [
-    (re.compile(r"\beval\s*\("), "eval 调用会执行动态代码，容易引入注入风险。", "risky_eval"),
-    (re.compile(r"\bexec\s*\("), "exec 调用会执行动态代码，容易引入注入风险。", "risky_exec"),
-    (re.compile(r"\bos\.system\s*\("), "os.system 会把字符串交给 shell 执行，请优先使用参数化 subprocess。", "risky_os_system"),
-    (re.compile(r"subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True"), "subprocess shell=True 需要额外审查命令注入风险。", "risky_shell_true"),
-    (re.compile(r"child_process\.exec\s*\("), "child_process.exec 会通过 shell 执行命令，请确认输入不可被用户控制。", "risky_child_exec"),
-    (re.compile(r"verify\s*=\s*False"), "TLS 校验被关闭，请确认只用于测试环境。", "risky_tls_verify"),
-    (re.compile(r"\.innerHTML\s*="), "直接写 innerHTML 可能引入 XSS，请优先使用安全渲染或显式净化。", "risky_inner_html"),
-    (re.compile(r"\bdangerouslySetInnerHTML\b"), "React dangerouslySetInnerHTML 需要确认输入已净化。", "risky_dangerously_set_inner_html"),
-    (re.compile(r"\byaml\.load\s*\((?![^)]*(SafeLoader|safe_load))"), "yaml.load 默认可能构造任意对象，请使用 yaml.safe_load 或 SafeLoader。", "risky_yaml_load"),
-    (re.compile(r"\bpickle\.(load|loads)\s*\("), "pickle 反序列化不可信输入会执行任意代码，请改用安全格式。", "risky_pickle"),
-    (re.compile(r"\bInsecureSkipVerify\s*:\s*true\b"), "Go TLS InsecureSkipVerify 会跳过证书校验，请确认只用于测试环境。", "risky_go_insecure_tls"),
-    (re.compile(r"\bchmod\s+777\b|os\.Chmod\([^,]+,\s*0?777\)"), "chmod 777 会授予过宽权限，请使用最小权限。", "risky_chmod_777"),
+    (re.compile(r"\beval\s*\("), "eval executes dynamic code and can introduce injection vulnerabilities.", "risky_eval"),
+    (re.compile(r"\bexec\s*\("), "exec executes dynamic code and can introduce injection vulnerabilities.", "risky_exec"),
+    (re.compile(r"\bos\.system\s*\("), "os.system passes a string to a shell; prefer a parameterized subprocess.", "risky_os_system"),
+    (re.compile(r"subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True"), "subprocess shell=True requires additional command-injection review.", "risky_shell_true"),
+    (re.compile(r"child_process\.exec\s*\("), "child_process.exec runs through a shell; verify that users cannot control its input.", "risky_child_exec"),
+    (re.compile(r"verify\s*=\s*False"), "TLS verification is disabled; verify that this is limited to tests.", "risky_tls_verify"),
+    (re.compile(r"\.innerHTML\s*="), "Direct innerHTML assignment can introduce XSS; prefer safe rendering or explicit sanitization.", "risky_inner_html"),
+    (re.compile(r"\bdangerouslySetInnerHTML\b"), "Verify that React dangerouslySetInnerHTML input is sanitized.", "risky_dangerously_set_inner_html"),
+    (re.compile(r"\byaml\.load\s*\((?![^)]*(SafeLoader|safe_load))"), "yaml.load can construct arbitrary objects; use yaml.safe_load or SafeLoader.", "risky_yaml_load"),
+    (re.compile(r"\bpickle\.(load|loads)\s*\("), "Deserializing untrusted pickle input can execute arbitrary code; use a safe format.", "risky_pickle"),
+    (re.compile(r"\bInsecureSkipVerify\s*:\s*true\b"), "Go TLS InsecureSkipVerify skips certificate validation; verify that this is limited to tests.", "risky_go_insecure_tls"),
+    (re.compile(r"\bchmod\s+777\b|os\.Chmod\([^,]+,\s*0?777\)"), "chmod 777 grants overly broad permissions; use least privilege.", "risky_chmod_777"),
 ]
 
 DEBUG_PATTERNS = [
@@ -93,110 +92,110 @@ REVIEW_RULES = [
     ReviewRule(
         rule_id="sensitive_path",
         severity="high",
-        title="受保护或敏感路径发生变更",
-        description="diff 触及受保护路径、生产配置、凭证文件或私钥文件。",
+        title="Protected or sensitive path changed",
+        description="The diff touches a protected path, production configuration, credential file, or private key.",
     ),
     ReviewRule(
         rule_id="secret_added",
         severity="high",
-        title="新增行包含疑似密钥",
-        description="新增内容匹配 API key、token、password、private key 等凭证特征。",
+        title="Added line may contain a secret",
+        description="Added content matches an API key, token, password, private key, or similar credential pattern.",
     ),
     ReviewRule(
         rule_id="deleted_test",
         severity="medium",
-        title="测试文件被删除",
-        description="变更删除测试文件，需要确认有替代覆盖或这是预期清理。",
+        title="Test file deleted",
+        description="A test file was deleted; verify replacement coverage or that the deletion is intentional.",
     ),
     ReviewRule(
         rule_id="risky_eval",
         severity="medium",
-        title="新增 eval 调用",
-        description="eval 会执行动态代码，容易引入注入风险。",
+        title="eval call added",
+        description="eval executes dynamic code and can introduce injection vulnerabilities.",
     ),
     ReviewRule(
         rule_id="risky_exec",
         severity="medium",
-        title="新增 exec 调用",
-        description="exec 会执行动态代码，容易引入注入风险。",
+        title="exec call added",
+        description="exec executes dynamic code and can introduce injection vulnerabilities.",
     ),
     ReviewRule(
         rule_id="risky_os_system",
         severity="medium",
-        title="新增 os.system 调用",
-        description="os.system 会把字符串交给 shell 执行，请优先使用参数化 subprocess。",
+        title="os.system call added",
+        description="os.system passes a string to a shell; prefer a parameterized subprocess.",
     ),
     ReviewRule(
         rule_id="risky_shell_true",
         severity="medium",
-        title="新增 subprocess shell=True",
-        description="subprocess shell=True 需要额外审查命令注入风险。",
+        title="subprocess shell=True added",
+        description="subprocess shell=True requires additional command-injection review.",
     ),
     ReviewRule(
         rule_id="risky_child_exec",
         severity="medium",
-        title="新增 child_process.exec",
-        description="child_process.exec 会通过 shell 执行命令，需要确认输入不可被用户控制。",
+        title="child_process.exec added",
+        description="child_process.exec runs through a shell; verify that users cannot control its input.",
     ),
     ReviewRule(
         rule_id="risky_tls_verify",
         severity="medium",
-        title="关闭 TLS 校验",
-        description="TLS 校验被关闭，需要确认只用于测试环境。",
+        title="TLS verification disabled",
+        description="TLS verification is disabled; verify that this is limited to tests.",
     ),
     ReviewRule(
         rule_id="risky_inner_html",
         severity="medium",
-        title="直接写 innerHTML",
-        description="直接写 innerHTML 可能引入 XSS，需要确认内容已净化。",
+        title="Direct innerHTML assignment",
+        description="Direct innerHTML assignment can introduce XSS; verify that the content is sanitized.",
     ),
     ReviewRule(
         rule_id="risky_dangerously_set_inner_html",
         severity="medium",
-        title="使用 dangerouslySetInnerHTML",
-        description="React dangerouslySetInnerHTML 需要确认输入已净化。",
+        title="dangerouslySetInnerHTML used",
+        description="Verify that React dangerouslySetInnerHTML input is sanitized.",
     ),
     ReviewRule(
         rule_id="risky_yaml_load",
         severity="medium",
-        title="不安全 YAML 加载",
-        description="yaml.load 默认可能构造任意对象，请使用 yaml.safe_load 或 SafeLoader。",
+        title="Unsafe YAML loading",
+        description="yaml.load can construct arbitrary objects; use yaml.safe_load or SafeLoader.",
     ),
     ReviewRule(
         rule_id="risky_pickle",
         severity="medium",
-        title="不安全 pickle 反序列化",
-        description="pickle 反序列化不可信输入会执行任意代码。",
+        title="Unsafe pickle deserialization",
+        description="Deserializing untrusted pickle input can execute arbitrary code.",
     ),
     ReviewRule(
         rule_id="risky_go_insecure_tls",
         severity="medium",
-        title="Go TLS 跳过证书校验",
-        description="InsecureSkipVerify 会跳过证书校验，需要确认只用于测试环境。",
+        title="Go TLS certificate verification skipped",
+        description="InsecureSkipVerify skips certificate validation; verify that this is limited to tests.",
     ),
     ReviewRule(
         rule_id="risky_chmod_777",
         severity="medium",
-        title="过宽文件权限",
-        description="chmod 777 会授予过宽权限，请使用最小权限。",
+        title="Overly broad file permissions",
+        description="chmod 777 grants overly broad permissions; use least privilege.",
     ),
     ReviewRule(
         rule_id="large_diff",
         severity="medium",
-        title="diff 规模较大",
-        description="当前 diff 超过阈值，建议拆分提交或扩大测试覆盖后再合入。",
+        title="Large diff",
+        description="The diff exceeds the configured threshold; split the change or expand test coverage before merging.",
     ),
     ReviewRule(
         rule_id="task_marker_added",
         severity="low",
-        title="新增 TODO/FIXME",
-        description="新增待办标记可能表示变更尚未完成。",
+        title="TODO/FIXME added",
+        description="A new task marker may indicate that the change is incomplete.",
     ),
     ReviewRule(
         rule_id="debug_output",
         severity="low",
-        title="新增调试输出",
-        description="新增 console.log、debugger 或 pdb.set_trace 等常见调试残留。",
+        title="Debug output added",
+        description="A console.log, debugger, pdb.set_trace, or similar debug artifact was added.",
     ),
 ]
 
@@ -206,12 +205,31 @@ class ReviewDiffTool:
 
     async def run(self, args: dict, context: ToolContext) -> ToolResult:
         path_filter = str(args["path"]) if args.get("path") else None
-        proc = await run_review_diff(context.workspace, path_filter)
+        metadata = {
+            "mode": context.mode,
+            "session_id": context.session_id,
+            "run_id": context.run_id,
+            "tool_call_id": context.tool_call_id,
+            "masked_paths": context.protected_paths,
+            "trust_level": context.trust_level,
+        }
+        proc = await run_review_diff(context.workspace, path_filter, execution=context.execution, metadata=metadata)
         if proc.returncode != 0:
-            return ToolResult(success=False, error=proc.stderr.strip() or proc.stdout.strip() or "git diff 失败")
+            return ToolResult(success=False, error=proc.stderr.strip() or proc.stdout.strip() or "git diff failed")
 
         files = parse_unified_diff(proc.stdout)
-        files.extend(load_untracked_files(context.workspace, await list_untracked_paths(context.workspace, path_filter), context.protected_paths))
+        files.extend(
+            load_untracked_files(
+                context.workspace,
+                await list_untracked_paths(
+                    context.workspace,
+                    path_filter,
+                    execution=context.execution,
+                    metadata=metadata,
+                ),
+                context.protected_paths,
+            )
+        )
         report = review_files(
             files,
             protected_paths=context.protected_paths,
@@ -259,21 +277,52 @@ def review_files(
     return ReviewReport(findings=findings, files=files, added_lines=added_lines, removed_lines=removed_lines)
 
 
-async def run_review_diff(workspace: Path, path_filter: str | None) -> CommandResult:
+async def run_review_diff(
+    workspace: Path,
+    path_filter: str | None,
+    *,
+    execution=None,
+    metadata: dict | None = None,
+) -> CommandResult:
     extra = ["--", path_filter] if path_filter else []
-    proc = await run_command(["git", "diff", "HEAD", *extra], cwd=workspace, timeout=20)
+    command_metadata = {**(metadata or {}), "action": "review.diff"}
+    proc = await run_command(
+        ["git", "diff", "HEAD", *extra],
+        cwd=workspace,
+        timeout=20,
+        execution=execution,
+        metadata=command_metadata,
+    )
     if proc.returncode == 0:
         return proc
 
     if "HEAD" not in proc.stderr:
         return proc
 
-    return await run_command(["git", "diff", *extra], cwd=workspace, timeout=20)
+    return await run_command(
+        ["git", "diff", *extra],
+        cwd=workspace,
+        timeout=20,
+        execution=execution,
+        metadata=command_metadata,
+    )
 
 
-async def list_untracked_paths(workspace: Path, path_filter: str | None) -> list[str]:
+async def list_untracked_paths(
+    workspace: Path,
+    path_filter: str | None,
+    *,
+    execution=None,
+    metadata: dict | None = None,
+) -> list[str]:
     extra = ["--", path_filter] if path_filter else []
-    proc = await run_command(["git", "ls-files", "--others", "--exclude-standard", "-z", *extra], cwd=workspace, timeout=20)
+    proc = await run_command(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", *extra],
+        cwd=workspace,
+        timeout=20,
+        execution=execution,
+        metadata={**(metadata or {}), "action": "review.untracked"},
+    )
     if proc.returncode != 0 or not proc.stdout:
         return []
     return [path for path in proc.stdout.split("\0") if path]
@@ -406,8 +455,8 @@ def collect_findings(
                 "high",
                 path,
                 None,
-                "受保护或敏感路径发生变更",
-                "diff 触及受保护路径或常见敏感文件，请确认没有把凭证、生产配置或私钥提交到仓库。",
+                "Protected or sensitive path changed",
+                "The diff touches a protected path or common sensitive file; verify that no credential, production configuration, or private key is committed.",
                 "sensitive_path",
             )
 
@@ -416,8 +465,8 @@ def collect_findings(
                 "medium",
                 path,
                 None,
-                "测试文件被删除",
-                "变更删除了测试文件，请确认有替代覆盖或这是预期清理。",
+                "Test file deleted",
+                "A test file was deleted; verify replacement coverage or that the deletion is intentional.",
                 "deleted_test",
             )
 
@@ -427,27 +476,27 @@ def collect_findings(
                     "high",
                     path,
                     line.number,
-                    "新增行包含疑似密钥",
-                    "新增内容匹配凭证或私钥特征，请改用环境变量、密钥管理或测试 fixture。",
+                    "Added line may contain a secret",
+                    "Added content matches a credential or private-key pattern; use environment variables, secret management, or a test fixture.",
                     "secret_added",
                 )
             risky = risky_code_message(line.content)
             if risky is not None:
                 message, rule = risky
-                add("medium", path, line.number, "新增高风险代码模式", message, rule)
+                add("medium", path, line.number, "High-risk code pattern added", message, rule)
             if contains_task_marker(line.content):
-                title = "新增 " + "TO" + "DO/FIX" + "ME"
-                add("low", path, line.number, title, "新增待办标记可能表示变更尚未完成。", "task_marker_added")
+                title = "Added " + "TO" + "DO/FIX" + "ME"
+                add("low", path, line.number, title, "A new task marker may indicate that the change is incomplete.", "task_marker_added")
             if contains_debug_statement(line.content) and not looks_like_test_path(path):
-                add("low", path, line.number, "新增调试输出", "新增调试输出出现在非测试文件中，请确认不会污染运行日志或用户输出。", "debug_output")
+                add("low", path, line.number, "Debug output added", "Debug output was added outside a test file; verify that it will not pollute logs or user output.", "debug_output")
 
     if large_diff_threshold > 0 and total_changed > large_diff_threshold:
         add(
             "medium",
             ".",
             None,
-            "diff 规模较大",
-            "当前 diff 超过 500 行变更，建议拆分提交或扩大测试覆盖后再合入。",
+            "Large diff",
+            "The diff exceeds 500 changed lines; split the change or expand test coverage before merging.",
             "large_diff",
         )
 
@@ -458,14 +507,14 @@ def collect_findings(
 def format_review_report(report: ReviewReport) -> str:
     by_severity = severity_counts(report.findings)
     file_count = len(report.files)
-    base = f"Review 结果: 已检查 {file_count} 个文件，新增 {report.added_lines} 行，删除 {report.removed_lines} 行。"
+    base = f"Review result: checked {file_count} files, with {report.added_lines} lines added and {report.removed_lines} lines removed."
 
     if not report.findings:
-        return base + "\n未发现确定性风险。"
+        return base + "\nNo deterministic risks found."
 
     lines = [
         base,
-        f"发现 {len(report.findings)} 个问题: high={by_severity['high']} medium={by_severity['medium']} low={by_severity['low']}",
+        f"Found {len(report.findings)} issues: high={by_severity['high']} medium={by_severity['medium']} low={by_severity['low']}",
         "",
     ]
     for finding in report.findings:
@@ -514,7 +563,7 @@ def review_rules_data(
             {
                 "type": "unknown_disabled_rule",
                 "rule": rule,
-                "message": f"disabledRules 包含未知规则 {rule}，该配置不会生效。",
+                "message": f"disabledRules contains unknown rule {rule}; this entry has no effect.",
             }
             for rule in unknown_disabled_rules
         ],

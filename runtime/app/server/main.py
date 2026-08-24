@@ -1,43 +1,41 @@
 from __future__ import annotations
 
-import asyncio
 import os
-from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.agent.loop import run_turn_safely
-from app.agent.types import AgentRuntime
-from app.audit.logger import AuditLogger, stable_hash
-from app.config.settings import settings
-from app.events.sse import encode_sse
-from app.models.router import ModelRouter
-from app.policy.engine import PolicyEngine
-from app.project.config import load_project_config
+from app.agent.session import AgentSession
+from app.application.contracts import TurnRequest, contract_descriptor
+from app.application.errors import ApplicationError
+from app.application.runtime import ApplicationRuntime
+from app.bootstrap import build_application_runtime
+from app.config import settings
+from app.events import encode_sse
 from app.server.auth import auth_middleware
-from app.sessions.store import QueuedAgentRun, Session, store
-from app.tools.review import review_rules_data
-from app.usage.store import summarize_usage
 
-model_router = ModelRouter.from_settings(settings)
-audit = AuditLogger.from_env()
-agent_runtime = AgentRuntime(model_router=model_router, audit=audit, policy=PolicyEngine())
+# Idle interval between SSE keep-alive frames. Also the cadence at which a
+# run-scoped stream re-checks whether its run can still emit.
+SSE_IDLE_TIMEOUT_SECONDS = float(os.getenv("AICODE_SSE_IDLE_TIMEOUT_SECONDS", "15") or 15)
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    yield
-    # 关闭时释放模型 provider 的 HTTP 连接池，避免长驻 daemon 连接泄漏
-    await model_router.aclose()
-    # 排空审计日志队列，避免 usage/final 等刚记录的事件在进程退出时丢失
-    await audit.aclose()
-    # 排空事件写入队列，避免刚发生但还没落盘的事件在进程退出时丢失
-    await store.aclose()
+async def lifespan(instance: FastAPI):
+    """Own the runtime's whole lifetime.
+
+    Building at import time opened SQLite and provider clients as a side effect of
+    importing this module, made the module order-dependent, and made two
+    differently configured runtimes impossible in one process.
+    """
+    instance.state.runtime = build_application_runtime(settings)
+    try:
+        yield
+    finally:
+        await instance.state.runtime.aclose()
+        instance.state.runtime = None
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -46,113 +44,300 @@ app.middleware("http")(auth_middleware)
 
 class CreateSessionRequest(BaseModel):
     workspace: str
-    language: str = "zh-CN"
 
 
 class CreateSessionResponse(BaseModel):
     session_id: str
 
 
+class ForkSessionRequest(BaseModel):
+    # Omitted means "fork at the tip", which is the useful default for
+    # "branch from where we are and try something else".
+    message_id: int | None = Field(default=None, ge=1)
+
+
+class ForkSessionResponse(BaseModel):
+    session_id: str
+    source_session_id: str
+    message_count: int
+
+
+class SendMessageResponse(BaseModel):
+    status: Literal["accepted", "queued"]
+    run_id: str
+
+
+class CancelRunResponse(BaseModel):
+    status: Literal["cancelled", "idle"]
+    run_id: str | None
+    queued: int
+
+
+class SteerRequest(BaseModel):
+    message: str
+
+
+class SteerResponse(BaseModel):
+    status: Literal["queued"]
+    run_id: str
+    pending: int
+
+
+class CompactResponse(BaseModel):
+    status: Literal["compacted", "unchanged"]
+    compaction: dict[str, Any] | None
+
+
+class PruneSessionsRequest(BaseModel):
+    """Omitted bounds fall back to the configured retention policy."""
+
+    max_sessions: int | None = Field(default=None, ge=0)
+    max_age_days: int | None = Field(default=None, ge=0)
+
+
+class PruneSessionsResponse(BaseModel):
+    status: Literal["ok", "disabled"]
+    deleted_sessions: int
+    deleted_messages: int
+    retained_live: int
+
+
 class MessageRequest(BaseModel):
     message: str
     mode: str = "default"
     workspace: str
-    language: str = "zh-CN"
+    model: str | None = None
+    bash_backend: Literal["auto", "host", "docker", "os"] | None = None
+
+    def to_contract(self) -> TurnRequest:
+        return TurnRequest(
+            message=self.message,
+            mode=self.mode,
+            workspace=self.workspace,
+            model=self.model,
+            bash_backend=self.bash_backend,
+        )
 
 
 class ApprovalRequest(BaseModel):
     approval_id: str
     accept_all: bool = False
+    # Approving a subset of a multi-item request. Empty means the whole request.
+    selection: list[str] = Field(default_factory=list)
+    # Refusing with instructions. Turns the outcome into `revise`, which the
+    # model is told about differently from a bare rejection.
+    guidance: str = Field(default="", max_length=4_000)
+
+
+class AnswerRequest(BaseModel):
+    approval_id: str
+    answer: str = Field(default="", max_length=4_000)
+
+
+class SandboxExecutionRequest(BaseModel):
+    execution_id: str
+    backend: Literal["docker"] = "docker"
+    action: Literal["test", "build", "lint"]
+    workspace: str
+    timeout_seconds: float = Field(default=1800.0, gt=0, le=3600)
+    # Opt-in. Off keeps the container with no writable path at all, which is the
+    # right default for a command whose output is its exit code; on adds one
+    # writable directory outside the workspace for reports and build output.
+    artifacts: bool = False
+
+
+class CancelExecutionResponse(BaseModel):
+    status: Literal["cancelled", "idle"]
+    execution_id: str
+
+
+class ExecutionResponse(BaseModel):
+    execution_id: str
+    backend: str
+    action: str
+    status: Literal["succeeded", "failed", "timed_out", "cancelled"]
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+    timed_out: bool
+    cancelled: bool
+
+
+class TrustRequest(BaseModel):
+    workspace: str
+
+
+class TrustStatusResponse(BaseModel):
+    workspace: str
+    level: Literal["trusted", "untrusted"]
+    git_remote: str
+    recorded_remote: str
+    reason: str
+    removed: bool | None = None
+
+
+class TrustListResponse(BaseModel):
+    projects: list[TrustStatusResponse]
+
+
+def get_runtime(request: Request) -> ApplicationRuntime:
+    """Resolve the per-application runtime built by the ASGI lifespan.
+
+    Handlers take this as a dependency rather than reading a module global, so a
+    single process can host more than one differently configured Runtime and
+    tests can inject one instead of monkeypatching shared state.
+    """
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:  # pragma: no cover - only reachable if lifespan was skipped
+        raise RuntimeError("application runtime is not initialised; the ASGI lifespan did not run")
+    return runtime
+
+
+RuntimeDep = Annotated[ApplicationRuntime, Depends(get_runtime)]
+
+
+def raise_http_error(exc: ApplicationError) -> None:
+    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @app.get("/v1/daemon/status")
-async def daemon_status() -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "name": settings.app_name,
-        "version": settings.version,
-        "pid": os.getpid(),
-        "audit_writer": audit.status(),
-        "event_writer": store.event_writer_status(),
-    }
+async def daemon_status(runtime: RuntimeDep) -> dict[str, Any]:
+    return runtime.status(pid=os.getpid())
+
+
+@app.get("/v1/meta/contract")
+async def api_contract() -> dict[str, Any]:
+    return contract_descriptor(settings.version)
+
+
+@app.post("/v1/executions", response_model=ExecutionResponse)
+async def execute_sandbox(request: SandboxExecutionRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    try:
+        return await runtime.executions.execute(request)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/executions/{execution_id}/cancel", response_model=CancelExecutionResponse)
+async def cancel_execution(execution_id: str, runtime: RuntimeDep) -> dict[str, str]:
+    return await runtime.executions.cancel(execution_id)
+
+
+@app.post("/v1/daemon/prepare-stop")
+async def prepare_daemon_stop(runtime: RuntimeDep) -> dict[str, Any]:
+    return await runtime.prepare_stop()
+
+
+@app.get("/v1/trust", response_model=TrustStatusResponse | TrustListResponse)
+async def get_trust(runtime: RuntimeDep, workspace: str | None = None) -> Any:
+    try:
+        return runtime.projects.get(workspace)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/trust", response_model=TrustStatusResponse)
+async def trust_project(request: TrustRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    try:
+        return runtime.projects.set_trusted(request.workspace)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/trust/remove", response_model=TrustStatusResponse)
+async def remove_project_trust(request: TrustRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    try:
+        return runtime.projects.remove(request.workspace)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/sessions", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
-    session = store.create(workspace=request.workspace, language=effective_session_language(request.workspace, request.language))
-    audit.record(
-        "session.created",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"language": session.language},
-    )
-    await session.events.put(
-        {
-            "type": "session.created",
-            "session_id": session.session_id,
-            "workspace": session.workspace,
-        }
-    )
+async def create_session(request: CreateSessionRequest, runtime: RuntimeDep) -> CreateSessionResponse:
+    session = await runtime.session_service.create(request.workspace)
     return CreateSessionResponse(session_id=session.session_id)
 
 
 @app.get("/v1/sessions")
-async def list_sessions(last: bool = False) -> Any:
-    if last:
-        session = store.last()
-        if session is None:
-            return None
-        return session.to_dict()
-    return store.list()
+async def list_sessions(runtime: RuntimeDep, last: bool = False, limit: int | None = None, offset: int = 0) -> Any:
+    result = runtime.session_service.list(last=last, limit=limit, offset=offset)
+    if result is None:
+        return None
+    if isinstance(result, list):
+        return [session.to_dict() for session in result]
+    return result.to_dict()
+
+
+@app.post("/v1/sessions/prune", response_model=PruneSessionsResponse)
+async def prune_sessions(request: PruneSessionsRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    return runtime.session_service.prune(
+        max_sessions=request.max_sessions if request.max_sessions is not None else settings.session_retention.max_sessions,
+        max_age_days=request.max_age_days if request.max_age_days is not None else settings.session_retention.max_age_days,
+    )
 
 
 @app.get("/v1/sessions/{session_id}")
-async def get_session(session_id: str) -> dict[str, Any]:
-    session = require_session(session_id)
-    return session.to_dict()
+async def get_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    try:
+        return runtime.session_service.get(session_id).to_dict()
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
-@app.post("/v1/sessions/{session_id}/messages")
-async def send_message(session_id: str, request: MessageRequest) -> dict[str, str]:
-    session = require_session(session_id)
-    effective_request = bind_message_request_to_session(session, request)
-    is_configured = getattr(agent_runtime.model_router.primary, "is_configured", None)
-    if callable(is_configured) and not is_configured():
-        raise HTTPException(status_code=400, detail="模型 provider 未配置，请设置 API key（如 OPENAI_API_KEY 或 ANTHROPIC_API_KEY）后重试")
-    was_running = session.agent_runner_active() or session.agent_queue.qsize() > 0
-    session.events.set_default_after(session.events.last_event_id())
-    queued = session.enqueue_agent_run(effective_request)
-    session.events.set_default_run_id(queued.run_id)
-    queue_position = session.agent_queue.qsize()
-    audit.record(
-        "message.received",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={
-            "mode": effective_request.mode,
-            "language": effective_request.language,
-            "message_hash": stable_hash(effective_request.message),
-            "message_preview": effective_request.message[:200],
-            "run_id": queued.run_id,
-            "queued": was_running,
-            "queue_position": queue_position,
-        },
+@app.post("/v1/sessions/{session_id}/fork", response_model=ForkSessionResponse)
+async def fork_session(session_id: str, request: ForkSessionRequest, runtime: RuntimeDep) -> ForkSessionResponse:
+    try:
+        forked = await runtime.session_service.fork(session_id, message_id=request.message_id)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+    return ForkSessionResponse(
+        session_id=forked.session_id,
+        source_session_id=session_id,
+        message_count=len(forked.messages),
     )
-    await emit_run_queued(session, queued, was_running, queue_position)
-    ensure_session_runner(session)
-    return {"status": "queued" if was_running else "accepted", "run_id": queued.run_id}
+
+
+@app.post("/v1/sessions/{session_id}/messages", response_model=SendMessageResponse)
+async def send_message(session_id: str, request: MessageRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
+    effective_request = bind_message_request_to_session(runtime, session, request)
+    try:
+        return (await runtime.runs.submit(session, effective_request)).to_dict()
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.get("/v1/sessions/{session_id}/events")
-async def stream_events(session_id: str, request: Request, after: int | None = None, run_id: str | None = None) -> StreamingResponse:
-    session = require_session(session_id)
+async def stream_events(session_id: str, request: Request, runtime: RuntimeDep, after: int | None = None, run_id: str | None = None) -> StreamingResponse:
+    session = require_session(runtime, session_id)
     cursor = event_cursor(after, request.headers.get("last-event-id"))
     if cursor is None:
         cursor = session.events.default_after()
     target_run_id = run_id or session.events.default_run_id()
 
     async def iterator():
-        async for event in session.events.subscribe(after=cursor):
+        # A run-scoped stream must always reach a terminal event. The client
+        # treats a stream that ends without `final` as a retryable disconnect and
+        # reconnects, so a run that can no longer produce events would otherwise
+        # put the CLI in an endless reconnect loop.
+        if target_run_id:
+            terminal = unreachable_run_terminal(session, target_run_id, cursor)
+            if terminal is not None:
+                yield encode_sse(terminal)
+                return
+
+        async for event in session.events.subscribe(after=cursor, idle_timeout=SSE_IDLE_TIMEOUT_SECONDS):
+            if event is None:
+                if target_run_id:
+                    terminal = unreachable_run_terminal(session, target_run_id, cursor)
+                    if terminal is not None:
+                        yield encode_sse(terminal)
+                        return
+                # Proves the connection is alive to both the client and any
+                # intermediary that would otherwise drop an idle stream.
+                yield ": keep-alive\n\n"
+                continue
             if target_run_id and event.get("run_id") != target_run_id:
                 continue
             yield encode_sse(event)
@@ -163,155 +348,154 @@ async def stream_events(session_id: str, request: Request, after: int | None = N
 
 
 @app.post("/v1/sessions/{session_id}/approve")
-async def approve(session_id: str, request: ApprovalRequest) -> dict[str, str]:
-    session = require_session(session_id)
-    if request.accept_all:
-        session.auto_accept_edits = True
-        audit.record(
-            "approval.accept_all_enabled",
-            session_id=session.session_id,
-            workspace=session.workspace,
-            data={"approval_id": request.approval_id},
+async def approve(session_id: str, request: ApprovalRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
+    try:
+        return runtime.approvals.resolve(
+            session,
+            request.approval_id,
+            accepted=True,
+            accept_all=request.accept_all,
+            selection=request.selection,
         )
-    if not session.resolve_approval(request.approval_id, accepted=True):
-        raise HTTPException(status_code=404, detail="approval not found or already resolved")
-    audit.record(
-        "approval.resolved",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"approval_id": request.approval_id, "accepted": True},
-    )
-    return {"status": "accepted", "approval_id": request.approval_id}
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/sessions/{session_id}/answer")
+async def answer(session_id: str, request: AnswerRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
+    try:
+        return runtime.approvals.answer(session, request.approval_id, answer=request.answer)
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.post("/v1/sessions/{session_id}/reject")
-async def reject(session_id: str, request: ApprovalRequest) -> dict[str, str]:
-    session = require_session(session_id)
-    if not session.resolve_approval(request.approval_id, accepted=False):
-        raise HTTPException(status_code=404, detail="approval not found or already resolved")
-    audit.record(
-        "approval.resolved",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"approval_id": request.approval_id, "accepted": False},
-    )
-    return {"status": "rejected", "approval_id": request.approval_id}
-
-
-@app.post("/v1/sessions/{session_id}/cancel")
-async def cancel_run(session_id: str) -> dict[str, Any]:
-    session = require_session(session_id)
-    task = session.agent_runner_task
-    run_id = session.current_run_id
-    if task is None or task.done() or run_id is None:
-        return {
-            "status": "idle",
-            "run_id": None,
-            "queued": session.agent_queue.qsize(),
-        }
-
-    session.mark_agent_progress("cancelling")
-    task.cancel()
-    with suppress(asyncio.CancelledError, Exception):
-        await task
-    session.agent_runner_task = None
-
-    for approval in session.expire_pending_approvals():
-        await session.events.put(
-            {
-                "type": "approval.expired",
-                "run_id": run_id,
-                "approval_id": approval.approval_id,
-                "kind": approval.kind,
-                "message": "当前任务已取消，待确认操作已过期。",
-            }
+async def reject(session_id: str, request: ApprovalRequest, runtime: RuntimeDep) -> dict[str, str]:
+    session = require_session(runtime, session_id)
+    try:
+        return runtime.approvals.resolve(
+            session,
+            request.approval_id,
+            accepted=False,
+            guidance=request.guidance,
         )
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
-    message = "当前任务已取消。"
-    audit.record(
-        "run.cancelled",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"run_id": run_id, "queued": session.agent_queue.qsize()},
-    )
-    await session.events.put(
-        {
-            "type": "run.cancelled",
-            "run_id": run_id,
-            "status": "cancelled",
-            "message": message,
-        }
-    )
-    await session.events.put(
-        {
-            "type": "final",
-            "run_id": run_id,
-            "status": "cancelled",
-            "summary": message,
-        }
-    )
 
-    queued = session.agent_queue.qsize()
-    if queued:
-        ensure_session_runner(session)
-    return {"status": "cancelled", "run_id": run_id, "queued": queued}
+@app.post("/v1/sessions/{session_id}/cancel", response_model=CancelRunResponse)
+async def cancel_run(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    session = require_session(runtime, session_id)
+    return (await runtime.runs.cancel(session)).to_dict()
+
+
+@app.post("/v1/sessions/{session_id}/steer", response_model=SteerResponse)
+async def steer_run(session_id: str, request: SteerRequest, runtime: RuntimeDep) -> dict[str, Any]:
+    session = require_session(runtime, session_id)
+    try:
+        return (await runtime.runs.steer(session, request.message)).to_dict()
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+@app.post("/v1/sessions/{session_id}/compact", response_model=CompactResponse)
+async def compact_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    session = require_session(runtime, session_id)
+    try:
+        return (await runtime.contexts.compact(session)).to_dict()
+    except ApplicationError as exc:
+        raise_http_error(exc)
 
 
 @app.get("/v1/usage")
-async def usage(today: bool = False, session_id: str | None = None) -> dict[str, Any]:
-    day = datetime_utc_today() if today else None
-    await audit.flush()
-    return summarize_usage(audit.path, session_id=session_id, day=day)
+async def usage(runtime: RuntimeDep, today: bool = False, session_id: str | None = None) -> dict[str, Any]:
+    return await runtime.traces.summarize(today=today, session_id=session_id)
 
 
 @app.get("/v1/usage/sessions/{session_id}")
-async def usage_for_session(session_id: str) -> dict[str, Any]:
-    await audit.flush()
-    return summarize_usage(audit.path, session_id=session_id)
+async def usage_for_session(session_id: str, runtime: RuntimeDep) -> dict[str, Any]:
+    return await runtime.traces.summarize(session_id=session_id)
 
 
 @app.get("/v1/models/routes")
-async def model_routes() -> dict[str, Any]:
-    return model_router.route_status()
+async def model_routes(runtime: RuntimeDep) -> dict[str, Any]:
+    return runtime.models.routes()
+
+
+@app.get("/v1/models/probe")
+async def model_probe(
+    runtime: RuntimeDep,
+    tools: bool = True,
+    model: str | None = None,
+    routes: bool = False,
+) -> dict[str, Any]:
+    if routes:
+        if model is not None:
+            raise HTTPException(status_code=400, detail="routes and model are mutually exclusive")
+        return await runtime.models.probe_routes()
+    return await runtime.models.probe(model=model, tools=tools)
 
 
 @app.get("/v1/review/rules")
-async def review_rules(workspace: str | None = None) -> dict[str, Any]:
-    project_config = load_project_config(Path(workspace)) if workspace else None
-    if project_config is None:
-        return review_rules_data()
-    return review_rules_data(
-        disabled_rules=project_config.review.disabled_rules,
-        large_diff_threshold=project_config.review.large_diff_threshold,
-        max_findings=project_config.review.max_findings,
-    )
+async def review_rules(runtime: RuntimeDep, workspace: str | None = None) -> dict[str, Any]:
+    return runtime.workspace.review_rules(workspace)
 
 
-def require_session(session_id: str) -> Session:
-    session = store.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    return session
-
-
-def effective_session_language(workspace: str, requested_language: str) -> str:
-    project_language = load_project_config(Path(workspace)).default_language
-    return project_language or requested_language or "zh-CN"
-
-
-def bind_message_request_to_session(session: Session, request: MessageRequest) -> MessageRequest:
-    if not same_workspace(session.workspace, request.workspace):
-        raise HTTPException(status_code=400, detail="message workspace does not match session workspace")
-    return request.model_copy(update={"workspace": session.workspace, "language": session.language})
-
-
-def same_workspace(left: str, right: str) -> bool:
-    if left == right:
-        return True
+def require_session(runtime: ApplicationRuntime, session_id: str) -> AgentSession:
     try:
-        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
-    except OSError:
-        return False
+        return runtime.session_service.require(session_id)
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+def bind_message_request_to_session(
+    runtime: ApplicationRuntime,
+    session: AgentSession,
+    request: MessageRequest,
+) -> TurnRequest:
+    try:
+        return runtime.session_service.bind_turn(session, request.to_contract())
+    except ApplicationError as exc:
+        raise_http_error(exc)
+
+
+def unreachable_run_terminal(
+    session: AgentSession,
+    run_id: str,
+    cursor: int | None,
+) -> dict[str, Any] | None:
+    """A terminal event to close a stream whose run can no longer emit, else None.
+
+    Two cases produce a stream that would otherwise wait forever:
+
+    * The run already finished at or before the requested cursor — a client that
+      reconnected past its own `final`. Its recorded terminal event is replayed.
+    * The run has no retained events and is neither running nor queued. Event
+      persistence is best-effort, so a `final` can be missing after the session
+      was evicted and rebuilt, and a stale run id looks identical. A synthesized
+      terminal event is emitted so the client stops instead of reconnecting; it is
+      not written to the session, because nothing new actually happened.
+    """
+    terminal = session.events.final_event_for_run(run_id)
+    if terminal is not None:
+        if cursor is not None and int(terminal.get("event_id") or 0) <= cursor:
+            return terminal
+        return None
+    if session.events.has_events_for_run(run_id):
+        return None
+    if session.current_run_id == run_id or run_id in session.queued_run_ids():
+        return None
+    return {
+        "type": "final",
+        "run_id": run_id,
+        "status": "unavailable",
+        "summary": (
+            f"No events are available for run {run_id}. It is not running, and its history is no "
+            "longer retained; start a new run or stream without a run_id filter."
+        ),
+    }
 
 
 def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
@@ -323,69 +507,3 @@ def event_cursor(after: int | None, last_event_id: str | None) -> int | None:
         return int(last_event_id)
     except ValueError:
         return None
-
-
-async def run_agent(session: Session, request: MessageRequest) -> None:
-    await run_turn_safely(session, request, agent_runtime)
-
-
-def ensure_session_runner(session: Session) -> None:
-    if session.agent_runner_active():
-        return
-    session.agent_runner_task = asyncio.create_task(process_session_runs(session))
-
-
-async def process_session_runs(session: Session) -> None:
-    while True:
-        queued = session.next_agent_run()
-        if queued is None:
-            return
-        await process_session_run(session, queued)
-
-
-async def process_session_run(session: Session, queued: QueuedAgentRun) -> None:
-    session.start_agent_run(queued.run_id)
-    session.events.set_current_run_id(queued.run_id)
-    try:
-        await emit_run_started(session, queued)
-        await run_agent(session, queued.request)
-    finally:
-        session.events.set_current_run_id(None)
-        session.finish_agent_run()
-
-
-async def emit_run_queued(session: Session, queued: QueuedAgentRun, was_running: bool, queue_position: int) -> None:
-    message = "任务已排队，等待当前会话中的上一条任务完成。"
-    status = "queued"
-    if not was_running:
-        message = "任务已接收，准备开始执行。"
-        status = "accepted"
-    await session.events.put(
-        {
-            "type": "run.queued",
-            "run_id": queued.run_id,
-            "status": status,
-            "queue_position": queue_position,
-            "message": message,
-        }
-    )
-
-
-async def emit_run_started(session: Session, queued: QueuedAgentRun) -> None:
-    session.mark_agent_progress("agent.loop")
-    audit.record(
-        "run.started",
-        session_id=session.session_id,
-        workspace=session.workspace,
-        data={"run_id": queued.run_id},
-    )
-    await session.events.put(
-        {
-            "type": "run.started",
-            "message": "开始执行当前任务。",
-        }
-    )
-
-
-def datetime_utc_today():
-    return datetime.now(timezone.utc).date()

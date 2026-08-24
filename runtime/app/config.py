@@ -1,0 +1,267 @@
+"""Runtime configuration loaded from environment variables."""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+from app.usage.pricing import ModelPrice, parse_model_prices
+
+
+class ModelSettings(BaseModel):
+    main: str = "gpt-5"
+    reviewer: str = "gpt-5"
+    summarizer: str = "gpt-5-mini"
+
+
+class OpenAICompatibleSettings(BaseModel):
+    profile: str = Field(default="openai", min_length=1)
+    profile_schema_version: Literal[1] = 1
+    base_url: str = "https://api.openai.com/v1"
+    api_key_env: str = "OPENAI_API_KEY"
+    auth_mode: Literal["required", "optional", "none"] = "required"
+    timeout_seconds: float = Field(default=60.0, gt=0)
+    context_window: int = Field(default=32_768, ge=2)
+    max_output_tokens: int = Field(default=8_192, ge=1)
+    tool_calling: bool = True
+    streaming: bool = True
+    tokenizer: Literal["chars"] = "chars"
+    chars_per_token: float = Field(default=3.5, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def validate_token_budget(self) -> OpenAICompatibleSettings:
+        if self.max_output_tokens >= self.context_window:
+            raise ValueError("max_output_tokens must be smaller than context_window")
+        return self
+
+
+class ProviderSettings(BaseModel):
+    type: str = "openai_compatible"  # openai_compatible | anthropic
+    # The provider to try when the primary is unreachable. Empty disables it.
+    #
+    # Off by default and never inferred. Answering from a different provider
+    # changes the price, the declared capabilities and the reproducibility of a
+    # run, so it has to be something the user asked for rather than something
+    # aicode decided on their behalf when a request failed.
+    fallback: str = ""
+    # The model the fallback answers with, for every route. One name rather than
+    # a second routing table: a fallback exists to keep a run alive, and a
+    # partially-configured second table would fail at the moment it is needed.
+    fallback_model: str = ""
+
+
+class AnthropicSettings(BaseModel):
+    base_url: str = "https://api.anthropic.com"
+    api_key_env: str = "ANTHROPIC_API_KEY"
+    timeout_seconds: float = 120.0
+    # Off by default. When off the payload shape is byte-identical to the
+    # uncached one, which is what makes this both revertible and A/B-able: the
+    # only way to attribute a cost change to caching is for the alternative to
+    # be the exact same request.
+    prompt_caching: bool = False
+
+
+class PricingSettings(BaseModel):
+    currency: str = "USD"
+    model_prices: dict[str, ModelPrice] = Field(default_factory=dict)
+
+
+class SessionRetentionSettings(BaseModel):
+    """Opt-in bounds on how much session history is kept.
+
+    Both default to 0 (disabled). Silently deleting a user's conversation
+    history is worse than an unbounded database, so retention only acts once the
+    user asks for it.
+    """
+
+    max_sessions: int = Field(default=0, ge=0)
+    max_age_days: int = Field(default=0, ge=0)
+
+
+class BudgetSettings(BaseModel):
+    """Cumulative per-turn spend caps.
+
+    Runtime-level only, never project-overridable: a limit the inspected
+    repository can raise is not a limit. Set either value to 0 to disable it.
+    """
+
+    max_total_tokens: int = Field(default=1_000_000, ge=0)
+    max_total_cost: float = Field(default=5.0, ge=0)
+    max_verify_rounds: int = Field(default=3, ge=0)
+    max_repeated_actions: int = Field(default=5, ge=0)
+
+
+class ExecutionSettings(BaseModel):
+    """Where Agent-issued shell commands run.
+
+    `auto` keeps trusted workspaces on the host (fast, full toolchain) and pushes
+    untrusted workspaces into the Docker sandbox. `host` restores the pre-sandbox
+    behaviour for machines without Docker; `docker` is the strictest setting and
+    sandboxes every Agent command regardless of trust.
+
+    `os` sandboxes every command with the platform sandbox (macOS seatbelt):
+    milliseconds to start and no image to pull, which makes it usable on trusted
+    workspaces where the container cost was the reason they ran bare. It is a
+    weaker boundary than a container — same filesystem namespace, same kernel, no
+    resource limits — so it is a separate choice rather than a substitute
+    `auto` makes on the user's behalf.
+    """
+
+    agent_bash_backend: Literal["auto", "host", "docker", "os"] = "auto"
+
+
+class ContextSettings(BaseModel):
+    default_context_window: int = 32_768
+    default_max_output_tokens: int = 8_192
+    reserve_tokens: int = 1_024
+    compact_threshold: float = 0.8
+    chars_per_token: float = 3.5
+    model_context_windows: dict[str, int] = Field(default_factory=dict)
+    model_max_output_tokens: dict[str, int] = Field(default_factory=dict)
+
+
+class Settings(BaseModel):
+    app_name: str = "aicode-runtime"
+    version: str = "0.1.0"
+    models: ModelSettings = ModelSettings()
+    openai_compatible: OpenAICompatibleSettings = OpenAICompatibleSettings()
+    provider: ProviderSettings = ProviderSettings()
+    anthropic: AnthropicSettings = AnthropicSettings()
+    pricing: PricingSettings = PricingSettings()
+    context: ContextSettings = ContextSettings()
+    execution: ExecutionSettings = ExecutionSettings()
+    budget: BudgetSettings = BudgetSettings()
+    session_retention: SessionRetentionSettings = SessionRetentionSettings()
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        return cls(
+            app_name=os.getenv("AICODE_RUNTIME_NAME", "aicode-runtime"),
+            version=os.getenv("AICODE_RUNTIME_VERSION", "0.1.0"),
+            models=ModelSettings(
+                main=os.getenv("AICODE_MODEL_MAIN", os.getenv("AICODE_MODEL_CODER", "gpt-5")),
+                reviewer=os.getenv("AICODE_MODEL_REVIEWER", "gpt-5"),
+                summarizer=os.getenv("AICODE_MODEL_SUMMARIZER", "gpt-5-mini"),
+            ),
+            openai_compatible=OpenAICompatibleSettings(
+                profile=os.getenv("AICODE_OPENAI_PROFILE", "openai"),
+                profile_schema_version=int(os.getenv("AICODE_OPENAI_PROFILE_SCHEMA_VERSION", "1")),  # type: ignore[arg-type]
+                base_url=os.getenv("AICODE_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                api_key_env=os.getenv("AICODE_OPENAI_API_KEY_ENV", "OPENAI_API_KEY"),
+                auth_mode=os.getenv("AICODE_OPENAI_AUTH_MODE", "required").strip().casefold(),  # type: ignore[arg-type]
+                timeout_seconds=float(os.getenv("AICODE_OPENAI_TIMEOUT_SECONDS", "60")),
+                context_window=int(os.getenv("AICODE_OPENAI_CONTEXT_WINDOW", "32768")),
+                max_output_tokens=int(os.getenv("AICODE_OPENAI_MAX_OUTPUT_TOKENS", "8192")),
+                tool_calling=os.getenv("AICODE_OPENAI_TOOL_CALLING", "true"),  # type: ignore[arg-type]
+                streaming=os.getenv("AICODE_OPENAI_STREAMING", "true"),  # type: ignore[arg-type]
+                tokenizer=os.getenv("AICODE_OPENAI_TOKENIZER", "chars").strip().casefold(),  # type: ignore[arg-type]
+                chars_per_token=float(os.getenv("AICODE_OPENAI_CHARS_PER_TOKEN", "3.5")),
+            ),
+            provider=ProviderSettings(
+                type=os.getenv("AICODE_PROVIDER_TYPE", "openai_compatible"),
+                fallback=os.getenv("AICODE_PROVIDER_FALLBACK", "").strip(),
+                fallback_model=os.getenv("AICODE_PROVIDER_FALLBACK_MODEL", "").strip(),
+            ),
+            anthropic=AnthropicSettings(
+                base_url=os.getenv("AICODE_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+                api_key_env=os.getenv("AICODE_ANTHROPIC_API_KEY_ENV", "ANTHROPIC_API_KEY"),
+                timeout_seconds=float(os.getenv("AICODE_ANTHROPIC_TIMEOUT_SECONDS", "120")),
+                prompt_caching=_bool_env("AICODE_ANTHROPIC_PROMPT_CACHING", False),
+            ),
+            pricing=PricingSettings(
+                currency=os.getenv("AICODE_PRICING_CURRENCY", "USD"),
+                model_prices=parse_model_prices(os.getenv("AICODE_MODEL_PRICES_JSON")),
+            ),
+            context=ContextSettings(
+                default_context_window=_positive_int_env("AICODE_CONTEXT_DEFAULT_WINDOW", 32_768),
+                default_max_output_tokens=_positive_int_env("AICODE_CONTEXT_DEFAULT_MAX_OUTPUT_TOKENS", 8_192),
+                reserve_tokens=_non_negative_int_env("AICODE_CONTEXT_RESERVE_TOKENS", 1_024),
+                compact_threshold=_bounded_float_env("AICODE_CONTEXT_COMPACT_THRESHOLD", 0.8, 0.1, 1.0),
+                chars_per_token=_bounded_float_env("AICODE_CONTEXT_CHARS_PER_TOKEN", 3.5, 1.0, 20.0),
+                model_context_windows=_parse_positive_int_map(os.getenv("AICODE_MODEL_CONTEXT_WINDOWS_JSON")),
+                model_max_output_tokens=_parse_positive_int_map(os.getenv("AICODE_MODEL_MAX_OUTPUT_TOKENS_JSON")),
+            ),
+            execution=ExecutionSettings(
+                agent_bash_backend=_agent_bash_backend_env(),
+            ),
+            budget=BudgetSettings(
+                max_total_tokens=_non_negative_int_env("AICODE_BUDGET_MAX_TOTAL_TOKENS", 1_000_000),
+                max_total_cost=_non_negative_float_env("AICODE_BUDGET_MAX_TOTAL_COST", 5.0),
+                max_verify_rounds=_non_negative_int_env("AICODE_BUDGET_MAX_VERIFY_ROUNDS", 3),
+                max_repeated_actions=_non_negative_int_env("AICODE_BUDGET_MAX_REPEATED_ACTIONS", 5),
+            ),
+            session_retention=SessionRetentionSettings(
+                max_sessions=_non_negative_int_env("AICODE_SESSION_RETENTION_MAX_SESSIONS", 0),
+                max_age_days=_non_negative_int_env("AICODE_SESSION_RETENTION_MAX_AGE_DAYS", 0),
+            ),
+        )
+
+
+def _non_negative_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _agent_bash_backend_env() -> str:
+    value = os.getenv("AICODE_AGENT_BASH_BACKEND", "auto").strip().casefold()
+    return value if value in {"auto", "host", "docker", "os"} else "auto"
+
+
+def _parse_positive_int_map(raw: str | None) -> dict[str, int]:
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    parsed: dict[str, int] = {}
+    for key, value in payload.items():
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            continue
+        if normalized > 0:
+            parsed[str(key)] = normalized
+    return parsed
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _non_negative_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+settings = Settings.from_env()

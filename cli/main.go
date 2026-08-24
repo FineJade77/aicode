@@ -2,43 +2,53 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
-	"github.com/FineJade77/aicode/cli/internal/cmd/agentrun"
-	"github.com/FineJade77/aicode/cli/internal/cmd/cancelcmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/commitmsgcmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/chatcmd"
 	"github.com/FineJade77/aicode/cli/internal/cmd/configcmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/daemoncmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/modelscmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/resumecmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/runtimeio"
-	"github.com/FineJade77/aicode/cli/internal/cmd/sandboxcmd"
-	"github.com/FineJade77/aicode/cli/internal/cmd/usagecmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/projectcmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/runtimecmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/sessioncmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/taskcmd"
+	"github.com/FineJade77/aicode/cli/internal/cmd/tuicmd"
 	"github.com/FineJade77/aicode/cli/internal/config"
 )
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
+	if len(args) == 0 {
+		printHelp()
+		return nil
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		return printHelpFor(args[1:])
+	}
+	if category, ok := categoryHelpRequest(args); ok {
+		return printHelpFor([]string{category})
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	warnAboutDeprecatedConfig(os.Stderr, cfg)
 
 	options, commandArgs, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
 	}
 	if options.Sandbox != "" {
-		return sandboxcmd.Run(options.Sandbox, commandArgs)
+		return projectcmd.RunSandbox(cfg, options.Sandbox, commandArgs)
 	}
-	args = commandArgs
+	args = normalizeLegacyArgs(commandArgs)
 
 	if len(args) == 0 {
 		printHelp()
@@ -46,102 +56,151 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
-	case "daemon":
-		return daemoncmd.Run(cfg, args[1:])
+	case "tui":
+		return tuicmd.Run(cfg, args[1:])
+	case "chat":
+		if len(args) == 1 {
+			return chatcmd.Run(cfg)
+		}
+		if isHelp(args[1]) {
+			fmt.Print(chatHelpText)
+			return nil
+		}
+		return taskcmd.RunPrompt(cfg, "chat", strings.Join(args[1:], " "))
+	case "task":
+		return taskcmd.Run(cfg, args[1:])
+	case "session":
+		return sessioncmd.Run(cfg, args[1:])
+	case "runtime":
+		return runtimecmd.Run(cfg, args[1:])
+	case "project":
+		return projectcmd.Run(cfg, args[1:])
 	case "config":
 		return configcmd.Run(cfg, args[1:])
-	case "sessions":
-		return runtimeio.RunSimpleGet(cfg, "/v1/sessions")
-	case "usage":
-		return usagecmd.Run(cfg, args[1:])
-	case "models":
-		return modelscmd.Run(cfg, args[1:])
-	case "review-rules":
-		return configcmd.ReviewRules(cfg)
-	case "resume":
-		return resumecmd.Run(cfg, args[1:])
-	case "cancel":
-		return cancelcmd.Run(cfg, args[1:])
-	case "review":
-		return agentrun.Run(cfg, "review", "请审查当前代码变更。")
-	case "diff":
-		return agentrun.Run(cfg, "diff", "请查看当前 git diff 并总结变更。")
-	case "test":
-		return agentrun.Run(cfg, "test", "请自动发现并运行当前项目的低风险测试命令。")
-	case "commit-message":
-		return commitmsgcmd.Run(cfg)
-	case "explain":
-		if len(args) < 2 {
-			return fmt.Errorf("用法: aicode explain <file-or-symbol>")
-		}
-		return agentrun.Run(cfg, "explain", "请解释 "+strings.Join(args[1:], " "))
-	case "chat":
-		if len(args) < 2 {
-			return fmt.Errorf("用法: aicode chat <message>")
-		}
-		return agentrun.Run(cfg, "chat", strings.Join(args[1:], " "))
 	default:
-		return agentrun.Run(cfg, "default", strings.Join(args, " "))
+		return taskcmd.RunPrompt(cfg, "default", strings.Join(args, " "))
+	}
+}
+
+// normalizeLegacyArgs keeps existing scripts working without exposing the old
+// flat command list in help or duplicating dispatch logic.
+func normalizeLegacyArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	tail := args[1:]
+	switch args[0] {
+	case "sessions":
+		if len(tail) > 0 && tail[0] == "prune" {
+			return append([]string{"session", "prune"}, tail[1:]...)
+		}
+		return append([]string{"session", "list"}, tail...)
+	case "resume":
+		if len(tail) == 1 {
+			return append([]string{"session", "show"}, tail...)
+		}
+		return append([]string{"session", "resume"}, tail...)
+	case "cancel":
+		return append([]string{"session", "cancel"}, tail...)
+	case "daemon":
+		return append([]string{"runtime"}, tail...)
+	case "doctor":
+		return append([]string{"runtime", "doctor"}, tail...)
+	case "models":
+		return append([]string{"runtime", "models"}, tail...)
+	case "usage":
+		return append([]string{"runtime", "usage"}, tail...)
+	case "trust":
+		return append([]string{"project", "trust"}, tail...)
+	case "review-rules":
+		return []string{"project", "review-rules-json"}
+	case "repl":
+		return []string{"chat"}
+	case "review", "diff", "test", "commit-message", "explain":
+		return append([]string{"task", args[0]}, tail...)
+	default:
+		return args
 	}
 }
 
 func printHelp() {
-	fmt.Println(`aicode - 本地优先的 CLI Coding Agent
+	fmt.Print(rootHelpText)
+}
 
-用法:
-  aicode "修复这个测试失败"
-  aicode chat "解释当前目录"
-  aicode review
-  aicode review-rules
-  aicode explain src/foo.ts
-	  aicode diff
-	  aicode test
-	  aicode commit-message
-	  aicode --sandbox docker test
-	  aicode --sandbox docker build
-	  aicode --sandbox docker lint
-	  aicode sessions
-  aicode resume --last
-	  aicode resume --last "继续刚才的任务"
-	  aicode resume <session_id> "继续这个会话"
-	  aicode cancel --last
-	  aicode cancel <session_id>
-  aicode usage [--json]
-  aicode usage --today [--json]
-  aicode usage --session <session_id> [--json]
-  aicode models [--json]
-  aicode config init
-  aicode config show
-  aicode config list
-  aicode config docs
-  aicode config get models.reviewer
-  aicode config set ui.language en-US
-  aicode config set models.reviewer gpt-5
-  aicode config set models.main gpt-5
-  aicode config set provider.type anthropic
-  aicode config set provider.anthropic.timeout_seconds 120
-  aicode config unset models.reviewer
-  aicode config protected add secrets/local/**
-  aicode config protected list
-  aicode config protected remove secrets/local/**
-  aicode config protected reset
-  aicode config review disable large_diff
-  aicode config review enable large_diff
-  aicode config review set largeDiffThreshold 1200
-  aicode config review unset largeDiffThreshold
-  aicode config review list
-  aicode config review docs
-  aicode config review prune
-  aicode config test set python3 -m pytest
-  aicode config test auto
-  aicode config test show
-  aicode config test unset
-  aicode config workspace add api ../api
-  aicode config workspace list
-  aicode config workspace remove api
-  aicode daemon start
-  aicode daemon stop
-  aicode daemon status`)
+const rootHelpText = `aicode - Local-first CLI coding agent
+
+Usage:
+  aicode "<task>"
+  aicode chat [message]
+  aicode tui
+  aicode <category> <command>
+
+Categories:
+  task       One-shot review, diff, test, explain, and commit-message tasks
+  session    List, inspect, resume, cancel, and prune sessions
+  runtime    Manage the daemon, diagnostics, models, and usage
+  project    Manage trust, project policy, workspaces, and sandbox runs
+  config     Manage global CLI and Runtime configuration
+
+Run ` + "`aicode help <category>`" + ` for category-specific commands.
+`
+
+const chatHelpText = `Usage:
+  aicode chat
+  aicode chat <message>
+`
+
+func printHelpFor(args []string) error {
+	if len(args) == 0 {
+		printHelp()
+		return nil
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("usage: aicode help [task|session|runtime|project|config|chat]")
+	}
+	switch args[0] {
+	case "task":
+		fmt.Print(taskcmd.HelpText)
+	case "session":
+		fmt.Print(sessioncmd.HelpText)
+	case "runtime":
+		fmt.Print(runtimecmd.HelpText)
+	case "project":
+		fmt.Print(projectcmd.HelpText)
+	case "config":
+		fmt.Print(configcmd.HelpText)
+	case "chat":
+		fmt.Print(chatHelpText)
+	default:
+		return fmt.Errorf("unknown help category: %s", args[0])
+	}
+	return nil
+}
+
+func isHelp(value string) bool {
+	return value == "help" || value == "--help" || value == "-h"
+}
+
+func categoryHelpRequest(args []string) (string, bool) {
+	if len(args) == 0 || !isCategory(args[0]) {
+		return "", false
+	}
+	if len(args) == 1 && args[0] != "chat" {
+		return args[0], true
+	}
+	if len(args) == 2 && isHelp(args[1]) {
+		return args[0], true
+	}
+	return "", false
+}
+
+func isCategory(value string) bool {
+	switch value {
+	case "chat", "task", "session", "runtime", "project", "config":
+		return true
+	default:
+		return false
+	}
 }
 
 type globalOptions struct {
@@ -154,7 +213,7 @@ func parseGlobalArgs(args []string) (globalOptions, []string, error) {
 		switch args[0] {
 		case "--sandbox":
 			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
-				return options, nil, fmt.Errorf("用法: aicode --sandbox docker <test|build|lint>")
+				return options, nil, fmt.Errorf("usage: aicode project sandbox <test|build|lint>")
 			}
 			options.Sandbox = args[1]
 			args = args[2:]
@@ -163,4 +222,17 @@ func parseGlobalArgs(args []string) (globalOptions, []string, error) {
 		}
 	}
 	return options, args, nil
+}
+
+// warnAboutDeprecatedConfig tells the user once per invocation that a legacy
+// setting was read, and what it did.
+//
+// On stderr so that `--json` output stays machine-parseable on stdout: a
+// migration notice must not be the reason a script breaks. `aicode runtime
+// doctor` carries the same information as a structured check, for anyone who
+// pipes stderr away.
+func warnAboutDeprecatedConfig(writer io.Writer, cfg config.Config) {
+	for _, deprecation := range cfg.Deprecations {
+		fmt.Fprintf(writer, "Warning: %s\n", deprecation)
+	}
 }

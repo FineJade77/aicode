@@ -1,0 +1,52 @@
+{
+  "contract_version": "1.0",
+  "task_id": "long_context_resume",
+  "suite": "smoke",
+  "description": "A small-context model must compact before its first main request and finish from the projection.",
+  "fixture": "long_context_resume",
+  "user_request": "Summarize the current goal from the existing long session and continue.",
+  "mode": "default",
+  "tags": ["long-context", "compaction"],
+  "trust": "trusted",
+  "profile": {
+    "provider": "scripted",
+    "model": "eval-local-8k",
+    "context_window": 8192,
+    "max_output_tokens": 1024
+  },
+  "budgets": {
+    "max_model_calls": 3,
+    "max_tokens": 1000,
+    "max_cost": 0,
+    "wall_time_seconds": 15
+  },
+  "history_seed": {
+    "message_count": 12,
+    "chars_per_message": 5000
+  },
+  "model_script": [
+    {
+      "purpose": "summarizer",
+      "text": "- Current goal: resume the long session and continue.\\n- No files were modified.",
+      "input_tokens": 100,
+      "output_tokens": 20
+    },
+    {
+      "purpose": "main",
+      "text": "The long session was restored from its persistent summary, and the current goal remains to continue the task.",
+      "input_tokens": 80,
+      "output_tokens": 15
+    }
+  ],
+  "checks": {
+    "files": [{"path": "README.md", "contains": ["Long context fixture"]}],
+    "allowed_changed_paths": [],
+    "forbidden_changed_paths": ["README.md"],
+    "required_events": ["context.budget", "usage.recorded", "final"],
+    "forbidden_events": ["edit.applied", "tool.output"],
+    "required_audit_events": ["usage.recorded", "session.final"],
+    "final_contains": ["restored from its persistent summary"],
+    "minimum_compactions": 1,
+    "maximum_agent_executions": 0
+  }
+}

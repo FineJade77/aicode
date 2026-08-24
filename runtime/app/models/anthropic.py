@@ -1,24 +1,59 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 from typing import Any
 
 import httpx
 
-from app.config.settings import AnthropicSettings
+from app.config import AnthropicSettings
 from app.models.provider import (
     RETRYABLE_STATUS,
     CompletionRequest,
+    ContextOverflowError,
     ProviderError,
     StreamEvent,
     ToolCallRequest,
     Usage,
+    backoff_delay,
+    is_context_overflow_response,
+    retry_after_seconds,
     tool_argument_parse_error,
 )
 
 ANTHROPIC_VERSION = "2023-06-01"
+
+CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def cached_system(system: str) -> list[dict[str, Any]]:
+    """Render the system prompt as one cacheable block.
+
+    Anthropic renders `tools` -> `system` -> `messages`, so a breakpoint on the
+    last system block covers the tool definitions as well. The separate tool
+    breakpoint below is a second, earlier one: if the system prompt changes but
+    the tool set does not, the tools stay cached instead of the whole prefix
+    being rewritten.
+    """
+    return [{"type": "text", "text": system, "cache_control": dict(CACHE_CONTROL)}]
+
+
+def cached_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy the tool list and mark its last element as a cache breakpoint.
+
+    Deep-copied on purpose. `TOOL_SCHEMAS` is a module-level constant shared
+    with the OpenAI-compatible provider; annotating it in place would attach an
+    Anthropic-only `cache_control` key to every subsequent OpenAI request — a
+    corruption that would surface far from here and only when both providers ran
+    in one process.
+    """
+    if not tools:
+        return []
+    copied = copy.deepcopy(list(tools))
+    copied[-1]["cache_control"] = dict(CACHE_CONTROL)
+    return copied
 
 
 def to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -75,16 +110,18 @@ class AnthropicProvider:
         api_key = self.api_key()
         if not api_key:
             raise ProviderError(f"missing API key env: {self.settings.api_key_env}")
+        caching = bool(getattr(self.settings, "prompt_caching", False))
         payload: dict[str, Any] = {
             "model": request.model,
-            "system": request.system,
+            "system": cached_system(request.system) if caching else request.system,
             "messages": to_anthropic_messages(request.messages),
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "stream": True,
         }
         if request.tools:
-            payload["tools"] = request.tools  # canonical schema 与 Anthropic 格式一致
+            # The canonical schema matches Anthropic's format.
+            payload["tools"] = cached_tools(request.tools) if caching else request.tools
         headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "Content-Type": "application/json"}
         url = self.settings.base_url.rstrip("/") + "/v1/messages"
 
@@ -94,19 +131,23 @@ class AnthropicProvider:
                 async with self.client.stream("POST", url, json=payload, headers=headers) as response:
                     if response.status_code >= 400:
                         body = (await response.aread()).decode("utf-8", errors="replace")
+                        if is_context_overflow_response(response.status_code, body):
+                            raise ContextOverflowError(f"anthropic HTTP {response.status_code}: {body}")
                         if response.status_code in RETRYABLE_STATUS and attempt < 2:
-                            raise _Retry(body)
+                            raise _Retry(retry_after_seconds(response.headers))
                         raise ProviderError(f"anthropic HTTP {response.status_code}: {body}")
                     async for event in self._parse_stream(response, request.model):
                         yielded = True
                         yield event
                 return
-            except _Retry:
-                await asyncio.sleep(0.5 * 2**attempt)
+            except _Retry as retry:
+                # Honour Retry-After when present, otherwise back off with jitter
+                # so concurrent clients do not retry in lockstep.
+                await asyncio.sleep(retry.delay if retry.delay is not None else backoff_delay(attempt))
             except httpx.TransportError as exc:
                 if yielded or attempt >= 2:
                     raise ProviderError(f"anthropic request failed: {exc}") from exc
-                await asyncio.sleep(0.5 * 2**attempt)
+                await asyncio.sleep(backoff_delay(attempt))
 
     async def _parse_stream(self, response, fallback_model: str):
         usage = Usage()
@@ -120,7 +161,13 @@ class AnthropicProvider:
             if kind == "message_start":
                 message = chunk.get("message") or {}
                 model = str(message.get("model") or model)
-                usage.input_tokens = int((message.get("usage") or {}).get("input_tokens") or 0)
+                reported = message.get("usage") or {}
+                usage.input_tokens = int(reported.get("input_tokens") or 0)
+                # Absent on a provider or model that does not cache, which is
+                # why these read as 0 rather than raising: the fields are a
+                # report about the request, not a promise the API makes.
+                usage.cache_creation_input_tokens = int(reported.get("cache_creation_input_tokens") or 0)
+                usage.cache_read_input_tokens = int(reported.get("cache_read_input_tokens") or 0)
             elif kind == "content_block_start":
                 block = chunk.get("content_block") or {}
                 if block.get("type") == "tool_use":
@@ -147,4 +194,8 @@ class AnthropicProvider:
 
 
 class _Retry(Exception):
-    pass
+    """Retryable HTTP status, carrying the server's Retry-After if it sent one."""
+
+    def __init__(self, delay: float | None = None) -> None:
+        super().__init__("retryable provider response")
+        self.delay = delay

@@ -1,0 +1,197 @@
+{
+  "contract_version": "2.0",
+  "responses": {
+    "api_contract": {
+      "contract_version": "2.0",
+      "min_supported_version": "2.0",
+      "runtime_version": "0.1.0",
+      "application": {
+        "version": "2.0",
+        "schema": "v2",
+        "types": {
+          "session": "SessionSnapshot",
+          "turn": "TurnRequest",
+          "run": "RunReceipt",
+          "run_control": "RunControl"
+        }
+      },
+      "transports": {
+        "http": {
+          "version": "v1",
+          "status": "stable"
+        },
+        "sse": {
+          "event_schema": "v2",
+          "status": "stable"
+        },
+        "stdio_jsonrpc": {
+          "version": "2.0",
+          "status": "planned"
+        }
+      },
+      "future_field": true
+    },
+    "create_session": {
+      "session_id": "sess_fixture",
+      "future_field": "ignored-by-v2-client"
+    },
+    "send_message": {
+      "status": "accepted",
+      "run_id": "run_fixture",
+      "future_field": {
+        "trace_id": "trace_fixture"
+      }
+    },
+    "session_status": {
+      "session_id": "sess_fixture",
+      "workspace": "/workspace",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "messages": [],
+      "approvals": [],
+      "agent": {
+        "running": true,
+        "queued": 1,
+        "pending_steers": 0,
+        "current_run_id": "run_fixture",
+        "stage": "model.stream",
+        "started_at": "2026-01-01T00:00:01+00:00",
+        "last_progress_at": "2026-01-01T00:00:02+00:00",
+        "elapsed_seconds": 2,
+        "stalled_seconds": 1
+      },
+      "context": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "context_window": 200000,
+        "reserve_tokens": 1024,
+        "usable_tokens": 198976,
+        "used_tokens": 12480,
+        "used_ratio": 0.0627,
+        "compact_threshold": 0.8,
+        "compaction_due": false,
+        "estimator": "chars",
+        "chars_per_token": 3.5
+      },
+      "future_field": true
+    },
+    "steer_session": {
+      "status": "queued",
+      "run_id": "run_fixture",
+      "pending": 1,
+      "future_field": true
+    },
+    "compact_session": {
+      "status": "compacted",
+      "compaction": {
+        "compaction_id": 1,
+        "session_id": "sess_fixture",
+        "summary": "- fixture"
+      },
+      "future_field": true
+    },
+    "cancel_run_cancelled": {
+      "status": "cancelled",
+      "run_id": "run_fixture",
+      "queued": 1,
+      "future_field": true
+    },
+    "cancel_run_idle": {
+      "status": "idle",
+      "run_id": null,
+      "queued": 0,
+      "future_field": true
+    },
+    "execute_sandbox": {
+      "execution_id": "exec_fixture",
+      "backend": "docker",
+      "action": "test",
+      "status": "succeeded",
+      "exit_code": 0,
+      "stdout": "ok\n",
+      "stderr": "",
+      "duration_ms": 12,
+      "timed_out": false,
+      "cancelled": false,
+      "artifacts": [
+        {
+          "path": "reports/junit.xml",
+          "size_bytes": 128,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "artifacts_truncated": false,
+      "future_field": "ignored-by-v2-client"
+    },
+    "cancel_execution": {
+      "status": "cancelled",
+      "execution_id": "exec_fixture",
+      "future_field": true
+    },
+    "trust_status": {
+      "workspace": "/workspace",
+      "level": "untrusted",
+      "git_remote": "",
+      "recorded_remote": "",
+      "reason": "not_recorded",
+      "future_field": true
+    },
+    "trust_project": {
+      "workspace": "/workspace",
+      "level": "trusted",
+      "git_remote": "git@example.test:team/repo.git",
+      "recorded_remote": "git@example.test:team/repo.git",
+      "reason": "recorded",
+      "future_field": true
+    },
+    "trust_list": {
+      "projects": [
+        {
+          "workspace": "/workspace",
+          "level": "trusted",
+          "git_remote": "git@example.test:team/repo.git",
+          "recorded_remote": "git@example.test:team/repo.git",
+          "reason": "recorded"
+        }
+      ],
+      "future_field": true
+    },
+    "trust_removed": {
+      "workspace": "/workspace",
+      "level": "untrusted",
+      "git_remote": "",
+      "recorded_remote": "",
+      "reason": "not_recorded",
+      "removed": true,
+      "future_field": true
+    },
+    "session_list": [
+      {
+        "session_id": "sess_fixture",
+        "workspace": "/workspace",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:05+00:00",
+        "message_count": 12,
+        "agent": {
+          "running": false,
+          "queued": 0,
+          "pending_steers": 0,
+          "current_run_id": null,
+          "stage": null,
+          "started_at": null,
+          "last_progress_at": null,
+          "elapsed_seconds": null,
+          "stalled_seconds": null
+        },
+        "future_field": "ignored-by-v2-client"
+      }
+    ],
+    "prune_sessions": {
+      "status": "ok",
+      "deleted_sessions": 3,
+      "deleted_messages": 41,
+      "retained_live": 1,
+      "future_field": true
+    }
+  }
+}

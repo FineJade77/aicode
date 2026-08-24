@@ -17,17 +17,10 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: Check gofmt
-        run: |
-          fmt_out=$(gofmt -l cli/)
-          if [ -n "$fmt_out" ]; then
-            echo "The following files are not gofmt'ed:"
-            echo "$fmt_out"
-            exit 1
-          fi
-
-      - name: go vet
-        run: GOCACHE=$PWD/.cache/go-build GOMODCACHE=$PWD/.cache/go-mod go vet ./cli/...
+      # Same target a developer runs. Inlining these steps here is what let CI
+      # and `make lint` drift into checking different things.
+      - name: gofmt and go vet
+        run: make lint-go
 
       - name: go test
         run: make test-go
@@ -46,8 +39,46 @@ jobs:
       - name: Install dependencies
         run: make deps-python
 
+      - name: Lint
+        run: make lint-python
+
       - name: Compile check
         run: make compile-python
 
       - name: pytest
         run: make test-python
+
+      - name: No-auth localhost provider smoke
+        run: make test-local-provider-smoke
+
+      - name: Deterministic agent eval smoke
+        run: make eval-smoke
+
+      - name: Upload eval traces and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-smoke
+          path: .artifacts/evals/
+          if-no-files-found: error
+
+  install-e2e:
+    name: Clean-home install E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Runtime dependencies
+        run: make deps-python
+
+      - name: Install, start, inspect and stop
+        run: make test-install-e2e

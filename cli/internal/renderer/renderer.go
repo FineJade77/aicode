@@ -4,18 +4,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
 )
 
 func PrintJSON(value any) {
+	PrintJSONTo(os.Stdout, value)
+}
+
+// PrintJSONTo renders stable, indented JSON to the supplied writer.
+func PrintJSONTo(out io.Writer, value any) {
 	encoded, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		fmt.Printf("%v\n", value)
+		fmt.Fprintf(out, "%v\n", value)
 		return
 	}
-	fmt.Println(string(encoded))
+	fmt.Fprintln(out, string(encoded))
 }
 
 func PrintReviewRulesTable(value any) {
@@ -28,6 +35,10 @@ func PrintReviewRulesMarkdown(value any) {
 
 func PrintModelRoutes(value any) {
 	fmt.Print(ModelRoutesTable(value))
+}
+
+func PrintModelProbe(value any) {
+	fmt.Print(ModelProbeTable(value))
 }
 
 func PrintUsageSummary(value any) {
@@ -76,17 +87,59 @@ func ModelRoutesTable(value any) string {
 	out.WriteString("Model Routes\n")
 	if provider, ok := root["provider"].(map[string]any); ok {
 		out.WriteString(fmt.Sprintf("primary: %s (configured: %v)\n", stringValue(provider["primary"]), provider["primary_configured"]))
-		out.WriteString(fmt.Sprintf("fallback: %s\n", stringValue(provider["fallback"])))
+		// Printed only when one is configured. It used to print unconditionally
+		// from a field the Runtime never sent, so an empty value read as "a
+		// fallback exists and is unset" rather than "none is configured".
+		if fallback := stringValue(provider["fallback"]); fallback != "" {
+			out.WriteString(fmt.Sprintf("fallback: %s (%s)\n", fallback, stringValue(provider["fallback_model"])))
+		}
 	}
 
 	out.WriteString("\nRoutes\n")
 	writeKeyValueTable(&out, root["routes"], "ROUTE", "MODEL")
 
+	if capabilities, ok := root["capabilities"].(map[string]any); ok {
+		out.WriteString("\nContext Capabilities\n")
+		var table bytes.Buffer
+		writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(writer, "ROUTE\tPROVIDER\tMODEL\tCONTEXT\tMAX OUTPUT\tTOOLS\tSTREAM\tTOKENIZER\tSOURCE")
+		keys := make([]string, 0, len(capabilities))
+		for key := range capabilities {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			row, ok := capabilities[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(
+				writer,
+				"%s\t%s\t%s\t%v\t%v\t%v\t%v\t%s\t%s\n",
+				key,
+				stringValue(row["provider"]),
+				stringValue(row["model"]),
+				row["context_window"],
+				row["max_output_tokens"],
+				row["tool_calling"],
+				row["streaming"],
+				stringValue(row["tokenizer"]),
+				stringValue(row["source"]),
+			)
+		}
+		writer.Flush()
+		out.WriteString(table.String())
+	}
+
 	if openai, ok := root["openai_compatible"].(map[string]any); ok {
 		out.WriteString("\nOpenAI-compatible\n")
+		out.WriteString(fmt.Sprintf("profile: %s (schema v%v)\n", stringValue(openai["profile"]), openai["profile_schema_version"]))
 		out.WriteString(fmt.Sprintf("base_url: %s\n", stringValue(openai["base_url"])))
+		out.WriteString(fmt.Sprintf("auth_mode: %s\n", stringValue(openai["auth_mode"])))
 		out.WriteString(fmt.Sprintf("api_key_env: %s\n", stringValue(openai["api_key_env"])))
 		out.WriteString(fmt.Sprintf("timeout_seconds: %v\n", openai["timeout_seconds"]))
+		out.WriteString(fmt.Sprintf("tool_calling: %v\n", openai["tool_calling"]))
+		out.WriteString(fmt.Sprintf("streaming: %v\n", openai["streaming"]))
 	}
 
 	if pricing, ok := root["pricing"].(map[string]any); ok {
@@ -117,6 +170,58 @@ func ModelRoutesTable(value any) string {
 	return out.String()
 }
 
+func ModelProbeTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Provider Profile Probe\n")
+	out.WriteString(fmt.Sprintf("status: %s\n", stringValue(root["status"])))
+	out.WriteString(fmt.Sprintf("model: %s\n", stringValue(root["model"])))
+	out.WriteString(fmt.Sprintf("latency_ms: %v\n", root["latency_ms"]))
+	if profile, ok := root["profile"].(map[string]any); ok {
+		out.WriteString("\nProfile\n")
+		for _, key := range []string{
+			"name", "schema_version", "provider", "base_url", "auth_mode", "context_window",
+			"max_output_tokens", "tool_calling", "streaming", "tokenizer", "chars_per_token",
+		} {
+			out.WriteString(fmt.Sprintf("%s: %v\n", key, profile[key]))
+		}
+	}
+
+	out.WriteString("\nChecks\n")
+	var table bytes.Buffer
+	writer := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "STATUS\tCHECK\tCODE\tLATENCY\tSUMMARY")
+	if checks, ok := root["checks"].([]any); ok {
+		for _, item := range checks {
+			check, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(
+				writer,
+				"%s\t%s\t%s\t%v\t%s\n",
+				strings.ToUpper(stringValue(check["status"])),
+				stringValue(check["name"]),
+				stringValue(check["code"]),
+				check["latency_ms"],
+				stringValue(check["summary"]),
+			)
+		}
+	}
+	writer.Flush()
+	out.WriteString(table.String())
+
+	if models := joinStringList(root["discovered_models"]); models != "" {
+		out.WriteString("\nDiscovered Models\n")
+		out.WriteString(models + "\n")
+	}
+	return out.String()
+}
+
 func UsageSummaryTable(value any) string {
 	root, ok := value.(map[string]any)
 	if !ok {
@@ -130,6 +235,15 @@ func UsageSummaryTable(value any) string {
 	out.WriteString(fmt.Sprintf("output_tokens: %v\n", root["total_output_tokens"]))
 	out.WriteString(fmt.Sprintf("total_tokens: %v\n", root["total_tokens"]))
 	out.WriteString(fmt.Sprintf("estimated_cost: $%s\n", stringValue(root["estimated_cost"])))
+	// Printed only when non-zero, and worded as a claim about the numbers above
+	// rather than as one more statistic: these calls burned tokens the provider
+	// never reported, so the totals are a floor, not a measurement.
+	if incomplete := stringValue(root["incomplete_calls"]); incomplete != "" && incomplete != "0" {
+		out.WriteString(fmt.Sprintf(
+			"incomplete_calls: %s (cut off before the provider reported usage; the totals above are a lower bound)\n",
+			incomplete,
+		))
+	}
 	if filters, ok := root["filters"].(map[string]any); ok {
 		if sessionID := stringValue(filters["session_id"]); sessionID != "" {
 			out.WriteString(fmt.Sprintf("session_id: %s\n", sessionID))
@@ -155,7 +269,7 @@ func ReviewRulesTable(value any) string {
 	}
 
 	var out strings.Builder
-	out.WriteString("Review 配置\n")
+	out.WriteString("Review configuration\n")
 	if config, ok := root["effective_config"].(map[string]any); ok {
 		out.WriteString(fmt.Sprintf("disabledRules: %s\n", joinStringList(config["disabled_rules"])))
 		out.WriteString(fmt.Sprintf("largeDiffThreshold: %v\n", config["large_diff_threshold"]))
@@ -302,62 +416,141 @@ func writeUsageGroup(out *strings.Builder, title string, value any) {
 	out.WriteString(table.String())
 }
 
+// FoldToolOutputLines is how much of a tool's output the transcript shows before
+// collapsing the rest. Zero disables folding.
+//
+// A `cat` of a large file or a full test run scrolls the actual conversation off
+// the screen, and the transcript is the thing the user is reading. The head is
+// kept rather than the tail because tool output leads with what it is —
+// a file's first lines, a test run's first failure.
+var FoldToolOutputLines = 16
+
+// FoldToolOutput collapses long tool output for display only.
+//
+// The count of hidden lines is stated, and so is the fact that the model saw all
+// of it: a reader who thinks the model only got 16 lines will misread every
+// decision it made from the rest.
+func FoldToolOutput(text string) string {
+	if FoldToolOutputLines <= 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= FoldToolOutputLines {
+		return text
+	}
+	hidden := len(lines) - FoldToolOutputLines
+	return strings.Join(lines[:FoldToolOutputLines], "\n") +
+		fmt.Sprintf("\n  … %d more lines folded for display; the model received the full output", hidden)
+}
+
 func RenderEvent(event map[string]any) {
+	RenderEventTo(os.Stdout, event)
+}
+
+// RenderEventTo keeps event rendering reusable by the one-shot CLI and REPL.
+func RenderEventTo(out io.Writer, event map[string]any) {
 	eventType, _ := event["type"].(string)
 
 	switch eventType {
 	case "session.created":
-		fmt.Printf("工作区: %s\n", stringValue(event["workspace"]))
+		fmt.Fprintf(out, "Workspace: %s\n", stringValue(event["workspace"]))
 	case "run.queued":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Fprintln(out, stringValue(event["message"]))
 	case "run.started":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Fprintln(out, stringValue(event["message"]))
+	case "run.steer.queued":
+		fmt.Fprintln(out, stringValue(event["message"]))
+	case "run.steer.applied":
+		fmt.Fprintln(out, stringValue(event["message"]))
 	case "run.cancelled":
-		fmt.Println(stringValue(event["message"]))
+		fmt.Fprintln(out, stringValue(event["message"]))
 	case "assistant.delta":
-		fmt.Print(stringValue(event["text"]))
+		fmt.Fprint(out, stringValue(event["text"]))
 	case "tool.started":
-		fmt.Printf("工具: %s\n", stringValue(event["tool"]))
+		fmt.Fprintf(out, "Tool: %s\n", stringValue(event["tool"]))
 	case "tool.output":
-		if detail := toolDetailLine("工具完成", event); detail != "" {
-			fmt.Println(detail)
+		if detail := toolDetailLine("Tool completed", event); detail != "" {
+			fmt.Fprintln(out, detail)
 		}
 		if line := contextOutputLine(event); line != "" {
-			fmt.Println(line)
+			fmt.Fprintln(out, line)
 		}
 		text := strings.TrimSpace(stringValue(event["text"]))
 		if text != "" {
-			fmt.Println(text)
+			fmt.Fprintln(out, FoldToolOutput(text))
 		}
 	case "context.budget":
 		if line := contextBudgetLine(event); line != "" {
-			fmt.Print(line)
+			fmt.Fprint(out, line)
 		}
+	case "run.budget.exceeded":
+		fmt.Fprint(out, budgetExceededLine(event))
+	case "verify.attempt":
+		fmt.Fprint(out, verifyAttemptLine(event))
+	case "run.verification.exhausted":
+		fmt.Fprint(out, verificationExhaustedLine(event))
+	case "run.no_progress":
+		fmt.Fprint(out, noProgressLine(event))
+	case "plan.updated":
+		fmt.Fprint(out, planLines(event))
+	case "mcp.server.started":
+		fmt.Fprintf(out, "MCP server %q ready (%d tools)\n", stringValue(event["server"]), countValue(event["tools"]))
+	case "mcp.server.failed":
+		// Reported rather than swallowed: the user configured this server and
+		// would otherwise just find its tools quietly missing.
+		fmt.Fprintf(out, "MCP server %q failed to start: %s\n", stringValue(event["server"]), stringValue(event["error"]))
+	case "subagent.started":
+		fmt.Fprintf(out, "\n%s\n", stringValue(event["message"]))
+	case "subagent.finished":
+		// The cost is shown because the subagent's spend comes out of this
+		// turn's budget: work the user cannot see still has to be accountable.
+		fmt.Fprintf(out, "%s\n", stringValue(event["message"]))
+	case "provider.fallback":
+		// Never silent. Answering from another provider changes the price, the
+		// declared capabilities and what a rerun would produce, so the switch is
+		// stated rather than left to be inferred from a usage table later.
+		fmt.Fprintf(out, "\n%s\n", stringValue(event["message"]))
 	case "tool.denied":
-		fmt.Printf("工具被策略拦截: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "Tool denied by policy: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.rejected":
-		fmt.Printf("工具执行已拒绝: %s (%s)\n", stringValue(event["tool"]), stringValue(event["error"]))
+		fmt.Fprintf(out, "%s: %s (%s)\n", approvalOutcomeLabel(event, "Tool execution rejected", "Tool execution not approved"), stringValue(event["tool"]), stringValue(event["error"]))
 	case "tool.error":
-		detail := toolDetailLine("工具失败", event)
+		detail := toolDetailLine("Tool failed", event)
 		if detail == "" {
-			detail = fmt.Sprintf("工具失败: %s", stringValue(event["tool"]))
+			detail = fmt.Sprintf("Tool failed: %s", stringValue(event["tool"]))
 		}
-		fmt.Printf("%s (%s)\n", detail, stringValue(event["error"]))
+		fmt.Fprintf(out, "%s (%s)\n", detail, stringValue(event["error"]))
+	case "question.asked":
+		fmt.Fprint(out, questionLines(event))
 	case "approval.requested":
-		fmt.Printf("需要确认: %s\n", stringValue(event["message"]))
+		fmt.Fprintf(out, "Approval required: %s\n", stringValue(event["message"]))
+	case "approval.expired":
+		fmt.Fprintf(out, "Approval expired: %s\n", stringValue(event["message"]))
 	case "edit.applied":
-		fmt.Printf("\n已应用编辑: %v (%v)\n", event["path"], event["kind"])
+		fmt.Fprintf(out, "\nEdit applied: %v (%v)\n", event["path"], event["kind"])
 	case "edit.rejected":
-		fmt.Printf("\n已拒绝编辑: %v\n", event["path"])
+		fmt.Fprintf(out, "\n%s: %v\n", approvalOutcomeLabel(event, "Edit rejected", "Edit not approved (approval timed out)"), event["path"])
 	case "edit.auto_approved":
-		fmt.Printf("\n[本会话已允许] 自动应用编辑: %v\n", event["path"])
+		fmt.Fprintf(out, "\n[allowed for this session] Edit applied automatically: %v\n", event["path"])
+	case "hook.finished":
+		// A hook that did not fire is reported too. Staying silent about skipped
+		// hooks is how a project's format-on-write quietly stops happening.
+		if reason := stringValue(event["reason"]); reason != "" {
+			fmt.Fprintf(out, "\nProject hooks not run: %s\n", reason)
+		} else {
+			fmt.Fprintf(out, "\nProject hooks ran (%s): %s\n", stringValue(event["event"]), hookList(event["hooks"]))
+		}
+	case "hook.blocked":
+		fmt.Fprintf(out, "\nBlocked by project hook: %s\n", stringValue(event["reason"]))
 	case "usage.recorded":
-		fmt.Println(usageLine(event))
+		fmt.Fprintln(out, usageLine(event))
+	case "error":
+		fmt.Fprintf(out, "\nError: %s\n", stringValue(event["error"]))
 	case "final":
-		fmt.Printf("\n%s\n", stringValue(event["summary"]))
+		fmt.Fprintf(out, "\n%s\n", stringValue(event["summary"]))
 	default:
 		if eventType != "" {
-			PrintJSON(event)
+			PrintJSONTo(out, event)
 		}
 	}
 }
@@ -396,12 +589,12 @@ func contextOutputLine(event map[string]any) string {
 		if path == "" {
 			return ""
 		}
-		line := fmt.Sprintf("上下文: 已读取 %s", path)
+		line := fmt.Sprintf("Context: read %s", path)
 		if label := contextKindLabel(kind); label != "" && sourcePath != "" {
 			line += fmt.Sprintf(" (%s: %s)", label, sourcePath)
 		}
 		if boolValue(data["truncated"]) {
-			line += "，工具输出已截断"
+			line += "; tool output was truncated"
 		}
 		return line
 	case "find_files":
@@ -415,18 +608,173 @@ func contextOutputLine(event map[string]any) string {
 		query := stringValue(data["query"])
 		count := len(sliceValue(data["files"]))
 		if sourcePath != "" && query != "" {
-			return fmt.Sprintf("上下文: %s %s -> %s，命中 %d 个候选", label, sourcePath, query, count)
+			return fmt.Sprintf("Context: %s %s -> %s, %d candidates", label, sourcePath, query, count)
 		}
 		if query != "" {
-			return fmt.Sprintf("上下文: %s query=%s，命中 %d 个候选", label, query, count)
+			return fmt.Sprintf("Context: %s query=%s, %d candidates", label, query, count)
 		}
 	}
 	return ""
 }
 
+// budgetExceededLine reports a stopped run prominently: the user is about to get
+// a shorter answer than they asked for, and needs to know it was a spend cap
+// rather than the model deciding the task was finished.
+// approvalOutcomeLabel keeps an unanswered approval from being reported as a
+// refusal. The user needs to know whether they declined or simply missed the
+// prompt, because only the second case is worth retrying.
+func approvalOutcomeLabel(event map[string]any, rejected string, timedOut string) string {
+	if stringValue(event["resolution"]) == "timed_out" {
+		return timedOut
+	}
+	return rejected
+}
+
+func countValue(value any) int {
+	if items, ok := value.([]any); ok {
+		return len(items)
+	}
+	return 0
+}
+
+// planLines renders the agent's plan as a checklist. This is the whole point of
+// externalising the plan: during a long task the user can see what the agent
+// believes it is doing, instead of a stream of tool names.
+func planLines(event map[string]any) string {
+	items, ok := event["items"].([]any)
+	if !ok || len(items) == 0 {
+		return "\nPlan cleared.\n"
+	}
+	var out strings.Builder
+	out.WriteString("\nPlan:\n")
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		out.WriteString(fmt.Sprintf("  %s %s\n", planMarker(stringValue(item["status"])), stringValue(item["text"])))
+	}
+	return out.String()
+}
+
+func planMarker(status string) string {
+	switch status {
+	case "done":
+		return "[x]"
+	case "in_progress":
+		return "[~]"
+	default:
+		return "[ ]"
+	}
+}
+
+func budgetExceededLine(event map[string]any) string {
+	reason := stringValue(event["reason"])
+	if reason == "" {
+		reason = "budget"
+	}
+	return fmt.Sprintf(
+		"\nTurn stopped: %s budget exhausted (tokens=%v, cost=%v, limit=%v). Wrapping up without further tool calls.\n",
+		reason,
+		event["total_tokens"],
+		event["total_cost"],
+		event["limit"],
+	)
+}
+
+func verifyAttemptLine(event map[string]any) string {
+	if boolValue(event["passed"]) {
+		return "Verification passed.\n"
+	}
+	line := fmt.Sprintf(
+		"Verification attempt %v of %v failed (exit %v).",
+		event["round"],
+		event["limit"],
+		event["exit_code"],
+	)
+	if summary := stringValue(event["summary"]); summary != "" {
+		line += " " + summary
+	}
+	return line + "\n"
+}
+
+func noProgressLine(event map[string]any) string {
+	label := "repeating the same action"
+	if stringValue(event["reason"]) == "repeated_failure" {
+		label = "hitting the same failure"
+	}
+	if !boolValue(event["stopped"]) {
+		return fmt.Sprintf("Agent is %s (%v times); asking it to change approach.\n", label, event["count"])
+	}
+	return fmt.Sprintf(
+		"\nTurn stopped: agent was %s %v times without progress. Wrapping up with a report.\n",
+		label,
+		event["count"],
+	)
+}
+
+func questionLines(event map[string]any) string {
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("\nThe agent is asking: %s\n", stringValue(event["question"])))
+	for index, item := range sliceValue(event["options"]) {
+		out.WriteString(fmt.Sprintf("  %d) %s\n", index+1, stringValue(item)))
+	}
+	return out.String()
+}
+
+func verificationExhaustedLine(event map[string]any) string {
+	// The extracted summary is repeated here on purpose: this is the line the
+	// user sees when the run gives up, and scrolling back for the reason is
+	// exactly what the structured extraction exists to avoid.
+	line := fmt.Sprintf(
+		"\nTurn stopped: verification still failing after %v attempts.",
+		event["rounds"],
+	)
+	if command := stringValue(event["command"]); command != "" {
+		line += fmt.Sprintf(" Last command: %s (exit %v).", command, event["exit_code"])
+	}
+	if summary := stringValue(event["summary"]); summary != "" {
+		line += " " + summary
+	}
+	return line + " Wrapping up with a report.\n"
+}
+
 func contextBudgetLine(event map[string]any) string {
+	// A fold is not a compaction — no summary was produced and nothing was lost —
+	// but it did change the prompt, so it still has to be visible.
+	if stringValue(event["reason"]) == "folded" && !boolValue(event["compacted"]) {
+		return fmt.Sprintf(
+			"Context budget: folded %v earlier tool outputs, %v -> %v tokens (no summary needed)\n",
+			event["folded_tool_outputs"],
+			event["before_tokens"],
+			event["after_tokens"],
+		)
+	}
 	if !boolValue(event["compacted"]) {
 		return ""
+	}
+	if event["before_tokens"] != nil || event["after_tokens"] != nil {
+		purpose := stringValue(event["purpose"])
+		if purpose == "" {
+			purpose = "model"
+		}
+		line := fmt.Sprintf(
+			"Context budget: %s %v -> %v tokens\n",
+			purpose,
+			event["before_tokens"],
+			event["after_tokens"],
+		)
+		// Named explicitly because it changes what the summary can be trusted to
+		// say: these files changed after they were read, so their contents were
+		// dropped from the summary rather than compressed into it.
+		if stale := sliceValue(event["stale_reads"]); len(stale) > 0 {
+			paths := make([]string, 0, len(stale))
+			for _, item := range stale {
+				paths = append(paths, stringValue(item))
+			}
+			line += fmt.Sprintf("  dropped stale file content: %s (re-read if needed)\n", strings.Join(paths, ", "))
+		}
+		return line
 	}
 	var out strings.Builder
 	purpose := stringValue(event["purpose"])
@@ -434,7 +782,7 @@ func contextBudgetLine(event map[string]any) string {
 		purpose = "model"
 	}
 	out.WriteString(fmt.Sprintf(
-		"上下文预算: %s 压缩 %v 条观测，当前约 %v/%v chars\n",
+		"Context budget: %s compacted %v observations, now approximately %v/%v chars\n",
 		purpose,
 		event["per_observation_compactions"],
 		event["estimated_observation_chars"],
@@ -464,13 +812,13 @@ func contextBudgetLine(event map[string]any) string {
 func contextKindLabel(kind string) string {
 	switch kind {
 	case "test_mapping":
-		return "测试映射"
+		return "test mapping"
 	case "dependency_mapping":
-		return "依赖映射"
+		return "dependency mapping"
 	case "search_result":
-		return "搜索命中"
+		return "search matches"
 	case "file_lookup":
-		return "文件定位"
+		return "file lookup"
 	default:
 		return ""
 	}
@@ -486,7 +834,7 @@ func usageLine(event map[string]any) string {
 		cost = "0"
 	}
 	return fmt.Sprintf(
-		"用量: purpose=%s model=%s input=%v output=%v cost=$%s",
+		"Usage: purpose=%s model=%s input=%v output=%v cost=$%s",
 		purpose,
 		stringValue(event["model"]),
 		event["input_tokens"],
@@ -532,6 +880,25 @@ func escapeMarkdownTable(value string) string {
 	return strings.ReplaceAll(value, "|", "\\|")
 }
 
+// hookList renders the commands a hook event reports, so the user sees which
+// project command touched their file rather than an opaque count.
+func hookList(value any) string {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if text := stringValue(item); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
+}
+
 func stringValue(value any) string {
 	if value == nil {
 		return ""
@@ -540,4 +907,67 @@ func stringValue(value any) string {
 		return s
 	}
 	return fmt.Sprint(value)
+}
+
+// RouteProbeTable reports one line per route.
+//
+// Separate from the single-model probe because the question is different: not
+// "is the provider reachable" but "is every configured route usable". The
+// summarizer is the one that matters most here — it is a different model in most
+// setups and nothing exercises it until a compaction fires mid-run, which is the
+// worst moment to find out it does not exist.
+func RouteProbeTable(value any) string {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v\n", value)
+	}
+
+	var out strings.Builder
+	out.WriteString("Route Probe\n")
+	out.WriteString(fmt.Sprintf("status: %s\n", stringValue(root["status"])))
+	if probes := stringValue(root["probes"]); probes != "" {
+		out.WriteString(fmt.Sprintf("requests: %s (routes sharing a model are probed once)\n", probes))
+	}
+
+	routes, ok := root["routes"].(map[string]any)
+	if !ok {
+		return out.String()
+	}
+	out.WriteString("\nROUTE       MODEL                          TOOLS  STATUS  LATENCY\n")
+	for _, purpose := range []string{"main", "reviewer", "summarizer"} {
+		route, ok := routes[purpose].(map[string]any)
+		if !ok {
+			continue
+		}
+		out.WriteString(fmt.Sprintf(
+			"%-11s %-30s %-6s %-7s %sms\n",
+			purpose,
+			stringValue(route["model"]),
+			stringValue(route["tools"]),
+			stringValue(route["status"]),
+			stringValue(route["latency_ms"]),
+		))
+	}
+	for _, purpose := range []string{"main", "reviewer", "summarizer"} {
+		route, ok := routes[purpose].(map[string]any)
+		if !ok || stringValue(route["status"]) != "error" {
+			continue
+		}
+		checks, ok := route["checks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range checks {
+			check, ok := item.(map[string]any)
+			if !ok || stringValue(check["status"]) != "fail" {
+				continue
+			}
+			out.WriteString(fmt.Sprintf("\n%s: %s\n", purpose, stringValue(check["summary"])))
+		}
+	}
+	return out.String()
+}
+
+func PrintRouteProbe(value any) {
+	fmt.Print(RouteProbeTable(value))
 }

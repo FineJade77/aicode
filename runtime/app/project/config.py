@@ -20,18 +20,116 @@ class ReviewConfig:
     max_findings: int = 50
 
 
+@dataclass(slots=True)
+class McpServerRef:
+    """One MCP server declared by the project.
+
+    `env_allowlist` names extra environment variables the server may inherit on
+    top of the minimal default set. It is an allowlist rather than a pass-through
+    so a project cannot hand provider keys to third-party code by declaring a
+    server.
+    """
+
+    name: str
+    command: list[str] = field(default_factory=list)
+    url: str = ""
+    auth_token_env: str = ""
+    env_allowlist: tuple[str, ...] = ()
+    startup_timeout: float = 20.0
+    call_timeout: float = 60.0
+
+
+HOOK_EVENTS = ("post_edit", "pre_bash")
+MAX_HOOKS = 20
+DEFAULT_HOOK_TIMEOUT = 60.0
+MAX_HOOK_TIMEOUT = 600.0
+
+
+@dataclass(slots=True)
+class HookRef:
+    """One command the project wants run around a tool event.
+
+    `post_edit` fires after an edit lands (format the file that was written).
+    `pre_bash` fires before a shell command runs and can refuse it on a non-zero
+    exit, which is what makes a "lint before commit" gate possible.
+
+    `match` is a glob against the edited path or the shell command; empty
+    matches everything.
+    """
+
+    event: str
+    command: str
+    match: str = ""
+    timeout: float = DEFAULT_HOOK_TIMEOUT
+    # Only meaningful for `pre_bash`. A post_edit hook cannot block anything —
+    # the edit is already on disk by the time it runs.
+    blocking: bool = True
+
+
+@dataclass(slots=True)
+class ExecutionConfig:
+    """Project-level override for where Agent shell commands run.
+
+    An empty string means "inherit the Runtime-wide setting"; a project may only
+    pick one of the known backends, never invent a new one.
+    """
+
+    agent_bash_backend: str = ""
+
+
+def mandatory_protected_paths() -> list[str]:
+    return [
+        ".env",
+        ".env.*",
+        "**/.env",
+        "**/.env.*",
+        ".ssh/**",
+        "**/.ssh/**",
+        ".gnupg/**",
+        "**/.gnupg/**",
+        ".aws/**",
+        "**/.aws/**",
+        ".azure/**",
+        "**/.azure/**",
+        ".kube/**",
+        "**/.kube/**",
+        ".config/gcloud/**",
+        "**/.config/gcloud/**",
+        ".config/gh/**",
+        "**/.config/gh/**",
+        ".docker/**",
+        "**/.docker/**",
+        ".git/config",
+        "**/.git/config",
+        ".git-credentials",
+        "**/.git-credentials",
+        ".netrc",
+        "**/.netrc",
+        ".npmrc",
+        "**/.npmrc",
+        ".pypirc",
+        "**/.pypirc",
+        "*.pem",
+        "**/*.pem",
+        "*.key",
+        "**/*.key",
+    ]
+
+
 def default_protected_paths() -> list[str]:
-    return [".env", ".env.*", "secrets/**", "infra/prod/**"]
+    return [*mandatory_protected_paths(), "secrets/**", "infra/prod/**"]
 
 
 @dataclass(slots=True)
 class ProjectConfig:
     project_name: str | None = None
-    default_language: str | None = None
     commands: dict[str, str] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=default_protected_paths)
     workspaces: list[WorkspaceRef] = field(default_factory=list)
     review: ReviewConfig = field(default_factory=ReviewConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    mcp_servers: list[McpServerRef] = field(default_factory=list)
+    hooks: list[HookRef] = field(default_factory=list)
 
 
 def load_project_config(workspace: Path) -> ProjectConfig:
@@ -52,15 +150,111 @@ def parse_project_config(raw: dict[str, Any]) -> ProjectConfig:
     protected_paths = raw.get("protectedPaths")
     workspaces = raw.get("workspaces")
     review = raw.get("review")
+    execution = raw.get("execution")
+    mcp = raw.get("mcp")
 
     return ProjectConfig(
         project_name=as_optional_str(raw.get("projectName")),
-        default_language=as_optional_str(raw.get("defaultLanguage")),
         commands={str(key): str(value) for key, value in commands.items()} if isinstance(commands, dict) else {},
-        protected_paths=[str(value) for value in protected_paths] if isinstance(protected_paths, list) else default_protected_paths(),
+        protected_paths=effective_protected_paths(protected_paths),
         workspaces=parse_workspaces(workspaces),
         review=parse_review_config(review),
+        execution=parse_execution_config(execution),
+        mcp_servers=parse_mcp_servers(mcp),
+        hooks=parse_hooks(raw.get("hooks")),
     )
+
+
+def parse_hooks(raw: Any) -> list[HookRef]:
+    """Read the project's hook declarations, dropping anything malformed.
+
+    An unknown event name is skipped rather than defaulted onto a real event: a
+    typo must not silently attach a command to a different trigger than the one
+    the author wrote.
+    """
+    if not isinstance(raw, list):
+        return []
+    hooks: list[HookRef] = []
+    for entry in raw[:MAX_HOOKS]:
+        if not isinstance(entry, dict):
+            continue
+        event = str(entry.get("event") or "").strip()
+        command = str(entry.get("command") or "").strip()
+        if event not in HOOK_EVENTS or not command:
+            continue
+        hooks.append(
+            HookRef(
+                event=event,
+                command=command,
+                match=str(entry.get("match") or "").strip(),
+                timeout=_hook_timeout(entry.get("timeout")),
+                blocking=entry.get("blocking") is not False,
+            )
+        )
+    return hooks
+
+
+def _hook_timeout(raw: Any) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_HOOK_TIMEOUT
+    if value <= 0:
+        return DEFAULT_HOOK_TIMEOUT
+    return min(value, MAX_HOOK_TIMEOUT)
+
+
+def parse_mcp_servers(raw: Any) -> list[McpServerRef]:
+    if not isinstance(raw, dict):
+        return []
+    servers = raw.get("servers")
+    if not isinstance(servers, list):
+        return []
+    refs: list[McpServerRef] = []
+    seen: set[str] = set()
+    for item in servers:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        command = item.get("command")
+        url = str(item.get("url") or "").strip()
+        # A server without a usable name, or without exactly one transport, is
+        # skipped rather than guessed at: launching the wrong process — or
+        # posting a tool call to the wrong host — is worse than doing neither.
+        argv = [str(part) for part in command if str(part)] if isinstance(command, list) else []
+        if not name or name in seen or bool(argv) == bool(url):
+            continue
+        seen.add(name)
+        env_allowlist = item.get("envAllowlist")
+        refs.append(
+            McpServerRef(
+                name=name,
+                command=argv,
+                url=url,
+                auth_token_env=str(item.get("authTokenEnv") or "").strip(),
+                env_allowlist=tuple(str(key) for key in env_allowlist) if isinstance(env_allowlist, list) else (),
+                startup_timeout=bounded_float(item.get("startupTimeoutSeconds"), default=20.0, minimum=1.0, maximum=300.0),
+                call_timeout=bounded_float(item.get("callTimeoutSeconds"), default=60.0, minimum=1.0, maximum=600.0),
+            )
+        )
+    return refs
+
+
+def bounded_float(value: Any, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(parsed, minimum), maximum)
+
+
+def parse_execution_config(raw: Any) -> ExecutionConfig:
+    if not isinstance(raw, dict):
+        return ExecutionConfig()
+    backend = str(raw.get("agentBashBackend") or "").strip().casefold()
+    # An unknown value falls back to "inherit" rather than to a permissive
+    # default: a typo in project config must never silently weaken the sandbox.
+    return ExecutionConfig(agent_bash_backend=backend if backend in {"auto", "host", "docker", "os"} else "")
 
 
 def parse_workspaces(raw: Any) -> list[WorkspaceRef]:
@@ -107,3 +301,14 @@ def bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return min(max(parsed, minimum), maximum)
+
+
+def effective_protected_paths(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return default_protected_paths()
+    values = mandatory_protected_paths()
+    for value in raw:
+        text = str(value)
+        if text not in values:
+            values.append(text)
+    return values

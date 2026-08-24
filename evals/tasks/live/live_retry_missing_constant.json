@@ -1,0 +1,74 @@
+{
+  "contract_version": "1.0",
+  "task_id": "live_retry_missing_constant",
+  "suite": "live",
+  "description": "Recover from an ImportError that stops collection before any test runs.",
+  "fixture": "live_missing_constant",
+  "user_request": "The test suite fails to import. Fix it so both tests pass, and run the tests.",
+  "mode": "default",
+  "tags": [
+    "retry_fix",
+    "edit",
+    "verification"
+  ],
+  "trust": "trusted",
+  "approval_policy": {
+    "edit": "accept",
+    "tool": "accept"
+  },
+  "provider_mode": "live",
+  "profile": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "context_window": 200000,
+    "max_output_tokens": 8192,
+    "input_per_1m": 3.0,
+    "output_per_1m": 15.0
+  },
+  "budgets": {
+    "max_model_calls": 40,
+    "max_tokens": 300000,
+    "max_cost": 0.5,
+    "wall_time_seconds": 300
+  },
+  "checks": {
+    "test_commands": [
+      [
+        "python3",
+        "-m",
+        "pytest",
+        "-q"
+      ]
+    ],
+    "required_events": [
+      "edit.applied",
+      "usage.recorded",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "tool.finished",
+      "session.final"
+    ],
+    "minimum_compactions": 0,
+    "expected_approvals": {
+      "edit": "accept"
+    },
+    "files": [
+      {
+        "path": "codes.py",
+        "contains": [
+          "HTTP_CREATED",
+          "201"
+        ]
+      }
+    ],
+    "allowed_changed_paths": [
+      "codes.py",
+      "api.py"
+    ],
+    "forbidden_changed_paths": [
+      "test_api.py"
+    ]
+  }
+}

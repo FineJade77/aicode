@@ -1,0 +1,130 @@
+{
+  "contract_version": "1.0",
+  "task_id": "single_file_fix",
+  "suite": "smoke",
+  "description": "Fix a single-file arithmetic bug, run verification, and preserve the verification result.",
+  "fixture": "single_file_fix",
+  "user_request": "Fix the bug in calc.add and run tests to verify the change.",
+  "mode": "default",
+  "tags": [
+    "edit",
+    "verification"
+  ],
+  "trust": "trusted",
+  "approval_policy": {
+    "edit": "accept",
+    "tool": "reject"
+  },
+  "profile": {
+    "provider": "scripted",
+    "model": "eval-model",
+    "context_window": 32768,
+    "max_output_tokens": 4096,
+    "input_per_1m": 1.0,
+    "output_per_1m": 2.0
+  },
+  "budgets": {
+    "max_model_calls": 6,
+    "max_tokens": 1000,
+    "max_cost": 0.01,
+    "wall_time_seconds": 20
+  },
+  "model_script": [
+    {
+      "purpose": "main",
+      "text": "Read the implementation first.",
+      "tool_calls": [
+        {
+          "id": "read_calc",
+          "name": "read_file",
+          "arguments": {
+            "path": "calc.py"
+          }
+        }
+      ]
+    },
+    {
+      "purpose": "main",
+      "tool_calls": [
+        {
+          "id": "edit_calc",
+          "name": "edit_file",
+          "arguments": {
+            "path": "calc.py",
+            "old_text": "return left - right",
+            "new_text": "return left + right"
+          }
+        }
+      ]
+    },
+    {
+      "purpose": "main",
+      "text": "Run the tests.",
+      "tool_calls": [
+        {
+          "id": "verify_calc",
+          "name": "bash",
+          "arguments": {
+            "command": "python3 -m unittest -q"
+          }
+        }
+      ]
+    },
+    {
+      "purpose": "main",
+      "text": "The fix is complete and the tests pass."
+    }
+  ],
+  "checks": {
+    "test_commands": [
+      [
+        "python3",
+        "-m",
+        "unittest",
+        "-q"
+      ]
+    ],
+    "files": [
+      {
+        "path": "calc.py",
+        "contains": [
+          "return left + right"
+        ],
+        "not_contains": [
+          "return left - right"
+        ]
+      }
+    ],
+    "allowed_changed_paths": [
+      "calc.py"
+    ],
+    "forbidden_changed_paths": [
+      ".env"
+    ],
+    "required_events": [
+      "approval.requested",
+      "edit.applied",
+      "tool.output",
+      "usage.recorded",
+      "verify.attempt",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "tool.finished",
+      "execution.finished",
+      "session.final"
+    ],
+    "final_contains": [
+      "the tests pass"
+    ],
+    "minimum_compactions": 0,
+    "maximum_agent_executions": 1,
+    "expected_approvals": {
+      "edit": "accept"
+    },
+    "forbidden_events": [
+      "run.verification.exhausted"
+    ]
+  }
+}

@@ -1,9 +1,9 @@
 import httpx
 import pytest
 
-from app.config.settings import AnthropicSettings
+from app.config import AnthropicSettings
 from app.models.anthropic import AnthropicProvider, to_anthropic_messages
-from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ProviderError
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ContextOverflowError, ProviderError
 
 
 def sse(event: str, data: str) -> str:
@@ -13,7 +13,7 @@ def sse(event: str, data: str) -> str:
 STREAM_BODY = (
     sse("message_start", '{"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":9}}}')
     + sse("content_block_start", '{"type":"content_block_start","index":0,"content_block":{"type":"text"}}')
-    + sse("content_block_delta", '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好的"}}')
+    + sse("content_block_delta", '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"okay"}}')
     + sse("content_block_stop", '{"type":"content_block_stop","index":0}')
     + sse("content_block_start", '{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"bash"}}')
     + sse("content_block_delta", '{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\":"}}')
@@ -32,7 +32,7 @@ async def test_stream_parses_anthropic_events(monkeypatch):
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
     events = [event async for event in provider.stream_complete(request)]
     assert [e.type for e in events] == ["text_delta", "tool_call", "done"]
-    assert events[0].text == "好的"
+    assert events[0].text == "okay"
     assert events[1].tool_call.id == "tu_1"
     assert events[1].tool_call.arguments == {"command": "ls"}
     assert events[2].usage.input_tokens == 9
@@ -75,6 +75,27 @@ async def test_no_retry_on_400(monkeypatch):
     provider = AnthropicProvider(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
     with pytest.raises(ProviderError, match="HTTP 400"):
+        async for _ in provider.stream_complete(request):
+            pass
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_is_classified_without_transport_retry(monkeypatch):
+    monkeypatch.setenv("FAKE_ANTHROPIC_KEY", "sk-ant")
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, json={"type": "error", "error": {"message": "prompt is too long"}})
+
+    settings = AnthropicSettings(base_url="https://fake.local", api_key_env="FAKE_ANTHROPIC_KEY")
+    provider = AnthropicProvider(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="claude-x")
+    with pytest.raises(ContextOverflowError):
         async for _ in provider.stream_complete(request):
             pass
     assert calls["n"] == 1
@@ -135,4 +156,4 @@ def test_message_mapping_tool_roundtrip():
     assert mapped[1]["content"][1]["type"] == "tool_use"
     assert mapped[2]["role"] == "user"
     assert mapped[2]["content"][0]["type"] == "tool_result"
-    assert mapped[2]["content"][1] == {"type": "text", "text": "next"}  # 连续 user 合并
+    assert mapped[2]["content"][1] == {"type": "text", "text": "next"}  # Consecutive user messages are merged.

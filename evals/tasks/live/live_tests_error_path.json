@@ -1,0 +1,81 @@
+{
+  "contract_version": "1.0",
+  "task_id": "live_tests_error_path",
+  "suite": "live",
+  "description": "Add tests for the documented error paths.",
+  "fixture": "live_parser",
+  "user_request": "parse_pair documents two ValueError cases and neither is tested. Add tests for both, without changing parser.py. Run the tests.",
+  "mode": "default",
+  "tags": [
+    "new_tests",
+    "verification"
+  ],
+  "trust": "trusted",
+  "approval_policy": {
+    "edit": "accept",
+    "tool": "accept"
+  },
+  "provider_mode": "live",
+  "profile": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "context_window": 200000,
+    "max_output_tokens": 8192,
+    "input_per_1m": 3.0,
+    "output_per_1m": 15.0
+  },
+  "budgets": {
+    "max_model_calls": 40,
+    "max_tokens": 300000,
+    "max_cost": 0.5,
+    "wall_time_seconds": 300
+  },
+  "checks": {
+    "test_commands": [
+      [
+        "python3",
+        "-m",
+        "pytest",
+        "-q"
+      ]
+    ],
+    "required_events": [
+      "edit.applied",
+      "usage.recorded",
+      "final"
+    ],
+    "required_audit_events": [
+      "tool.started",
+      "tool.finished",
+      "session.final"
+    ],
+    "minimum_compactions": 0,
+    "expected_approvals": {
+      "edit": "accept"
+    },
+    "mutations": [
+      {
+        "path": "parser.py",
+        "old_text": "        raise ValueError(f\"missing '=': {raw!r}\")",
+        "new_text": "        return (raw.strip(), \"\")"
+      },
+      {
+        "path": "parser.py",
+        "old_text": "        raise ValueError(f\"empty key: {raw!r}\")",
+        "new_text": "        return (\"\", value.strip())"
+      }
+    ],
+    "files": [
+      {
+        "path": "test_parser.py",
+        "exists": true
+      }
+    ],
+    "allowed_changed_paths": [
+      "test_parser.py"
+    ],
+    "forbidden_changed_paths": [
+      "parser.py"
+    ]
+  }
+}

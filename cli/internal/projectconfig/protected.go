@@ -2,13 +2,27 @@ package projectconfig
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
 func DefaultProtectedPaths() []string {
-	return []string{".env", ".env.*", "secrets/**", "infra/prod/**"}
+	return append(MandatoryProtectedPaths(), "secrets/**", "infra/prod/**")
+}
+
+func MandatoryProtectedPaths() []string {
+	return []string{
+		".env", ".env.*", "**/.env", "**/.env.*",
+		".ssh/**", "**/.ssh/**", ".gnupg/**", "**/.gnupg/**",
+		".aws/**", "**/.aws/**", ".azure/**", "**/.azure/**",
+		".kube/**", "**/.kube/**", ".config/gcloud/**", "**/.config/gcloud/**",
+		".config/gh/**", "**/.config/gh/**", ".docker/**", "**/.docker/**",
+		".git/config", "**/.git/config", ".git-credentials", "**/.git-credentials",
+		".netrc", "**/.netrc", ".npmrc", "**/.npmrc", ".pypirc", "**/.pypirc",
+		"*.pem", "**/*.pem", "*.key", "**/*.key",
+	}
 }
 
 func ListProtectedPaths(workspacePath string) (string, []string, bool, error) {
@@ -24,7 +38,7 @@ func ListProtectedPaths(workspacePath string) (string, []string, bool, error) {
 func AddProtectedPath(workspacePath string, pattern string) (string, []string, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
-		return "", nil, errors.New("protected path 不能为空")
+		return "", nil, errors.New("protected path must not be empty")
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -43,7 +57,7 @@ func AddProtectedPath(workspacePath string, pattern string) (string, []string, e
 func RemoveProtectedPath(workspacePath string, pattern string) (string, bool, []string, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
-		return "", false, nil, errors.New("protected path 不能为空")
+		return "", false, nil, errors.New("protected path must not be empty")
 	}
 
 	path := filepath.Join(workspacePath, ".aicode", "config.json")
@@ -53,6 +67,9 @@ func RemoveProtectedPath(workspacePath string, pattern string) (string, bool, []
 	}
 
 	values, _ := effectiveProtectedPaths(raw)
+	if containsString(MandatoryProtectedPaths(), pattern) {
+		return path, false, values, fmt.Errorf("mandatory sensitive protected path cannot be removed: %s", pattern)
+	}
 	removed := containsString(values, pattern)
 	values = removeValue(values, pattern)
 	sort.Strings(values)
@@ -77,6 +94,9 @@ func effectiveProtectedPaths(raw map[string]any) ([]string, bool) {
 		return values, false
 	}
 	values := stringList(raw["protectedPaths"])
+	for _, mandatory := range MandatoryProtectedPaths() {
+		values = appendUnique(values, mandatory)
+	}
 	sort.Strings(values)
 	return values, true
 }

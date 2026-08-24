@@ -24,7 +24,6 @@ var streamReconnectDelay = 250 * time.Millisecond
 
 type CreateSessionRequest struct {
 	Workspace string `json:"workspace"`
-	Language  string `json:"language"`
 }
 
 type CreateSessionResponse struct {
@@ -35,7 +34,9 @@ type SendMessageRequest struct {
 	Message   string `json:"message"`
 	Mode      string `json:"mode"`
 	Workspace string `json:"workspace"`
-	Language  string `json:"language"`
+	Model     string `json:"model,omitempty"`
+	// Per-message shell backend: "auto" | "host" | "docker" | "os".
+	BashBackend string `json:"bash_backend,omitempty"`
 }
 
 type SendMessageResponse struct {
@@ -43,19 +44,151 @@ type SendMessageResponse struct {
 	RunID  string `json:"run_id"`
 }
 
+type ForkSessionResponse struct {
+	SessionID       string `json:"session_id"`
+	SourceSessionID string `json:"source_session_id"`
+	MessageCount    int    `json:"message_count"`
+}
+
 type CancelRunResponse struct {
-	Status string `json:"status"`
-	RunID  string `json:"run_id"`
-	Queued int    `json:"queued"`
+	Status string  `json:"status"`
+	RunID  *string `json:"run_id"`
+	Queued int     `json:"queued"`
+}
+
+type SessionAgentStatus struct {
+	Running        bool   `json:"running"`
+	Queued         int    `json:"queued"`
+	PendingSteers  int    `json:"pending_steers"`
+	CurrentRunID   string `json:"current_run_id"`
+	Stage          string `json:"stage"`
+	StartedAt      string `json:"started_at"`
+	LastProgressAt string `json:"last_progress_at"`
+	ElapsedSeconds int    `json:"elapsed_seconds"`
+	StalledSeconds int    `json:"stalled_seconds"`
+}
+
+type SessionResponse struct {
+	SessionID string             `json:"session_id"`
+	Workspace string             `json:"workspace"`
+	CreatedAt string             `json:"created_at"`
+	UpdatedAt string             `json:"updated_at"`
+	Messages  []map[string]any   `json:"messages"`
+	Approvals []map[string]any   `json:"approvals"`
+	Agent     SessionAgentStatus `json:"agent"`
+	// Model and context budget for the next turn. Absent from listings, which do
+	// not hydrate history and therefore cannot measure it.
+	Context *SessionContext `json:"context,omitempty"`
+}
+
+type SessionContext struct {
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	ContextWindow int     `json:"context_window"`
+	UsableTokens  int     `json:"usable_tokens"`
+	UsedTokens    int     `json:"used_tokens"`
+	UsedRatio     float64 `json:"used_ratio"`
+	CompactionDue bool    `json:"compaction_due"`
+}
+
+type SteerResponse struct {
+	Status  string `json:"status"`
+	RunID   string `json:"run_id"`
+	Pending int    `json:"pending"`
+}
+
+type CompactResponse struct {
+	Status     string         `json:"status"`
+	Compaction map[string]any `json:"compaction"`
+}
+
+type ExecutionRequest struct {
+	ExecutionID    string  `json:"execution_id"`
+	Backend        string  `json:"backend"`
+	Action         string  `json:"action"`
+	Workspace      string  `json:"workspace"`
+	TimeoutSeconds float64 `json:"timeout_seconds"`
+	Artifacts      bool    `json:"artifacts,omitempty"`
+}
+
+type ExecutionResponse struct {
+	ExecutionID string `json:"execution_id"`
+	Backend     string `json:"backend"`
+	Action      string `json:"action"`
+	Status      string `json:"status"`
+	ExitCode    int    `json:"exit_code"`
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	DurationMS  int64  `json:"duration_ms"`
+	TimedOut    bool   `json:"timed_out"`
+	Cancelled   bool   `json:"cancelled"`
+	// Metadata for files the run wrote to its artifact drop. Absent unless the
+	// caller asked for artifacts.
+	Artifacts          []ExecutionArtifact `json:"artifacts,omitempty"`
+	ArtifactsTruncated bool                `json:"artifacts_truncated,omitempty"`
+}
+
+type ExecutionArtifact struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+	SHA256    string `json:"sha256"`
+}
+
+type CancelExecutionResponse struct {
+	Status      string `json:"status"`
+	ExecutionID string `json:"execution_id"`
+}
+
+type ContractTransport struct {
+	Version     string `json:"version,omitempty"`
+	EventSchema string `json:"event_schema,omitempty"`
+	Status      string `json:"status"`
+}
+
+type ApplicationContract struct {
+	Version string            `json:"version"`
+	Schema  string            `json:"schema"`
+	Types   map[string]string `json:"types"`
+}
+
+type APIContract struct {
+	ContractVersion     string                       `json:"contract_version"`
+	MinSupportedVersion string                       `json:"min_supported_version"`
+	RuntimeVersion      string                       `json:"runtime_version"`
+	Application         ApplicationContract          `json:"application"`
+	Transports          map[string]ContractTransport `json:"transports"`
+}
+
+type TrustStatus struct {
+	Workspace      string `json:"workspace"`
+	Level          string `json:"level"`
+	GitRemote      string `json:"git_remote"`
+	RecordedRemote string `json:"recorded_remote"`
+	Reason         string `json:"reason"`
+	Removed        bool   `json:"removed,omitempty"`
+}
+
+type TrustListResponse struct {
+	Projects []TrustStatus `json:"projects"`
 }
 
 type ApprovalRequest struct {
 	ApprovalID string `json:"approval_id"`
+	// Refusing with instructions. The Runtime reports this to the model as
+	// "not like that, do X" rather than as a bare no.
+	Guidance string `json:"guidance,omitempty"`
 }
 
 type ApproveRequest struct {
 	ApprovalID string `json:"approval_id"`
 	AcceptAll  bool   `json:"accept_all"`
+	// The subset of a multi-file request to apply. Empty means all of it.
+	Selection []string `json:"selection,omitempty"`
+}
+
+type AnswerRequest struct {
+	ApprovalID string `json:"approval_id"`
+	Answer     string `json:"answer"`
 }
 
 func New(baseURL string, token string) Client {
@@ -107,9 +240,62 @@ func (c Client) CreateSession(ctx context.Context, payload CreateSessionRequest)
 	return out, nil
 }
 
+func (c Client) Contract(ctx context.Context) (APIContract, error) {
+	var out APIContract
+	value, err := c.GetJSON(ctx, "/v1/meta/contract")
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
 func (c Client) SendMessage(ctx context.Context, sessionID string, payload SendMessageRequest) (SendMessageResponse, error) {
 	var out SendMessageResponse
-	if err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/messages", payload, &out); err != nil {
+	if err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/messages", payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) GetSession(ctx context.Context, sessionID string) (SessionResponse, error) {
+	var out SessionResponse
+	value, err := c.GetJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID))
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
+func (c Client) LastSession(ctx context.Context) (SessionResponse, bool, error) {
+	var out SessionResponse
+	value, err := c.GetJSON(ctx, "/v1/sessions?last=true")
+	if err != nil {
+		return out, false, err
+	}
+	if value == nil {
+		return out, false, nil
+	}
+	if err := remarshalJSON(value, &out); err != nil {
+		return out, false, err
+	}
+	return out, true, nil
+}
+
+func (c Client) Steer(ctx context.Context, sessionID string, message string) (SteerResponse, error) {
+	var out SteerResponse
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/steer"
+	if err := c.postJSON(ctx, path, map[string]string{"message": message}, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) Compact(ctx context.Context, sessionID string) (CompactResponse, error) {
+	var out CompactResponse
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/compact"
+	if err := c.postJSON(ctx, path, struct{}{}, &out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -123,8 +309,99 @@ func (c Client) CancelRun(ctx context.Context, sessionID string) (CancelRunRespo
 	return out, nil
 }
 
+// ForkSession branches a session at a message. A nil messageID forks at the
+// tip, which is the useful default for "keep this history, try another way".
+func (c Client) ForkSession(ctx context.Context, sessionID string, messageID *int) (ForkSessionResponse, error) {
+	var out ForkSessionResponse
+	payload := struct {
+		MessageID *int `json:"message_id,omitempty"`
+	}{MessageID: messageID}
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/fork"
+	if err := c.postJSON(ctx, path, payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) Execute(ctx context.Context, payload ExecutionRequest) (ExecutionResponse, error) {
+	var out ExecutionResponse
+	if err := c.postJSON(ctx, "/v1/executions", payload, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) CancelExecution(ctx context.Context, executionID string) (CancelExecutionResponse, error) {
+	var out CancelExecutionResponse
+	path := "/v1/executions/" + url.PathEscape(executionID) + "/cancel"
+	if err := c.postJSON(ctx, path, struct{}{}, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (c Client) GetTrust(ctx context.Context, workspace string) (TrustStatus, error) {
+	var out TrustStatus
+	value, err := c.GetJSON(ctx, "/v1/trust?workspace="+url.QueryEscape(workspace))
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
+func (c Client) ListTrust(ctx context.Context) (TrustListResponse, error) {
+	var out TrustListResponse
+	value, err := c.GetJSON(ctx, "/v1/trust")
+	if err != nil {
+		return out, err
+	}
+	err = remarshalJSON(value, &out)
+	return out, err
+}
+
+// PruneSessionsResult reports what a retention pass reclaimed. RetainedLive
+// counts sessions that matched a bound but were skipped because a run or an
+// unresolved approval is still holding them.
+type PruneSessionsResult struct {
+	Status          string `json:"status"`
+	DeletedSessions int    `json:"deleted_sessions"`
+	DeletedMessages int    `json:"deleted_messages"`
+	RetainedLive    int    `json:"retained_live"`
+}
+
+func (c Client) PruneSessions(ctx context.Context, maxSessions *int, maxAgeDays *int) (PruneSessionsResult, error) {
+	payload := map[string]any{}
+	if maxSessions != nil {
+		payload["max_sessions"] = *maxSessions
+	}
+	if maxAgeDays != nil {
+		payload["max_age_days"] = *maxAgeDays
+	}
+	var out PruneSessionsResult
+	err := c.postJSON(ctx, "/v1/sessions/prune", payload, &out)
+	return out, err
+}
+
+func (c Client) TrustProject(ctx context.Context, workspace string) (TrustStatus, error) {
+	var out TrustStatus
+	err := c.postJSON(ctx, "/v1/trust", map[string]string{"workspace": workspace}, &out)
+	return out, err
+}
+
+func (c Client) RemoveTrust(ctx context.Context, workspace string) (TrustStatus, error) {
+	var out TrustStatus
+	err := c.postJSON(ctx, "/v1/trust/remove", map[string]string{"workspace": workspace}, &out)
+	return out, err
+}
+
 func (c Client) Approve(ctx context.Context, sessionID string, approvalID string, acceptAll bool) error {
-	err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll}, nil)
+	return c.ApproveSelection(ctx, sessionID, approvalID, acceptAll, nil)
+}
+
+// ApproveSelection approves a named subset of a multi-file request.
+func (c Client) ApproveSelection(ctx context.Context, sessionID string, approvalID string, acceptAll bool, selection []string) error {
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/approve", ApproveRequest{ApprovalID: approvalID, AcceptAll: acceptAll, Selection: selection}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}
@@ -132,7 +409,20 @@ func (c Client) Approve(ctx context.Context, sessionID string, approvalID string
 }
 
 func (c Client) Reject(ctx context.Context, sessionID string, approvalID string) error {
-	err := c.postJSON(ctx, "/v1/sessions/"+sessionID+"/reject", ApprovalRequest{ApprovalID: approvalID}, nil)
+	return c.RejectWithGuidance(ctx, sessionID, approvalID, "")
+}
+
+// RejectWithGuidance refuses a request and says how it should be done instead.
+func (c Client) RejectWithGuidance(ctx context.Context, sessionID string, approvalID string, guidance string) error {
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/reject", ApprovalRequest{ApprovalID: approvalID, Guidance: guidance}, nil)
+	if isApprovalAlreadyResolved(err) {
+		return nil
+	}
+	return err
+}
+
+func (c Client) Answer(ctx context.Context, sessionID string, approvalID string, answer string) error {
+	err := c.postJSON(ctx, "/v1/sessions/"+url.PathEscape(sessionID)+"/answer", AnswerRequest{ApprovalID: approvalID, Answer: answer}, nil)
 	if isApprovalAlreadyResolved(err) {
 		return nil
 	}
@@ -325,6 +615,14 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, out any)
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+func remarshalJSON(value any, out any) error {
+	content, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(content, out)
+}
+
 type RuntimeHTTPError struct {
 	Operation  string
 	StatusCode int
@@ -335,7 +633,7 @@ type RuntimeHTTPError struct {
 func (err *RuntimeHTTPError) Error() string {
 	if err.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf(
-			"%s failed: %s: %s\nRuntime 认证失败：当前 CLI 的 runtime.token 与正在运行的 daemon 不匹配。请运行 `aicode daemon stop`，确认 8765 端口没有旧 uvicorn/daemon 后，再 `aicode daemon start`。",
+			"%s failed: %s: %s\nRuntime authentication failed: the current CLI runtime.token does not match the running daemon. Run `aicode runtime stop`, make sure no stale uvicorn or daemon process owns port 8765, then run `aicode runtime start`.",
 			err.Operation,
 			err.Status,
 			err.Detail,

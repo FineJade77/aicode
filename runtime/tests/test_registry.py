@@ -1,10 +1,18 @@
 import pytest
-from pathlib import Path
 
+from app.agent.policy import PolicyEngine
+from app.agent.ports import ToolSpec
 from app.project.config import WorkspaceRef
-from app.tools.base import ToolContext
+from app.tools.base import ToolContext, ToolResult
 from app.tools.command import CommandResult
-from app.tools.registry import TOOL_SCHEMAS, run_tool, tool_schemas_for_mode
+from app.tools.registry import (
+    DEFAULT_REGISTRY,
+    TOOL_SCHEMAS,
+    WRITE_HIDDEN_MODES,
+    build_default_registry,
+    run_tool,
+    tool_schemas_for_mode,
+)
 
 
 def make_context(tmp_path) -> ToolContext:
@@ -13,11 +21,18 @@ def make_context(tmp_path) -> ToolContext:
 
 def test_schema_names_and_modes():
     names = {schema["name"] for schema in TOOL_SCHEMAS}
-    assert names == {"read_file", "search", "list_files", "related_files", "bash", "edit_file", "review_diff"}
+    assert names == {
+        "read_file", "search", "glob", "list_files", "related_files",
+        "bash", "edit_file", "update_plan", "ask_user", "review_diff",
+        "read_output", "stop_command", "skill", "explore", "delegate",
+    }
+    # `skill` stays available in the read-only modes: a review checklist is
+    # exactly the kind of instruction sheet a skill is for, and loading one
+    # writes nothing.
     review_names = {schema["name"] for schema in tool_schemas_for_mode("review")}
-    assert review_names == {"read_file", "search", "list_files", "related_files", "review_diff"}
+    assert review_names == {"read_file", "search", "glob", "list_files", "related_files", "review_diff", "skill"}
     explain_names = {schema["name"] for schema in tool_schemas_for_mode("explain")}
-    assert explain_names == {"read_file", "search", "list_files", "related_files", "review_diff"}
+    assert explain_names == {"read_file", "search", "glob", "list_files", "related_files", "review_diff", "skill"}
     assert tool_schemas_for_mode("commit_message") == []
     for schema in TOOL_SCHEMAS:
         assert schema["description"]
@@ -32,22 +47,22 @@ async def test_read_file_returns_numbered_lines(tmp_path):
     assert isinstance(result.duration_ms, int)
     assert "2\tline2" in result.text
     assert "line1" not in result.text
-    assert "共 3 行" in result.text
+    assert "has 3 lines" in result.text
 
 
 @pytest.mark.asyncio
 async def test_read_file_missing(tmp_path):
     result = await run_tool("read_file", {"path": "nope.py"}, make_context(tmp_path))
     assert not result.success
-    assert "不存在" in result.error
+    assert "does not exist" in result.error
 
 
 @pytest.mark.asyncio
 async def test_run_tool_validates_required_arguments(tmp_path):
     result = await run_tool("read_file", {}, make_context(tmp_path))
     assert not result.success
-    assert "参数校验失败" in result.error
-    assert result.data["validation_error"] == "缺少必填字段: path"
+    assert "argument validation failed" in result.error
+    assert result.data["validation_error"] == "missing required field: path"
     assert isinstance(result.duration_ms, int)
 
 
@@ -56,7 +71,7 @@ async def test_run_tool_validates_argument_types(tmp_path):
     (tmp_path / "a.py").write_text("line1\n", encoding="utf-8")
     result = await run_tool("read_file", {"path": "a.py", "offset": "2"}, make_context(tmp_path))
     assert not result.success
-    assert result.data["validation_error"] == "offset 应为 integer"
+    assert result.data["validation_error"] == "offset must be an integer"
 
 
 @pytest.mark.asyncio
@@ -64,6 +79,32 @@ async def test_read_file_protected(tmp_path):
     (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
     result = await run_tool("read_file", {"path": ".env"}, make_context(tmp_path))
     assert not result.success
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_mandatory_git_config(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text(
+        '[remote "origin"]\nurl = https://token@example.test/repo.git\n',
+        encoding="utf-8",
+    )
+
+    result = await run_tool("read_file", {"path": ".git/config"}, make_context(tmp_path))
+
+    assert not result.success
+    assert "protected path" in result.error
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (tmp_path / "link.txt").symlink_to(outside)
+
+    result = await run_tool("read_file", {"path": "link.txt"}, make_context(tmp_path))
+
+    assert not result.success
+    assert "workspace" in result.error
 
 
 @pytest.mark.asyncio
@@ -88,11 +129,51 @@ async def test_search_excludes_protected_path(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_search_python_fallback_rejects_symlink_escape(tmp_path, monkeypatch):
+    outside = tmp_path.parent / "outside-search.txt"
+    outside.write_text("provider needle secret\n", encoding="utf-8")
+    (tmp_path / "linked.py").symlink_to(outside)
+    monkeypatch.setattr("app.tools.registry.shutil.which", lambda _name: None)
+
+    result = await run_tool("search", {"query": "needle"}, make_context(tmp_path))
+
+    assert result.success
+    assert "linked.py" not in result.text
+    assert "provider needle secret" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_list_files_hides_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "outside-list"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    result = await run_tool("list_files", {"max_depth": 2}, make_context(tmp_path))
+
+    assert result.success
+    assert "linked-dir" not in result.text
+    assert "secret.txt" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_tool_output_redacts_known_runtime_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret-value")
+    (tmp_path / "ordinary.txt").write_text("value=provider-secret-value\n", encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "ordinary.txt"}, make_context(tmp_path))
+
+    assert result.success
+    assert "provider-secret-value" not in result.text
+    assert "[REDACTED]" in result.text
+
+
+@pytest.mark.asyncio
 async def test_read_file_offset_out_of_range(tmp_path):
     (tmp_path / "a.py").write_text("line1\nline2\n", encoding="utf-8")
     result = await run_tool("read_file", {"path": "a.py", "offset": 99}, make_context(tmp_path))
     assert not result.success
-    assert "超出" in result.error
+    assert "exceeds" in result.error
 
 
 @pytest.mark.asyncio
@@ -100,21 +181,21 @@ async def test_search_no_match(tmp_path):
     (tmp_path / "a.py").write_text("nothing here\n", encoding="utf-8")
     result = await run_tool("search", {"query": "zzz_not_found"}, make_context(tmp_path))
     assert result.success
-    assert "没有匹配" in result.text
+    assert "no matches" in result.text
 
 
 @pytest.mark.asyncio
 async def test_search_reports_rg_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr("app.tools.registry.shutil.which", lambda name: "/fake/rg")
 
-    async def fake_run_command(command, *, cwd, timeout):
-        return CommandResult(command=list(command), returncode=-9, stderr="命令超时: 30s", timed_out=True)
+    async def fake_run_command(command, *, cwd, timeout, **_kwargs):
+        return CommandResult(command=list(command), returncode=-9, stderr="command timed out: 30s", timed_out=True)
 
     monkeypatch.setattr("app.tools.registry.run_command", fake_run_command)
     result = await run_tool("search", {"query": "needle"}, make_context(tmp_path))
 
     assert not result.success
-    assert "搜索超时" in result.error
+    assert "search timed out" in result.error
     assert isinstance(result.duration_ms, int)
 
 
@@ -172,6 +253,20 @@ async def test_related_files_skips_protected_matches(tmp_path):
     assert result.success
     paths = [item["path"] for item in result.data["related"]]
     assert "secret/test_auth.py" not in paths
+
+
+@pytest.mark.asyncio
+async def test_related_files_skips_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "outside-related.py"
+    outside.write_text("from src.auth import login\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
+    (tmp_path / "linked_auth.py").symlink_to(outside)
+
+    result = await run_tool("related_files", {"path": "src/auth.py"}, make_context(tmp_path))
+
+    assert result.success
+    assert "linked_auth.py" not in result.text
 
 
 @pytest.mark.asyncio
@@ -273,7 +368,7 @@ async def test_read_file_blocks_path_escape_from_configured_workspace(tmp_path):
     result = await run_tool("read_file", {"path": "../main/secret.txt", "workspace": "api"}, context)
 
     assert not result.success
-    assert "workspace 边界" in result.error or "路径越过" in result.error
+    assert "workspace boundary" in result.error
 
 
 @pytest.mark.asyncio
@@ -288,4 +383,177 @@ async def test_unknown_workspace_rejected(tmp_path):
     result = await run_tool("read_file", {"path": "x.py", "workspace": "nope"}, context)
 
     assert not result.success
-    assert "未知 workspace" in result.error
+    assert "unknown workspace" in result.error
+
+
+class _CountingTool:
+    """A tool defined entirely outside the built-in set."""
+
+    def __init__(self, spec: ToolSpec) -> None:
+        self.spec = spec
+        self.calls = 0
+
+    async def run(self, args, context):
+        self.calls += 1
+        return ToolResult(success=True, text=f"counted {args.get('label', '')}".strip())
+
+
+def _spec(name: str, *, read_only: bool, approval: str = "gate", hidden: frozenset[str] = frozenset()) -> ToolSpec:
+    return ToolSpec(
+        name=name,
+        description=f"{name} test tool",
+        read_only=read_only,
+        approval=approval,
+        hidden_in_modes=hidden,
+        input_schema={"type": "object", "properties": {"label": {"type": "string"}}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_custom_read_only_tool_is_visible_and_allowed_without_touching_core(tmp_path):
+    """The point of the registry: one registration, no edits elsewhere.
+
+    Adding a tool previously meant editing the schema list, the dispatch chain,
+    the registry's read-only names and the policy engine's separate copy of them.
+    """
+    tool = _CountingTool(_spec("inspect_manifest", read_only=True, approval="none"))
+    registry = build_default_registry()
+    registry.register(tool)
+
+    # Visible to the model, including in the read-only modes.
+    assert "inspect_manifest" in {schema["name"] for schema in registry.schemas_for_mode("default")}
+    assert "inspect_manifest" in {schema["name"] for schema in registry.schemas_for_mode("review")}
+
+    # The policy engine allows it purely because the spec says it is read-only.
+    spec = registry.spec_for("inspect_manifest")
+    assert spec is not None
+    decision = PolicyEngine().gate("inspect_manifest", {}, mode="review", spec=spec)
+    assert decision.verdict == "allow"
+
+    # And it is dispatched by lookup, not by a name branch.
+    result = await registry.run("inspect_manifest", {"label": "x"}, ToolContext(workspace=tmp_path))
+    assert result.success is True
+    assert result.text == "counted x"
+    assert tool.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_custom_write_tool_is_hidden_and_denied_in_read_only_modes(tmp_path):
+    tool = _CountingTool(_spec("mutate_manifest", read_only=False, hidden=WRITE_HIDDEN_MODES))
+    registry = build_default_registry()
+    registry.register(tool)
+
+    assert "mutate_manifest" not in {schema["name"] for schema in registry.schemas_for_mode("review")}
+    spec = registry.spec_for("mutate_manifest")
+    assert PolicyEngine().gate("mutate_manifest", {}, mode="review", spec=spec).verdict == "deny"
+    # Never executed: the schema hides it and the policy layer refuses it.
+    assert tool.calls == 0
+
+
+def test_registry_rejects_a_duplicate_name(tmp_path):
+    """A silently replaced tool would be a confusing way to lose behaviour."""
+    registry = build_default_registry()
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(_CountingTool(_spec("bash", read_only=False)))
+
+
+def test_specs_are_the_single_source_of_read_only_truth():
+    """Regression guard for the drift this refactor removed.
+
+    The policy engine used to keep its own set of read-only tool names next to the
+    registry's; nothing stopped the two from disagreeing.
+    """
+    import app.agent.policy as policy_module
+
+    assert not hasattr(policy_module, "READ_ONLY_TOOLS_V2")
+    read_only = {spec.name for spec in DEFAULT_REGISTRY.specs() if spec.read_only}
+    assert read_only == {
+        "read_file", "search", "glob", "list_files", "related_files", "review_diff", "read_output",
+        # `skill` reads a file the user or project put there and returns text.
+        "skill",
+    }
+
+
+def test_edit_file_declares_diff_approval():
+    """The Agent Loop routes on this, rather than on the tool's name."""
+    spec = DEFAULT_REGISTRY.spec_for("edit_file")
+    assert spec is not None
+    assert spec.approval == "diff"
+    assert [s.name for s in DEFAULT_REGISTRY.specs() if s.approval == "diff"] == ["edit_file"]
+
+
+# --- reads are bounded on every axis ------------------------------------------
+#
+# A line limit alone bounds nothing, because "line" is not a unit of size. A
+# minified bundle is three lines and a megabyte; before these caps `read_file`
+# returned all of it, and `read_file` is exempt from the write-time truncation
+# that would have caught it via any other tool.
+
+
+@pytest.mark.asyncio
+async def test_a_minified_file_is_bounded_not_returned_whole(tmp_path):
+    (tmp_path / "bundle.min.js").write_text("\n".join("x" * 400_000 for _ in range(3)), encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "bundle.min.js"}, make_context(tmp_path))
+
+    assert result.success
+    assert len(result.text) < 20_000, len(result.text)
+    # Reported, not absorbed: a silently shortened line reads as the whole line,
+    # and an edit built against it would use `old_text` that is not in the file.
+    assert "long line(s) were clipped" in result.text
+    assert result.data["clipped_lines"] == 3
+
+
+@pytest.mark.asyncio
+async def test_many_ordinary_lines_stop_at_the_size_cap(tmp_path):
+    (tmp_path / "wide.txt").write_text("\n".join("y" * 1_500 for _ in range(200)), encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "wide.txt", "limit": 200}, make_context(tmp_path))
+
+    assert result.data["size_capped"] is True
+    assert result.data["shown"] < 200
+    # The recovery is `offset`, which the model already knows how to use — but
+    # only if it is told there is more.
+    assert "continue with offset=" in result.text
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_file_is_untouched(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {index}" for index in range(50)), encoding="utf-8")
+
+    result = await run_tool("read_file", {"path": "a.py"}, make_context(tmp_path))
+
+    assert result.data["clipped_lines"] == 0
+    assert result.data["size_capped"] is False
+    assert "line 49" in result.text
+
+
+def test_every_declared_tool_is_reachable_by_the_model():
+    """A ToolSpec that is not in the registry is a tool nobody can call.
+
+    `explore` and `delegate` shipped in exactly that state: declared, handled by
+    the loop, and absent from `schemas_for_mode`, so the model was never offered
+    them — and `spec_for` returning None made the policy engine deny the call as
+    an unknown tool. Their unit tests passed throughout, because they drove the
+    subagent functions directly rather than the path a model takes.
+    """
+    from app.tools.registry import TOOL_SPECS
+
+    declared = {spec.name for spec in TOOL_SPECS}
+    registered = {spec.name for spec in DEFAULT_REGISTRY.specs()}
+
+    assert declared == registered, declared.symmetric_difference(registered)
+
+
+def test_the_subagent_tools_are_offered_and_permitted():
+    """The two halves that were both missing: visible, and not denied."""
+    from app.agent.policy import PolicyEngine
+
+    names = {schema["name"] for schema in tool_schemas_for_mode("default")}
+    engine = PolicyEngine()
+
+    for name in ("explore", "delegate"):
+        assert name in names, name
+        spec = DEFAULT_REGISTRY.spec_for(name)
+        assert spec is not None
+        assert engine.gate(name, {}, mode="default", spec=spec).verdict != "deny"

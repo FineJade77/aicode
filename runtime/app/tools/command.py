@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import os
-import signal
-from contextlib import suppress
-from dataclasses import dataclass
+import shutil
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Sequence
+from typing import Any
 
-
-PROCESS_DRAIN_TIMEOUT_SECONDS = 1.0
+from app.execution import ExecutionRequest, ExecutionService, ResourceLimits
 
 
 @dataclass(slots=True)
@@ -19,86 +16,131 @@ class CommandResult:
     stdout: str = ""
     stderr: str = ""
     timed_out: bool = False
+    cancelled: bool = False
+    execution_id: str = ""
+    backend: str = "host"
+    status: str = ""
+    duration_ms: int = 0
 
     @property
     def combined_output(self) -> str:
         output = self.stdout.strip()
         error = self.stderr.strip()
         if error:
-            output = output + ("\n" if output else "") + error
+            output += ("\n" if output else "") + error
         return output
 
 
-async def run_command(command: Sequence[str], *, cwd: Path, timeout: float) -> CommandResult:
-    argv = [str(part) for part in command]
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
+async def run_command(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    execution: ExecutionService | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> CommandResult:
+    argv = resolve_internal_argv(tuple(str(part) for part in command), cwd)
+    request = _request(
+        cwd=cwd,
+        timeout=timeout,
+        argv=argv,
+        execution=execution,
+        metadata=metadata,
     )
-    return await collect_process_result(proc, argv, timeout=timeout)
+    result = await (execution or ExecutionService()).execute(request)
+    return _command_result(list(argv), result)
 
 
-async def run_shell_command(command: str, *, cwd: Path, timeout: float, stderr_to_stdout: bool = False) -> CommandResult:
-    stderr = asyncio.subprocess.STDOUT if stderr_to_stdout else asyncio.subprocess.PIPE
-    proc = await asyncio.create_subprocess_shell(
-        command,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=stderr,
-        start_new_session=True,
-    )
-    return await collect_process_result(proc, [command], timeout=timeout)
-
-
-async def collect_process_result(proc: asyncio.subprocess.Process, command: list[str], *, timeout: float) -> CommandResult:
+def resolve_internal_argv(argv: tuple[str, ...], cwd: Path) -> tuple[str, ...]:
+    executable = argv[0]
+    if "/" in executable or "\\" in executable:
+        return argv
+    resolved_text = shutil.which(executable)
+    if not resolved_text:
+        return argv
+    resolved = Path(resolved_text).resolve()
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        stdout, stderr = await terminate_process(proc)
-        return CommandResult(
-            command=command,
-            returncode=proc.returncode if proc.returncode is not None else -1,
-            stdout=decode_output(stdout),
-            stderr=decode_output(stderr) or f"命令超时: {timeout:g}s",
-            timed_out=True,
-        )
-    except asyncio.CancelledError:
-        await terminate_process(proc)
-        raise
+        resolved.relative_to(cwd.resolve())
+    except ValueError:
+        return (str(resolved), *argv[1:])
+    raise ValueError(f"refusing to run an internal tool from the workspace PATH: {executable}")
 
+
+async def run_shell_command(
+    command: str,
+    *,
+    cwd: Path,
+    timeout: float,
+    stderr_to_stdout: bool = False,
+    execution: ExecutionService | None = None,
+    metadata: dict[str, Any] | None = None,
+    backend: str = "host",
+    limits: ResourceLimits | None = None,
+) -> CommandResult:
+    request = _request(
+        cwd=cwd,
+        timeout=timeout,
+        shell_command=command,
+        merge_stderr=stderr_to_stdout,
+        execution=execution,
+        metadata=metadata,
+        backend=backend,
+        limits=limits,
+    )
+    result = await (execution or ExecutionService()).execute(request)
+    return _command_result([command], result)
+
+
+def _request(
+    *,
+    cwd: Path,
+    timeout: float,
+    argv: tuple[str, ...] | None = None,
+    shell_command: str | None = None,
+    merge_stderr: bool = False,
+    execution: ExecutionService | None = None,
+    metadata: dict[str, Any] | None = None,
+    backend: str = "host",
+    limits: ResourceLimits | None = None,
+) -> ExecutionRequest:
+    del execution
+    metadata = metadata or {}
+    root = cwd.expanduser().resolve()
+    sandboxed = backend == "docker"
+    return ExecutionRequest(
+        workspace=cwd,
+        argv=argv,
+        shell_command=shell_command,
+        backend=backend,
+        merge_stderr=merge_stderr,
+        action=str(metadata.get("action") or ""),
+        mode=str(metadata.get("mode") or "default"),
+        session_id=str(metadata.get("session_id") or ""),
+        run_id=str(metadata.get("run_id") or ""),
+        tool_call_id=str(metadata.get("tool_call_id") or ""),
+        allowed_roots=(root,),
+        # The sandbox needs the workspace writable so the Agent can create files
+        # and run builds; the host backend has no mount concept and keeps ().
+        writable_paths=(root,) if sandboxed else (),
+        masked_paths=tuple(str(value) for value in metadata.get("masked_paths") or ()),
+        trust_level=str(metadata.get("trust_level") or "unspecified"),
+        network="none" if sandboxed else "inherit",
+        # `timeout` stays authoritative; callers supply `limits` only to add
+        # cpu/memory/pid caps, so a mismatch can never silently extend a run.
+        limits=replace(limits, timeout_seconds=timeout) if limits is not None else ResourceLimits(timeout_seconds=timeout),
+    )
+
+
+def _command_result(command: list[str], result) -> CommandResult:
     return CommandResult(
         command=command,
-        returncode=proc.returncode if proc.returncode is not None else 0,
-        stdout=decode_output(stdout),
-        stderr=decode_output(stderr),
+        returncode=result.exit_code,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
+        cancelled=result.cancelled,
+        execution_id=result.execution_id,
+        backend=result.backend,
+        status=result.status.value,
+        duration_ms=result.duration_ms,
     )
-
-
-async def terminate_process(proc: asyncio.subprocess.Process) -> tuple[bytes | None, bytes | None]:
-    # Every process is created with start_new_session=True, so its PID is also
-    # the process-group ID. Kill that group even if the shell leader has already
-    # exited: a background child may still own the captured stdout/stderr pipes.
-    killed_group = False
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-        killed_group = True
-    except (ProcessLookupError, PermissionError):
-        pass
-    if not killed_group and proc.returncode is None:
-        with suppress(ProcessLookupError):
-            proc.kill()
-    try:
-        return await asyncio.wait_for(proc.communicate(), timeout=PROCESS_DRAIN_TIMEOUT_SECONDS)
-    except (TimeoutError, RuntimeError, ValueError):
-        with suppress(Exception):
-            await asyncio.wait_for(proc.wait(), timeout=PROCESS_DRAIN_TIMEOUT_SECONDS)
-        return None, None
-
-
-def decode_output(raw: bytes | None) -> str:
-    if not raw:
-        return ""
-    return raw.decode("utf-8", errors="replace")

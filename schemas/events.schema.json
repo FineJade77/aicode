@@ -1,13 +1,52 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aicode.dev/schemas/events.schema.json",
+  "x-aicode-contract-version": "2.0",
   "title": "aicode Runtime Event",
   "type": "object",
-  "required": ["type"],
+  "required": [
+    "type"
+  ],
   "properties": {
     "type": {
       "type": "string",
-      "description": "Machine-readable event type. v2 SSE stream emits: session.created, run.queued, run.started, run.cancelled, assistant.delta, tool.started, tool.output, tool.denied, tool.error, tool.rejected, approval.requested, approval.expired, edit.applied, edit.rejected, edit.auto_approved, usage.recorded, context.budget, error, final."
+      "description": "Machine-readable v2 SSE event type.",
+      "enum": [
+        "session.created",
+        "run.queued",
+        "run.started",
+        "run.steer.queued",
+        "run.steer.applied",
+        "run.cancelled",
+        "run.budget.exceeded",
+        "run.verification.exhausted",
+        "run.no_progress",
+        "verify.attempt",
+        "plan.updated",
+        "mcp.server.failed",
+        "provider.fallback",
+        "subagent.started",
+        "subagent.finished",
+        "mcp.server.started",
+        "assistant.delta",
+        "tool.started",
+        "tool.output",
+        "tool.denied",
+        "tool.error",
+        "tool.rejected",
+        "approval.requested",
+        "question.asked",
+        "approval.expired",
+        "edit.applied",
+        "edit.rejected",
+        "edit.auto_approved",
+        "hook.finished",
+        "hook.blocked",
+        "usage.recorded",
+        "context.budget",
+        "error",
+        "final"
+      ]
     },
     "session_id": {
       "type": "string"

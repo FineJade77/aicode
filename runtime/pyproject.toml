@@ -18,10 +18,36 @@ dependencies = [
 dev = [
   "pytest>=8.0,<10.0",
   "pytest-asyncio>=0.23,<2.0",
+  "ruff>=0.6,<1.0",
+]
+# Optional: OTLP span export. Kept out of the core dependencies so a Runtime with
+# tracing disabled neither needs nor loads the SDK. The span derivation itself is
+# dependency-free and tested without these packages.
+otel = [
+  "opentelemetry-sdk>=1.24,<2.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.24,<2.0",
 ]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["app"]
+# Deliberately not `strict`. The goal is to make the dependency boundaries
+# actually checked, not to chase annotations through every helper at once. The
+# Agent Core and contract modules below are held to a higher bar because that is
+# where an unchecked `Any` costs the most.
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["app.agent.*", "app.application.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

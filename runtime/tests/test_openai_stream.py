@@ -1,11 +1,9 @@
-import asyncio
-
 import httpx
 import pytest
 
-from app.config.settings import OpenAICompatibleSettings
+from app.config import OpenAICompatibleSettings
 from app.models.openai_compatible import OpenAICompatibleProvider, to_openai_messages, to_openai_tools
-from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ProviderError
+from app.models.provider import TOOL_ARGUMENT_PARSE_ERROR_KEY, CompletionRequest, ContextOverflowError, ProviderError
 
 
 def sse_bytes(*chunks: str) -> bytes:
@@ -13,7 +11,7 @@ def sse_bytes(*chunks: str) -> bytes:
 
 
 STREAM_BODY = sse_bytes(
-    '{"choices":[{"delta":{"content":"你好"}}]}',
+    '{"choices":[{"delta":{"content":"hello"}}]}',
     '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc_1","function":{"name":"read_file","arguments":"{\\"pa"}}]}}]}',
     '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\\": \\"a.py\\"}"}}]}}]}',
     '{"choices":[{"delta":{}}],"usage":{"prompt_tokens":12,"completion_tokens":5},"model":"m1"}',
@@ -26,13 +24,63 @@ def make_provider(handler) -> OpenAICompatibleProvider:
 
 
 @pytest.mark.asyncio
+async def test_no_auth_profile_sends_no_authorization_header(monkeypatch):
+    monkeypatch.setenv("AICODE_OPENAI_API_KEY", "must-not-be-sent")
+    monkeypatch.setenv("UNUSED_LOCAL_KEY", "must-also-not-be-sent")
+    seen = {}
+
+    def handler(request):
+        seen["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, content=STREAM_BODY)
+
+    provider = OpenAICompatibleProvider(
+        OpenAICompatibleSettings(
+            profile="local",
+            base_url="http://local.invalid/v1",
+            api_key_env="UNUSED_LOCAL_KEY",
+            auth_mode="none",
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        events = [
+            event
+            async for event in provider.stream_complete(
+                CompletionRequest(
+                    purpose="main",
+                    system="s",
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="m1",
+                )
+            )
+        ]
+    finally:
+        await provider.aclose()
+
+    assert provider.is_configured() is True
+    assert seen["authorization"] is None
+    assert events[-1].type == "done"
+
+
+def test_optional_auth_is_configured_without_key(monkeypatch):
+    monkeypatch.delenv("AICODE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPTIONAL_LOCAL_KEY", raising=False)
+    provider = OpenAICompatibleProvider(
+        OpenAICompatibleSettings(api_key_env="OPTIONAL_LOCAL_KEY", auth_mode="optional")
+    )
+
+    assert provider.is_configured() is True
+    assert provider.request_headers() == {"Content-Type": "application/json"}
+
+
+@pytest.mark.asyncio
 async def test_stream_parses_text_tool_calls_and_usage(monkeypatch):
     monkeypatch.setenv("FAKE_KEY", "sk-test")
     provider = make_provider(lambda request: httpx.Response(200, content=STREAM_BODY))
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
     events = [event async for event in provider.stream_complete(request)]
     assert [e.type for e in events] == ["text_delta", "tool_call", "done"]
-    assert events[0].text == "你好"
+    assert events[0].text == "hello"
     assert events[1].tool_call.name == "read_file"
     assert events[1].tool_call.arguments == {"path": "a.py"}
     assert events[2].usage.input_tokens == 12
@@ -90,6 +138,23 @@ async def test_no_retry_on_400(monkeypatch):
     provider = make_provider(handler)
     request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
     with pytest.raises(ProviderError, match="HTTP 400"):
+        async for _ in provider.stream_complete(request):
+            pass
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_is_classified_without_transport_retry(monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "sk-test")
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, json={"error": {"code": "context_length_exceeded", "message": "maximum context length"}})
+
+    provider = make_provider(handler)
+    request = CompletionRequest(purpose="main", system="s", messages=[{"role": "user", "content": "hi"}], model="m1")
+    with pytest.raises(ContextOverflowError):
         async for _ in provider.stream_complete(request):
             pass
     assert calls["n"] == 1
@@ -175,5 +240,5 @@ async def test_aclose_closes_client(monkeypatch):
     await provider.aclose()
     assert client.is_closed
     assert provider._client is None
-    # 再次 aclose 幂等，不报错
+    # A second aclose call is idempotent.
     await provider.aclose()
